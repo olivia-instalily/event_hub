@@ -1,311 +1,140 @@
-import { Bookmark, Star, LayoutGrid, List, ChevronDown } from "lucide-react";
-import { useState } from "react";
-
-const vendorsData = [
-  {
-    id: 1,
-    projectsCount: 23,
-    category: "Catering",
-    categoryColor: "bg-orange-100 text-orange-700",
-    name: "Gourmet Events Catering",
-    slug: "/vendors/gourmet-events-catering",
-    rating: 4.8,
-    serviceType: "Full Service",
-    location: "New York, NY",
-  },
-  {
-    id: 2,
-    projectsCount: 67,
-    category: "Photography",
-    categoryColor: "bg-purple-100 text-purple-700",
-    name: "Lens & Light Studios",
-    slug: "/vendors/lens-light-studios",
-    rating: 4.9,
-    serviceType: "Professional",
-    location: "Los Angeles, CA",
-  },
-  {
-    id: 3,
-    projectsCount: 45,
-    category: "Venue",
-    categoryColor: "bg-blue-100 text-blue-700",
-    name: "Grand Ballroom Events",
-    slug: "/vendors/grand-ballroom-events",
-    rating: 4.7,
-    serviceType: "Premium",
-    location: "San Francisco, CA",
-  },
-  {
-    id: 4,
-    projectsCount: 89,
-    category: "Audio/Visual",
-    categoryColor: "bg-green-100 text-green-700",
-    name: "SoundWave Productions",
-    slug: "/vendors/soundwave-productions",
-    rating: 4.6,
-    serviceType: "Full Service",
-    location: "Austin, TX",
-  },
-  {
-    id: 5,
-    projectsCount: 34,
-    category: "Florist",
-    categoryColor: "bg-pink-100 text-pink-700",
-    name: "Bloom & Blossom",
-    slug: "/vendors/bloom-blossom",
-    rating: 5.0,
-    serviceType: "Boutique",
-    location: "Seattle, WA",
-  },
-  {
-    id: 6,
-    projectsCount: 56,
-    category: "Entertainment",
-    categoryColor: "bg-red-100 text-red-700",
-    name: "Party Rockers DJ Service",
-    slug: "/vendors/party-rockers-dj",
-    rating: 4.8,
-    serviceType: "Professional",
-    location: "Miami, FL",
-  },
-  {
-    id: 7,
-    projectsCount: 41,
-    category: "Catering",
-    categoryColor: "bg-orange-100 text-orange-700",
-    name: "Elite Cuisine Catering",
-    slug: "/vendors/elite-cuisine",
-    rating: 4.7,
-    serviceType: "Premium",
-    location: "Chicago, IL",
-  },
-  {
-    id: 8,
-    projectsCount: 72,
-    category: "Venue",
-    categoryColor: "bg-blue-100 text-blue-700",
-    name: "Skyline Event Center",
-    slug: "/vendors/skyline-event-center",
-    rating: 4.9,
-    serviceType: "Full Service",
-    location: "New York, NY",
-  },
-];
+import { Bookmark, LayoutGrid, List, ChevronDown, Search, Star } from "lucide-react";
+import { useEffect, useState } from "react";
+import { listVendors, type VendorRow } from "../lib/db";
+import { tagColor } from "../lib/tags";
 
 export function VendorsPage() {
-  const [bookmarkedVendors, setBookmarkedVendors] = useState<Set<number>>(new Set());
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [bookmarked, setBookmarked] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines'>('cards');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [locationFilter, setLocationFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
 
-  const toggleBookmark = (vendorId: number) => {
-    setBookmarkedVendors((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(vendorId)) {
-        newSet.delete(vendorId);
-      } else {
-        newSet.add(vendorId);
-      }
-      return newSet;
-    });
-  };
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    listVendors()
+      .then((v) => { if (!cancelled) setVendors(v); })
+      .catch((e) => { if (!cancelled) setError(e.message ?? String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
-  // Get unique categories and locations for filters
-  const categories = Array.from(new Set(vendorsData.map(v => v.category)));
-  const locations = Array.from(new Set(vendorsData.map(v => v.location)));
+  const toggleBookmark = (id: string) => setBookmarked((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
 
-  // Filter vendors
-  const filteredVendors = vendorsData.filter(vendor => {
-    if (categoryFilter !== 'all' && vendor.category !== categoryFilter) return false;
-    if (locationFilter !== 'all' && vendor.location !== locationFilter) return false;
-    if (showBookmarkedOnly && !bookmarkedVendors.has(vendor.id)) return false;
+  const categories = Array.from(new Set(vendors.map((v) => v.category).filter(Boolean))) as string[];
+
+  const filtered = vendors.filter((v) => {
+    if (categoryFilter !== 'all' && v.category !== categoryFilter) return false;
+    if (showBookmarkedOnly && !bookmarked.has(v.id)) return false;
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      const hay = `${v.name ?? ''} ${v.category ?? ''} ${v.preferredList ?? ''} ${v.notes ?? ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     return true;
   });
 
   return (
     <div>
       {/* Filters and View Toggle */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex gap-3">
-          {/* Category Filter */}
+      <div className="flex items-center justify-between gap-3 mb-6">
+        <div className="flex flex-wrap gap-3">
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search vendors…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 pr-4 py-2 bg-white border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+            />
+          </div>
           <div className="relative">
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-gray-200 rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
+              className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
             >
-              <option value="all">All Types</option>
-              {categories.map(category => (
-                <option key={category} value={category}>{category}</option>
-              ))}
+              <option value="all">All Categories</option>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
             <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
-
-          {/* Location Filter */}
-          <div className="relative">
-            <select
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-gray-200 rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-            >
-              <option value="all">All Locations</option>
-              {locations.map(location => (
-                <option key={location} value={location}>{location}</option>
-              ))}
-            </select>
-            <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
-
-          {/* Bookmarked Only Filter */}
           <button
-            onClick={() => setShowBookmarkedOnly(!showBookmarkedOnly)}
-            className={`px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
-              showBookmarkedOnly ? 'bg-gray-100' : 'bg-white border border-gray-200 hover:bg-gray-50'
-            }`}
+            onClick={() => setShowBookmarkedOnly((v) => !v)}
+            className={`px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${showBookmarkedOnly ? 'bg-gray-100' : 'bg-white border border-black hover:bg-gray-50'}`}
           >
-            <Bookmark className={`w-4 h-4 ${
-              showBookmarkedOnly ? 'fill-current text-gray-900' : 'text-gray-600'
-            }`} />
+            <Bookmark className={`w-4 h-4 ${showBookmarkedOnly ? 'fill-current text-gray-900' : 'text-gray-600'}`} />
           </button>
         </div>
 
-        {/* View Toggle */}
-        <div className="flex gap-2 bg-white border border-gray-200 rounded-lg p-1">
-          <button
-            onClick={() => setViewMode('cards')}
-            className={`p-2 rounded transition-colors ${
-              viewMode === 'cards' ? 'bg-gray-100' : 'hover:bg-gray-50'
-            }`}
-          >
-            <LayoutGrid className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setViewMode('lines')}
-            className={`p-2 rounded transition-colors ${
-              viewMode === 'lines' ? 'bg-gray-100' : 'hover:bg-gray-50'
-            }`}
-          >
-            <List className="w-4 h-4" />
-          </button>
+        <div className="flex gap-2 bg-white border border-black rounded-lg p-1">
+          <button onClick={() => setViewMode('cards')} className={`p-2 rounded transition-colors ${viewMode === 'cards' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}><LayoutGrid className="w-4 h-4" /></button>
+          <button onClick={() => setViewMode('lines')} className={`p-2 rounded transition-colors ${viewMode === 'lines' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}><List className="w-4 h-4" /></button>
         </div>
       </div>
 
+      {loading && <p className="text-gray-500 py-12 text-center">Loading vendors…</p>}
+      {error && <p className="text-red-600 bg-red-50 border border-red-200 rounded-lg p-4">Couldn’t load vendors: {error}</p>}
+      {!loading && !error && filtered.length === 0 && (
+        <p className="text-gray-400 py-12 text-center">No vendors{vendors.length ? ' match your filters' : ' yet'}.</p>
+      )}
+
       {/* Cards View */}
-      {viewMode === 'cards' && (
+      {!loading && !error && viewMode === 'cards' && filtered.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {filteredVendors.map((vendor) => (
-            <div
-              key={vendor.id}
-              className="bg-white rounded-2xl border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer"
-            >
-              {/* Header with projects count and bookmark */}
-              <div className="flex items-start justify-between mb-4">
-                <p className="text-gray-500">
-                  {vendor.projectsCount} project{vendor.projectsCount !== 1 ? "s" : ""}
-                </p>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleBookmark(vendor.id);
-                  }}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                  aria-label="Bookmark vendor"
-                >
-                  <Bookmark
-                    className={`w-5 h-5 ${
-                      bookmarkedVendors.has(vendor.id)
-                        ? "fill-current text-gray-900"
-                        : "text-gray-400"
-                    }`}
-                  />
+          {filtered.map((v) => (
+            <div key={v.id} className="bg-white rounded-2xl border border-black p-6 hover:shadow-md transition-shadow">
+              <div className="flex items-start justify-between mb-3">
+                <span className={`inline-block px-3 py-1 rounded-full text-sm ${tagColor(v.category)}`}>{v.category ?? 'Uncategorized'}</span>
+                <button onClick={() => toggleBookmark(v.id)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Bookmark vendor">
+                  <Bookmark className={`w-5 h-5 ${bookmarked.has(v.id) ? 'fill-current text-gray-900' : 'text-gray-400'}`} />
                 </button>
               </div>
-
-              {/* Category badge */}
-              <div className="mb-3">
-                <span
-                  className={`inline-block px-3 py-1 rounded-full text-sm ${vendor.categoryColor}`}
-                >
-                  {vendor.category}
+              <h2 className="text-xl mb-1">{v.name ?? <span className="text-gray-400">Unnamed vendor</span>}</h2>
+              {v.preferredList && (
+                <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 mb-2">
+                  <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> Preferred · {v.preferredList}
                 </span>
-              </div>
-
-              {/* Vendor name */}
-              <h2 className="text-xl mb-2">{vendor.name}</h2>
-
-              {/* Vendor slug */}
-              <p className="text-gray-500 text-sm mb-4">{vendor.slug}</p>
-
-              {/* Vendor details */}
-              <div className="flex flex-wrap gap-2">
-                <span className="px-3 py-1 bg-gray-100 rounded-md text-sm flex items-center gap-1">
-                  <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                  {vendor.rating}
-                </span>
-                <span className="px-3 py-1 bg-gray-100 rounded-md text-sm">
-                  {vendor.serviceType}
-                </span>
-                <span className="px-3 py-1 bg-gray-100 rounded-md text-sm">
-                  {vendor.location}
-                </span>
-              </div>
+              )}
+              {v.notes && <p className="text-sm text-gray-600 mt-2">{v.notes}</p>}
             </div>
           ))}
         </div>
       )}
 
       {/* Lines View */}
-      {viewMode === 'lines' && (
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      {!loading && !error && viewMode === 'lines' && filtered.length > 0 && (
+        <div className="bg-white rounded-2xl border border-black overflow-hidden">
           <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
+            <thead className="bg-gray-50 border-b border-black">
               <tr>
                 <th className="text-left px-6 py-3 text-sm text-gray-600">Vendor</th>
                 <th className="text-left px-6 py-3 text-sm text-gray-600">Category</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Rating</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Service Type</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Location</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Projects</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600"></th>
+                <th className="text-left px-6 py-3 text-sm text-gray-600">Preferred</th>
+                <th className="text-left px-6 py-3 text-sm text-gray-600">Notes</th>
+                <th className="text-left px-6 py-3 text-sm text-gray-600 w-10"></th>
               </tr>
             </thead>
             <tbody>
-              {filteredVendors.map((vendor) => (
-                <tr key={vendor.id} className="border-b border-gray-100 hover:bg-gray-50">
+              {filtered.map((v) => (
+                <tr key={v.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  <td className="px-6 py-4 font-medium">{v.name ?? <span className="text-gray-400">Unnamed</span>}</td>
+                  <td className="px-6 py-4"><span className={`inline-block px-3 py-1 rounded-full text-sm ${tagColor(v.category)}`}>{v.category ?? '—'}</span></td>
+                  <td className="px-6 py-4 text-sm">{v.preferredList ?? <span className="text-gray-300">—</span>}</td>
+                  <td className="px-6 py-4 text-sm text-gray-600 max-w-md">{v.notes ?? <span className="text-gray-300">—</span>}</td>
                   <td className="px-6 py-4">
-                    <div>
-                      <p className="font-medium">{vendor.name}</p>
-                      <p className="text-sm text-gray-500">{vendor.slug}</p>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`inline-block px-3 py-1 rounded-full text-sm ${vendor.categoryColor}`}>
-                      {vendor.category}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-1">
-                      <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                      <span className="text-sm">{vendor.rating}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-sm">{vendor.serviceType}</td>
-                  <td className="px-6 py-4 text-sm">{vendor.location}</td>
-                  <td className="px-6 py-4 text-sm">{vendor.projectsCount}</td>
-                  <td className="px-6 py-4">
-                    <button
-                      onClick={() => toggleBookmark(vendor.id)}
-                      className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
-                    >
-                      <Bookmark
-                        className={`w-4 h-4 ${
-                          bookmarkedVendors.has(vendor.id)
-                            ? "fill-current text-gray-900"
-                            : "text-gray-400"
-                        }`}
-                      />
+                    <button onClick={() => toggleBookmark(v.id)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors" aria-label="Bookmark vendor">
+                      <Bookmark className={`w-4 h-4 ${bookmarked.has(v.id) ? 'fill-current text-gray-900' : 'text-gray-400'}`} />
                     </button>
                   </td>
                 </tr>

@@ -1,138 +1,75 @@
 {
-  "event_series": {
-    "id": "ser-ttw-2026",
-    "name": "TTW 2026 — Toronto Tech Week",
+  "event": {
+    "id": "evt-ttw-instalily",
+    "name": "Building AI for Enterprise with InstaLILY",
+    "presented_by": "InstaLILY AI",
+    "luma_url": "https://luma.com/ttw-instalily",
+    "part_of": "Toronto Tech Week (May 26–29, 2026)",
     "office": "Toronto",
     "owning_team": null,
-    "type": "Flagship presence",
-    "dates": null,
+    "category": "AI",
+    "format": "Evening fireside on building & deploying enterprise AI, then networking + drinks on a rooftop.",
+    "hosts": ["Cathy Xie", "Toronto Tech Week", "Olivia Joergens"],
+    "registration": "Approval required",
     "status": "Wrapped",
-    "verdict": "Big interest confirmed; entrance strong, visibility landed. Brand pull in Toronto stronger than the proposal assumed.",
-    "ongoing_motion": "Recurring smaller, lower-effort happy hours to keep the community warm — lower lift than flagship events.",
-    "_gaps": ["exact dates not in recap", "owning team not stated"]
-  },
 
-  "events": [
-    {
-      "id": "evt-ttw-fireside",
-      "series_id": "ser-ttw-2026",
-      "name": "Fireside + Roundtables",
-      "format": "Fireside chat (Naveen + Amit) followed by roundtable clusters",
-      "turnout": {
-        "rsvp": 528,
-        "capacity": 120,
-        "checked_in": 102,
-        "waitlist_admitted_est": 200,
-        "actual_attendance_note": "Higher than checked-in — uncounted plus-ones and walk-ins who slipped past check-in. Room ran at/near capacity."
-      },
-      "audience": "Balanced mix of mid-level engineers and professionals; broad career-stage range.",
-      "speakers": ["att-naveen", "att-amit"],
-      "notes": [
-        "Conversation flowed naturally, as intended.",
-        "Front of room engaged (listening, photos, well-targeted Q&A); back of room disruptive — had to shush. Venue acoustics not ideal for a listening format.",
-        "Fireside length felt right standalone, but back-to-back after the presentation pushed the total content block too long; visible restlessness toward the end.",
-        "Roundtable format wasn't enforced — judgment call on the night given crowding and natural mingling.",
-        "People sought out Instalily team members organically.",
-        "Camera with shared prompts was the unlock — created common ground and a reason to talk to strangers."
-      ]
+    "turnout": {
+      "rsvp": 528,
+      "capacity": 120,
+      "checked_in": 102,
+      "waitlist_admitted_est": 200,
+      "note": "Actual attendance higher than checked-in — uncounted plus-ones and walk-ins. Room ran at/near capacity."
     },
-    {
-      "id": "evt-ttw-happyhour",
-      "series_id": "ser-ttw-2026",
-      "name": "Happy Hour",
-      "format": "Networking happy hour",
-      "turnout": {
-        "rsvp": 200,
-        "capacity": null,
-        "checked_in": 56,
-        "waitlist_admitted_est": null,
-        "actual_attendance_note": "Higher than checked-in — some attendees missed registration."
-      },
-      "audience": "Skewed younger and job-seeking — mostly new grads with some mid-level; clearly a networking-driven crowd.",
-      "speakers": [],
-      "notes": ["Significant attendee overlap with the Fireside event."]
-    }
-  ],
 
-  "side_activities": [
-    { "name": "Hackathon interest", "learning": "Hackathons generated active interest and quality candidates — worth prioritizing for future TTWs." },
-    { "name": "Campus walk-throughs", "learning": "Showing up at campuses without a booth didn't convert — need real booth presence to get traction." }
-  ],
+    "audience": "Balanced mix of mid-level engineers and professionals; broad career-stage range.",
 
-  "vendors": [
-    { "id": "ven-ace", "name": "Ace", "category": "Venue", "notes": "Largest cost line. Which sub-event it served — confirm." },
-    { "id": "ven-waterworks", "name": "Waterworks", "category": "Venue", "notes": "Which sub-event it served — confirm." },
-    { "id": "ven-photo", "name": null, "category": "Photography", "preferred_list": "Toronto", "notes": "Name missing in recap. Vendor delivered quickly; Polina happy → add to preferred Toronto vendor list." },
-    { "id": "ven-video", "name": null, "category": "Videography", "notes": "External videographers; coordinating directly with Riley (in-house) on style and brand consistency." }
-  ],
-
-  "engagements": [
-    { "id": "eng-ace", "series_id": "ser-ttw-2026", "event_id": null, "category": "Venue", "vendor_id": "ven-ace", "stage": "Contracted", "confirmed_amount": 23401.88, "note": "Sub-event attribution to confirm." },
-    { "id": "eng-waterworks", "series_id": "ser-ttw-2026", "event_id": null, "category": "Venue", "vendor_id": "ven-waterworks", "stage": "Contracted", "confirmed_amount": 10535, "note": "Sub-event attribution to confirm." },
-    { "id": "eng-photo", "series_id": "ser-ttw-2026", "event_id": null, "category": "Photography", "vendor_id": "ven-photo", "stage": "Delivered", "confirmed_amount": null, "note": "Cost likely inside the 'Other' line; not broken out separately." },
-    { "id": "eng-video", "series_id": "ser-ttw-2026", "event_id": null, "category": "Videography", "vendor_id": "ven-video", "stage": "In Progress", "confirmed_amount": null, "note": "Post-production ongoing with Riley." }
-  ],
-
-  "budget": {
-    "currency": "USD",
-    "level": "series",
-    "lines": [
-      { "label": "Ace", "amount": 23401.88, "linked_engagement": "eng-ace" },
-      { "label": "Waterworks", "amount": 10535, "linked_engagement": "eng-waterworks" },
-      { "label": "Other", "amount": 4545, "linked_engagement": null, "note": "Uncategorized; likely includes photography + misc." }
+    "speakers": [
+      { "name": "Naveen Nigam", "title": "Head of Developer Relations", "org": "Google", "role_at_event": "Fireside speaker" },
+      { "name": "Amit Vadi", "title": "Head of Community, DeepMind DevX", "org": "Google DeepMind", "role_at_event": "Fireside speaker" }
     ],
-    "reported_total": 38482.25,
-    "line_sum": 38481.88,
-    "discrepancy": 0.37,
-    "discrepancy_note": "Reported total and line-item sum differ by $0.37 — real data rarely reconciles to the penny; model should flag, not assume."
-  },
 
-  "attendees": [
-    { "id": "att-erchit", "name": "Erchit Sood", "title": null, "org": "Google for Startups", "type": "Partner", "events": ["evt-ttw-fireside"], "note": "Validates the Google partnership thread." },
-    { "id": "att-naveen", "name": "Naveen Nigam", "title": "Head of Developer Relations", "org": "Google", "type": "Partner", "role_at_event": "Fireside speaker", "events": ["evt-ttw-fireside"] },
-    { "id": "att-amit", "name": "Amit Vadi", "title": "Head of Community, DeepMind DevX", "org": "Google DeepMind", "type": "Partner", "role_at_event": "Fireside speaker", "events": ["evt-ttw-fireside"] },
-    {
-      "id": "att-candidates-pool",
-      "type": "Hire",
-      "is_aggregate": true,
-      "count_est": "20-30",
-      "events": ["evt-ttw-fireside", "evt-ttw-happyhour"],
-      "note": "~20+ candidates tracked (landed in the 20-30 proposal target). One interview in motion; more than half already applied through the portal. Individual names not provided — 'Recruiting Contacts' section was empty/cut off."
-    }
-  ],
+    "vendors": [
+      { "name": "Ace", "category": "Venue", "stage": "Contracted", "amount": 23401.88 },
+      { "name": null, "category": "Photography", "stage": "Delivered", "amount": null, "note": "Polina ran point; vendor delivered well → add to preferred Toronto list. Name to confirm." },
+      { "name": null, "category": "Videography", "stage": "In progress", "amount": null, "note": "External; coordinating with Riley (in-house) on brand consistency." }
+    ],
 
-  "attendee_observations": {
-    "overlap": "Significant overlap between Fireside and Happy Hour attendees — validates cross-event frequency tracking on real data.",
-    "google_turnout": "Google showed up in force (Erchit, Naveen, Amit) — partnership is real, not theoretical."
-  },
+    "budget": {
+      "currency": "USD",
+      "lines": [
+        { "category": "Venue (Ace)", "amount": 23401.88, "confirmed": true },
+        { "category": "Other (photo + misc)", "amount": 4545, "confirmed": true }
+      ],
+      "total": 27946.88,
+      "note": "Single-event slice. Full TTW presence (which also included a separate Happy Hour venue) totaled ~$38,482."
+    },
 
-  "internal_staff": [
-    { "name": "Polina", "role": "Photography lead (ran point; managed the photo vendor)" },
-    { "name": "Riley", "role": "In-house video / brand consistency" }
-  ],
+    "attendees": [
+      { "name": "Erchit Sood", "org": "Google for Startups", "type": "Partner", "note": "Validates the Google partnership thread." },
+      { "name": "Naveen Nigam", "org": "Google", "type": "Partner", "role_at_event": "Speaker" },
+      { "name": "Amit Vadi", "org": "Google DeepMind", "type": "Partner", "role_at_event": "Speaker" },
+      { "type": "Hire", "is_aggregate": true, "count_est": "20-30", "note": "~20+ candidates tracked; 1 interview in motion; >half applied through portal. Individual names to be populated from the Luma guest list (host API)." }
+    ],
 
-  "contracts": [],
-  "_contracts_note": "No contract records captured in the recap, though venues were paid — exactly the kind of artifact the system should force/preserve.",
+    "staff": [
+      { "name": "Polina", "role": "Photography lead" },
+      { "name": "Riley", "role": "In-house video / brand" }
+    ],
 
-  "deliverables_observed": [
-    "Day-of logistics, merch, and vendor coordination ran cleanly — no major breakage.",
-    "(Pre-event deliverables not itemized in recap — this is a post-hoc summary.)"
-  ],
+    "reflections": [
+      "Plan for overflow from day one — 528 RSVPs against a 120 cap. Capacity buffers, waitlist policy, staggered entry.",
+      "Presentation tech check is separate from AV check — verify sound routes through the presentation before doors.",
+      "Give staff distinct name tags — attendees sought them out organically.",
+      "Keep content blocks short; don't stack a fireside back-to-back after a presentation.",
+      "Camera with shared prompts was the social unlock — keep it.",
+      "Add the photography vendor to the preferred Toronto list."
+    ],
 
-  "reflections": [
-    "Build overflow scenarios into the plan from day one: capacity buffers, waitlist policy, second-room or staggered-entry options. Team wasn't operationally built for overflow (528 RSVPs vs 120 cap).",
-    "Presentation tech check is SEPARATE from AV check — verify sound routes correctly through the presentation (not just room speakers/mic) before doors open.",
-    "Give Instalily staff real, distinct name tags so they're easy to spot in a crowded room (people sought them out organically).",
-    "Keep the camera-with-shared-prompts device — it was the social unlock.",
-    "Keep content blocks shorter; don't stack fireside back-to-back after a presentation.",
-    "Choose venues with acoustics suited to a listening format.",
-    "Prioritize hackathons for future TTWs — they generated quality candidates.",
-    "Bring a real booth to campuses; walk-throughs without one don't convert.",
-    "Add the TTW photography vendor to the preferred Toronto vendor list."
-  ],
+    "contracts": [],
 
-  "open_questions_from_recap": [
-    "How to tag/flag candidates in the portal? → directly answered by the recruiting/Greenhouse flow (hire-typed attendee → prospect with event tag).",
-    "Recruiting Contacts list — to be populated with actual candidate records."
-  ]
+    "open_questions": [
+      "How to tag/flag candidates in the portal? → hire-typed attendee becomes a Greenhouse prospect with the event tag.",
+      "Populate individual candidate records from the Luma guest list."
+    ]
+  }
 }
