@@ -18,12 +18,13 @@ const json = (body: unknown, status = 200) =>
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  properties: { summary: { type: "string", description: "2–3 sentence status digest" } },
+  properties: { summary: { type: "string", description: "3–5 bullet points, one per line, each starting with '- '" } },
   required: ["summary"],
 };
 
 const SYSTEM = `You write a brief, concrete status digest for an event the team is planning.
-Given structured facts (stage, days out, confirmed vendor decisions, pending items, budget, deliverable progress, what's coming up), write 2–3 plain sentences a planner can read at a glance: what's locked, what's still open, what's imminent or overdue. Use the real numbers/names. No preamble, no bullet points, no headings.`;
+Given structured facts (stage, days out, confirmed vendor decisions, pending items, budget, deliverable progress, what's coming up), write 3–5 short bullet points a planner can scan at a glance: what's locked, what's still open, what's imminent or overdue. Use the real numbers/names.
+Format as one bullet per line, each line starting with "- ". Keep each bullet to a single short clause. No preamble, no headings.`;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });

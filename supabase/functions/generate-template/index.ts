@@ -2,7 +2,7 @@
 // via the Claude API. Runs server-side so the ANTHROPIC_API_KEY never reaches the browser.
 //
 // POST { description: string }
-//  → { vendorCategories: string[], budgetLines: [{label, estimate}], progressCategories: string[] }
+//  → { name, location, date, vendorCategories: string[], budgetLines: [{label, estimate}], progressCategories: string[] }
 
 import Anthropic from "npm:@anthropic-ai/sdk";
 
@@ -19,6 +19,9 @@ const SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
+    name: { type: ["string", "null"], description: "concise event name/title if the user stated one, else null" },
+    location: { type: ["string", "null"], description: "full normalized city name (e.g. New York), else null" },
+    date: { type: ["string", "null"], description: "ISO YYYY-MM-DD if a specific date is stated, else null" },
     vendorCategories: { type: "array", items: { type: "string" } },
     budgetLines: {
       type: "array",
@@ -34,7 +37,7 @@ const SCHEMA = {
     },
     progressCategories: { type: "array", items: { type: "string" } },
   },
-  required: ["vendorCategories", "budgetLines", "progressCategories"],
+  required: ["name", "location", "date", "vendorCategories", "budgetLines", "progressCategories"],
 };
 
 const SYSTEM = `You are an event-operations planner for InstaLILY's internal event tool.
@@ -42,7 +45,12 @@ Given a short description of an event the company is planning, produce a STARTER
 1. vendorCategories — the external vendor categories this event will likely need (e.g. Venue, Catering, A/V, Photography).
 2. budgetLines — the budget make-up: each a category label with a rough USD estimate (integer; 0 if genuinely unknown). These are the lines that get filled in with real numbers as planning proceeds.
 3. progressCategories — the workstreams to track to completion (e.g. Attendee outreach, Venue coordination, Speaker outreach, Marketing & promotion, Day-of logistics, Vendor coordination).
-Keep each list concise (roughly 4-8 items) and specific to the described event. Estimates are rough planning numbers, not quotes.`;
+Keep each list concise (roughly 4-8 items) and specific to the described event. Estimates are rough planning numbers, not quotes.
+
+Also extract these fields from the description when the user makes them clear (otherwise null):
+- name: a concise event name/title the user named, e.g. "title NYC fireside" → "NYC fireside". Strip leading words like "title:" / "called". Do NOT invent a name from generic descriptions.
+- location: the city, normalized to its full common name — "NYC"/"nyc" → "New York", "SF" → "San Francisco", "LA" → "Los Angeles". If only a venue is given, use its city. Null if no place is mentioned.
+- date: a specific calendar date as ISO YYYY-MM-DD. Null if no specific date is given (don't resolve vague phrases like "next quarter").`;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });

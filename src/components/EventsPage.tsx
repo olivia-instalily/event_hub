@@ -1,10 +1,13 @@
-import { Bookmark, Calendar, MapPin, LayoutGrid, List, Plus, ChevronDown, Link2, X, Search, Download } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bookmark, Calendar, MapPin, LayoutGrid, List, Plus, ChevronDown, Link2, X, Search, Trash2, Check, Lightbulb } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, listLabels, createLabel, exportEventsSummary, exportEventsAttendees, generateTemplate, createPlanningEvent, backfillEvent, type EventListItem, type EventStatus, type Label, type GeneratedTemplate } from "../lib/db";
-import { downloadCsv } from "../lib/csv";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, generateTemplate, createPlanningEvent, backfillEvent, deleteEvent, previewCarriedLessons, type EventListItem, type EventStatus, type GeneratedTemplate, type CarriedLesson } from "../lib/db";
 import { TagStack } from "./TagStack";
+import { FormatPicker } from "./FormatPicker";
+import { LocationInput } from "./LocationEdit";
+import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage } from "./EventPlanningPage";
+import { ConfirmModal } from "./Modal";
 import { tagColor } from "../lib/tags";
 
 const NOT_CAPTURED = "Not captured";
@@ -53,7 +56,8 @@ function LumaSwatch({ url, fallback }: { url: string | null; fallback: string })
 interface EventsPageProps {
   selectedEventId: string | null;
   setSelectedEventId: (id: string | null) => void;
-  onViewPeople: (filter: { id: string; name: string; tag?: string | null; status?: 'all' | 'registered' | 'checkedIn' | 'waitlisted' }) => void;
+  onViewPeople: (filter: { id: string; name: string; tag?: string | null; status?: 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers' }) => void;
+  openCreate?: boolean; // open the Create Event modal on mount (set when navigated here via a Create button)
 }
 
 /** Create-event entry flow: choose ownership, describe, optionally start from a past event. */
@@ -77,23 +81,116 @@ function ChipEditor({ items, onChange, placeholder }: { items: string[]; onChang
   );
 }
 
+/** Seed the "describe the event" box from a past event's specs, ending with a
+ *  prompt for the user to fill in what's different this time. */
+function templateDescription(e: EventListItem): string {
+  const specs: string[] = [];
+  if (e.format) specs.push(`Format: ${e.format}`);
+  if (e.location) specs.push(`Location: ${e.location}`);
+  const size = e.capacity ?? e.rsvp ?? e.attendeeCount;
+  if (size != null) specs.push(`Size: ~${size} guests`);
+  if (e.tags.length) specs.push(`Themes: ${e.tags.join(", ")}`);
+  const heading = e.seriesName ? `Modeled on “${e.title}” (${e.seriesName}).` : `Modeled on “${e.title}”.`;
+  return [heading, ...specs, "", "What’s different this time: "].join("\n");
+}
+
+/** Site-styled tag filter dropdown — tags render as colored pills, like on the cards. */
+function TagFilter({ tags, value, onChange }: { tags: string[]; value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const pick = (v: string) => { onChange(v); setOpen(false); };
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 px-4 py-2 pr-3 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
+      >
+        {value === 'all'
+          ? <span className="text-gray-700">All Tags</span>
+          : <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(value)}`}>{value}</span>}
+        <ChevronDown className="w-4 h-4 text-gray-400" />
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 left-0 min-w-[12rem] max-h-72 overflow-y-auto bg-white border border-black rounded-lg shadow-lg p-1">
+          <button onClick={() => pick('all')} className={`flex items-center w-full text-left px-2 py-1.5 rounded text-sm hover:bg-gray-50 ${value === 'all' ? 'bg-gray-100' : ''}`}>
+            All Tags
+          </button>
+          {tags.length === 0 && <p className="px-2 py-1.5 text-sm text-gray-400">No tags yet.</p>}
+          {tags.map((t) => (
+            <button key={t} onClick={() => pick(t)} className={`flex items-center justify-between gap-2 w-full text-left px-2 py-1.5 rounded hover:bg-gray-50 ${value === t ? 'bg-gray-100' : ''}`}>
+              <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(t)}`}>{t}</span>
+              {value === t && <Check className="w-4 h-4 text-gray-700 shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CreateEventModal({ events, onClose, onCreated }: { events: EventListItem[]; onClose: () => void; onCreated: (eventId: string) => void }) {
-  const [mode, setMode] = useState<'choose' | 'planning' | 'backfill'>('choose');
+  const [mode, setMode] = useState<'choose' | 'planFork' | 'planning' | 'backfill'>('choose');
+  // Set on the planning fork: solo (InstaLILY hosts alone) vs cohost (sharing hosting & cost).
+  const [planKind, setPlanKind] = useState<'solo' | 'cohost'>('solo');
   const [description, setDescription] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  // The spec text we auto-filled from the selected template; lets us swap/clear it
+  // when the selection changes without clobbering anything the user typed.
+  const [autofilledDesc, setAutofilledDesc] = useState('');
+  const [templateSearch, setTemplateSearch] = useState('');
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [draft, setDraft] = useState<GeneratedTemplate | null>(null);
-  const [meta, setMeta] = useState({ name: '', date: '', location: '', lumaUrl: '' });
+  const [meta, setMeta] = useState({ name: '', date: '', location: '', lumaUrl: '', coHost: '' });
   const [bf, setBf] = useState({ name: '', date: '', location: '', description: '', lumaUrl: '' });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const descRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the describe box to fit its content (capped), so it expands as you type.
+  useEffect(() => {
+    const el = descRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  }, [description, mode]);
+  // Once the description has real substance, give it room by shrinking the past-event grid.
+  const descLong = description.trim().length > 140 || description.split('\n').length > 4;
+
+  // Carried lessons preview — surfaced before the draft is generated, matched on the
+  // start-from event and what's been described so far. Debounced; re-runs as inputs change.
+  const [lessons, setLessons] = useState<CarriedLesson[] | null>(null);
+  const [lessonsLoading, setLessonsLoading] = useState(false);
+  useEffect(() => {
+    if (mode !== 'planning') return;
+    const seed = events.find((e) => e.id === selected);
+    if (!selected && description.trim().length < 12) { setLessons(null); return; }
+    let cancelled = false;
+    setLessonsLoading(true);
+    const h = setTimeout(() => {
+      previewCarriedLessons({ name: description.trim() || seed?.title || '', format: seed?.format ?? null, tags: seed?.tags ?? [], modeledOnEventId: selected })
+        .then((l) => { if (!cancelled) setLessons(l); })
+        .catch(() => { if (!cancelled) setLessons([]); })
+        .finally(() => { if (!cancelled) setLessonsLoading(false); });
+    }, 600);
+    return () => { cancelled = true; clearTimeout(h); };
+  }, [mode, description, selected, events]);
 
   const createPlanned = async () => {
     if (!draft || !meta.name.trim()) return;
     setCreating(true); setCreateError(null);
     try {
-      const id = await createPlanningEvent({ name: meta.name.trim(), date: meta.date || null, location: meta.location.trim() || null, tags: [], template: draft });
+      // Solo events skip the up-front budget estimate — seed no budget lines.
+      const template = planKind === 'solo' ? { ...draft, budgetLines: [] } : draft;
+      const id = await createPlanningEvent({ name: meta.name.trim(), date: meta.date || null, location: meta.location.trim() || null, tags: [], template, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
       if (meta.lumaUrl.trim()) { try { await attachLuma(id, meta.lumaUrl.trim()); } catch { /* event still created; attach later from the card */ } }
       onCreated(id);
     } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
@@ -108,8 +205,45 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
     } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
   };
 
-  // Past events with a Luma cover make the nicest "start from" tiles.
-  const templates = events.filter((e) => e.status === 'past' && e.coverImageUrl).slice(0, 9);
+  // Rank past events by how much they have filled out — richer events make better starting points.
+  const infoScore = (e: EventListItem) =>
+    (e.coverImageUrl ? 3 : 0) +
+    (e.location ? 1 : 0) +
+    (e.date ? 1 : 0) +
+    (e.format ? 1 : 0) +
+    (e.tags.length ? 1 : 0) +
+    (e.attendeeCount != null ? 1 : 0) +
+    (e.rsvp != null ? 1 : 0) +
+    (e.capacity != null ? 1 : 0) +
+    (e.owners.length ? 1 : 0) +
+    (e.seriesName ? 1 : 0);
+  const templateQuery = templateSearch.trim().toLowerCase();
+  const templates = events
+    .filter((e) => e.status === 'past')
+    .filter((e) => !templateQuery || `${e.title} ${e.location ?? ''} ${e.seriesName ?? ''}`.toLowerCase().includes(templateQuery))
+    .sort((a, b) => infoScore(b) - infoScore(a));
+
+  // Whatever the user typed themselves — i.e. the text after our auto-filled spec
+  // prefix (or the whole field, if no template is currently applied).
+  const userDifferenceText = () =>
+    autofilledDesc && description.startsWith(autofilledDesc) ? description.slice(autofilledDesc.length) : description;
+
+  // Click a past event → prefill the description with its specs, then drop whatever
+  // the user already typed into the "What's different this time" slot. Re-clicking
+  // the same event strips the spec framing but keeps their text.
+  const selectTemplate = (t: EventListItem) => {
+    const userText = userDifferenceText();
+    if (t.id === selected) {
+      setSelected(null);
+      setDescription(userText);
+      setAutofilledDesc('');
+      return;
+    }
+    setSelected(t.id);
+    const prefix = templateDescription(t); // ends with "What's different this time: "
+    setAutofilledDesc(prefix);
+    setDescription(prefix + userText);
+  };
 
   const generate = async () => {
     const desc = description.trim();
@@ -117,7 +251,15 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
     setGenerating(true);
     setGenError(null);
     try {
-      setDraft(await generateTemplate(seed ? `${desc}\n\n(Model it loosely on a past event: ${seed.title})` : desc));
+      const t = await generateTemplate(seed ? `${desc}\n\n(Model it loosely on a past event: ${seed.title})` : desc);
+      setDraft(t);
+      // Prefill event details parsed from the description — but never clobber what the user already typed.
+      setMeta((m) => ({
+        ...m,
+        name: m.name.trim() || (t.name ?? ''),
+        location: m.location.trim() || (t.location ? canonicalCity(t.location) : ''),
+        date: m.date || (t.date ?? ''),
+      }));
     } catch (e: any) {
       setGenError(e.message ?? String(e));
     } finally {
@@ -136,46 +278,97 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
 
         {mode === 'choose' ? (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <button onClick={() => setMode('planning')} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
-              <p className="text-lg font-medium">I&apos;m planning</p>
-              <p className="text-sm text-gray-500 mt-1">InstaLILY owns this event.</p>
+            <button onClick={() => setMode('planFork')} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
+              <p className="text-lg font-medium">We&apos;re planning</p>
+              <p className="text-sm text-gray-500 mt-1">InstaLILY is running this event — alone or alongside a co-host.</p>
+            </button>
+            <button disabled className="border border-gray-200 rounded-xl p-6 text-left opacity-60 cursor-not-allowed">
+              <p className="text-lg font-medium">I&apos;m attending</p>
+              <p className="text-sm text-gray-500 mt-1">A third party owns it; we attend, exhibit, or sponsor. Coming soon.</p>
             </button>
             <button onClick={() => setMode('backfill')} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
               <p className="text-lg font-medium">Backfill a past event</p>
               <p className="text-sm text-gray-500 mt-1">Log an event that already happened.</p>
             </button>
-            <button disabled className="border border-gray-200 rounded-xl p-6 text-left opacity-60 cursor-not-allowed">
-              <p className="text-lg font-medium">I&apos;m attending</p>
-              <p className="text-sm text-gray-500 mt-1">Tracking someone else&apos;s event. Coming soon.</p>
-            </button>
+          </div>
+        ) : mode === 'planFork' ? (
+          <div>
+            <p className="text-sm text-gray-600 mb-4">Are you planning this alone, or alongside someone else?</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button onClick={() => { setPlanKind('solo'); setMode('planning'); }} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
+                <p className="text-lg font-medium">Just us</p>
+                <p className="text-sm text-gray-500 mt-1">InstaLILY hosts and covers the cost alone.</p>
+              </button>
+              <button onClick={() => { setPlanKind('cohost'); setMode('planning'); }} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
+                <p className="text-lg font-medium">With a co-host</p>
+                <p className="text-sm text-gray-500 mt-1">Sharing hosting &amp; cost with another organization.</p>
+              </button>
+            </div>
+            <div className="mt-6 pt-4 border-t border-gray-100">
+              <button onClick={() => setMode('choose')} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
+            </div>
           </div>
         ) : mode === 'planning' ? (
           <div>
             <label className="text-sm font-medium block mb-1">Describe the event</label>
             <textarea
-              rows={3}
+              ref={descRef}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="e.g. Fireside chat & networking for ~120 in Toronto…"
-              className="w-full px-3 py-2 border border-black rounded-lg text-sm mb-5 focus:outline-none focus:ring-2 focus:ring-gray-300"
+              className="w-full px-3 py-2 border border-black rounded-lg text-sm mb-5 min-h-[5rem] resize-none overflow-hidden transition-[height] duration-150 focus:outline-none focus:ring-2 focus:ring-gray-300"
             />
 
             <h3 className="text-sm font-medium mb-3">Start from a past event <span className="text-gray-400 font-normal">(optional)</span></h3>
+            <div className="relative mb-3">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                value={templateSearch}
+                onChange={(e) => setTemplateSearch(e.target.value)}
+                placeholder="Search past events…"
+                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              />
+            </div>
             {templates.length === 0 ? (
-              <p className="text-sm text-gray-400">No past events with covers to start from.</p>
+              <p className="text-sm text-gray-400">{templateQuery ? 'No past events match your search.' : 'No past events to start from.'}</p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className={`grid grid-cols-2 sm:grid-cols-3 gap-3 overflow-y-auto pr-1 transition-[max-height] duration-300 ${descLong ? 'max-h-40' : 'max-h-72'}`}>
                 {templates.map((t) => (
                   <button
                     key={t.id}
-                    onClick={() => setSelected(t.id === selected ? null : t.id)}
+                    onClick={() => selectTemplate(t)}
                     className={`relative rounded-xl overflow-hidden border text-left h-28 transition ${selected === t.id ? 'border-black ring-2 ring-black' : 'border-gray-200 hover:border-gray-400'}`}
                   >
-                    <img src={t.coverImageUrl!} alt="" className="absolute inset-0 w-full h-full object-cover" style={{ objectPosition: t.coverPosition ?? '50% 50%' }} />
+                    {t.coverImageUrl ? (
+                      <img src={t.coverImageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" style={{ objectPosition: t.coverPosition ?? '50% 50%' }} />
+                    ) : (
+                      <span className="absolute inset-0 bg-gray-200" />
+                    )}
                     <span className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
                     <span className="absolute bottom-2 left-2 right-2 text-white text-xs font-medium line-clamp-2">{t.title}</span>
                   </button>
                 ))}
+              </div>
+            )}
+
+            {(lessonsLoading || (lessons && lessons.length > 0)) && (
+              <div className="mt-5">
+                <h3 className="text-sm font-medium mb-2 flex items-center gap-1.5"><Lightbulb className="w-4 h-4 text-amber-500" /> Lessons from past events</h3>
+                {lessonsLoading && !lessons ? (
+                  <p className="text-sm text-gray-400">Finding comparable past events…</p>
+                ) : (
+                  <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 max-h-44 overflow-y-auto">
+                    {lessons!.map((l, i) => (
+                      <div key={i} className="px-3 py-2 flex gap-2">
+                        <Lightbulb className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-sm text-gray-700">{l.body}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">from {l.sourceEventName}{l.why ? ` · ${l.why}` : ''}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -189,7 +382,7 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
                 >
                   {generating ? 'Generating template…' : 'Generate draft template'}
                 </button>
-                <p className="text-xs text-gray-400 mt-2">Claude drafts vendor categories, a budget make-up, and progress workstreams — all editable before you create.</p>
+                <p className="text-xs text-gray-400 mt-2">Claude drafts vendor categories{planKind === 'cohost' ? ', a budget make-up,' : ''} and progress workstreams — all editable before you create.</p>
               </div>
             ) : (
               <div className="mt-6 space-y-6">
@@ -203,40 +396,47 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
                   />
                   <div className="flex flex-wrap gap-2">
                     <input type="date" value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                    <input value={meta.location} onChange={(e) => setMeta({ ...meta, location: e.target.value })} placeholder="Location" style={{ width: `${Math.max(10, meta.location.length + 2)}ch` }} className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                    <LocationInput value={meta.location} onChange={(v) => setMeta({ ...meta, location: v })} style={{ width: `${Math.max(10, meta.location.length + 2)}ch` }} className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                   </div>
                   <input value={meta.lumaUrl} onChange={(e) => setMeta({ ...meta, lumaUrl: e.target.value })} placeholder="Luma link (optional) — add now or later" className="w-full mt-2 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                  {planKind === 'cohost' && (
+                    <input value={meta.coHost} onChange={(e) => setMeta({ ...meta, coHost: e.target.value })} placeholder="Co-host organization (optional)" className="w-full mt-2 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                  )}
                 </div>
                 <div>
                   <h3 className="text-sm font-medium mb-2">Vendor categories</h3>
                   <ChipEditor items={draft.vendorCategories} onChange={(v) => patch({ vendorCategories: v })} placeholder="Add category" />
                 </div>
 
-                <div>
-                  <h3 className="text-sm font-medium mb-2">Budget make-up</h3>
-                  <div className="space-y-2">
-                    {draft.budgetLines.map((line, i) => (
-                      <div key={i} className="flex gap-2">
-                        <input
-                          value={line.label}
-                          onChange={(e) => patch({ budgetLines: draft.budgetLines.map((l, j) => (j === i ? { ...l, label: e.target.value } : l)) })}
-                          className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                        />
-                        <input
-                          type="number"
-                          value={line.estimate}
-                          onChange={(e) => patch({ budgetLines: draft.budgetLines.map((l, j) => (j === i ? { ...l, estimate: Number(e.target.value) } : l)) })}
-                          className="w-28 px-2 py-1 text-right border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                        />
-                        <button onClick={() => patch({ budgetLines: draft.budgetLines.filter((_, j) => j !== i) })} className="text-gray-400 hover:text-red-600"><X className="w-4 h-4" /></button>
-                      </div>
-                    ))}
-                    <button onClick={() => patch({ budgetLines: [...draft.budgetLines, { label: 'New line', estimate: 0 }] })} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
-                      <Plus className="w-4 h-4" /> Add line
-                    </button>
+                {/* Budget make-up — co-host only for now. Solo events skip the up-front
+                    estimate; budget comes later as a more exact breakdown. */}
+                {planKind === 'cohost' && (
+                  <div>
+                    <h3 className="text-sm font-medium mb-2">Budget make-up</h3>
+                    <div className="space-y-2">
+                      {draft.budgetLines.map((line, i) => (
+                        <div key={i} className="flex gap-2">
+                          <input
+                            value={line.label}
+                            onChange={(e) => patch({ budgetLines: draft.budgetLines.map((l, j) => (j === i ? { ...l, label: e.target.value } : l)) })}
+                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                          />
+                          <input
+                            type="number"
+                            value={line.estimate}
+                            onChange={(e) => patch({ budgetLines: draft.budgetLines.map((l, j) => (j === i ? { ...l, estimate: Number(e.target.value) } : l)) })}
+                            className="w-28 px-2 py-1 text-right border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                          />
+                          <button onClick={() => patch({ budgetLines: draft.budgetLines.filter((_, j) => j !== i) })} className="text-gray-400 hover:text-red-600"><X className="w-4 h-4" /></button>
+                        </div>
+                      ))}
+                      <button onClick={() => patch({ budgetLines: [...draft.budgetLines, { label: 'New line', estimate: 0 }] })} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
+                        <Plus className="w-4 h-4" /> Add line
+                      </button>
+                    </div>
+                    <p className="text-sm text-gray-500 mt-1">Est. total: ${draft.budgetLines.reduce((s, l) => s + (l.estimate || 0), 0).toLocaleString()}</p>
                   </div>
-                  <p className="text-sm text-gray-500 mt-1">Est. total: ${draft.budgetLines.reduce((s, l) => s + (l.estimate || 0), 0).toLocaleString()}</p>
-                </div>
+                )}
 
                 <div>
                   <h3 className="text-sm font-medium mb-2">Progress workstreams</h3>
@@ -247,7 +447,7 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
 
             {createError && <p className="text-red-600 text-sm mt-4">{createError}</p>}
             <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-100">
-              <button onClick={() => (draft ? setDraft(null) : setMode('choose'))} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
+              <button onClick={() => (draft ? setDraft(null) : setMode('planFork'))} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
               <button
                 onClick={createPlanned}
                 disabled={!draft || !meta.name.trim() || creating}
@@ -275,10 +475,9 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
                   onChange={(e) => setBf({ ...bf, date: e.target.value })}
                   className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
                 />
-                <input
+                <LocationInput
                   value={bf.location}
-                  onChange={(e) => setBf({ ...bf, location: e.target.value })}
-                  placeholder="Location"
+                  onChange={(v) => setBf({ ...bf, location: v })}
                   style={{ width: `${Math.max(10, bf.location.length + 2)}ch` }}
                   className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
                 />
@@ -316,7 +515,7 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
   );
 }
 
-export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }: EventsPageProps) {
+export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, openCreate = false }: EventsPageProps) {
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -326,21 +525,33 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
   const [statusFilter, setStatusFilter] = useState<EventStatus | 'all'>('all');
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const [tagFilter, setTagFilter] = useState<string>('all');
   const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [labels, setLabels] = useState<Label[]>([]);
-  const [labelFilter, setLabelFilter] = useState<string>('all');
-  const [exportOpen, setExportOpen] = useState(false);
   const [dateRange, setDateRange] = useState<'all' | 'week' | 'month' | '3months' | 'year' | 'custom'>('all');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
-  const [createOpen, setCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(openCreate);
 
   // Luma attach UI: which card's input is open, its value, busy/error state.
   const [lumaEditingId, setLumaEditingId] = useState<string | null>(null);
   const [lumaInput, setLumaInput] = useState('');
   const [lumaBusy, setLumaBusy] = useState(false);
   const [lumaError, setLumaError] = useState<string | null>(null);
+
+  // Delete UI: the event awaiting a delete confirmation.
+  const [deleteTarget, setDeleteTarget] = useState<EventListItem | null>(null);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setEvents((prev) => prev.filter((e) => e.id !== id)); // optimistic
+    try {
+      await deleteEvent(id);
+    } catch (e: any) {
+      setError(e.message ?? String(e));
+      await load(); // revert to server truth on failure
+    }
+  };
 
   // Tag edit UI: which card's tag dropdown is open.
   const setTags = async (eventId: string, tags: string[]) => {
@@ -353,6 +564,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
     }
   };
 
+  const setFormatValue = async (eventId: string, format: string | null) => {
+    setEvents((prev) => prev.map((e) => (e.id === eventId ? { ...e, format } : e)));
+    try { await setEventFormat(eventId, format); } catch { await load(); }
+  };
+
   const load = () =>
     listEvents()
       .then(setEvents)
@@ -360,23 +576,6 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
       .finally(() => setLoading(false));
 
   useEffect(() => { void load(); }, []);
-  useEffect(() => { listLabels('event').then(setLabels).catch(() => {}); }, []);
-
-  const createLabelFromFilter = async () => {
-    const name = window.prompt('New label name')?.trim();
-    if (!name) return;
-    const lbl = await createLabel(name, 'event');
-    setLabels((prev) => [...prev, lbl].sort((a, b) => a.name.localeCompare(b.name)));
-    setLabelFilter(lbl.id);
-  };
-
-  const doExport = async (kind: 'summary' | 'attendees') => {
-    const label = labels.find((l) => l.id === labelFilter);
-    if (!label) return;
-    const rows = kind === 'summary' ? await exportEventsSummary(label.id) : await exportEventsAttendees(label.id);
-    downloadCsv(`${label.name}-${kind}.csv`, rows);
-    setExportOpen(false);
-  };
 
   const submitLuma = async (eventId: string) => {
     setLumaBusy(true);
@@ -403,7 +602,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
   };
 
   const locations = Array.from(new Set(events.map(e => e.location).filter(Boolean))) as string[];
-  const owners = Array.from(new Set(events.map(e => e.owner).filter(Boolean))) as string[];
+  // Distinct individual owners (not the joined string) so the filter lists each person once.
+  const owners = Array.from(new Set(events.flatMap(e => e.owners.map(o => o.name)))).sort((a, b) => a.localeCompare(b));
+  const tags = Array.from(new Set(events.flatMap(e => e.tags))).sort((a, b) => a.localeCompare(b));
 
   // Date filtering applies to Past / All only (not Future or In-Process).
   const showDateFilter = statusFilter === 'past' || statusFilter === 'all';
@@ -426,9 +627,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
   const filteredEvents = events.filter(event => {
     if (statusFilter !== 'all' && event.status !== statusFilter) return false;
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
-    if (ownerFilter !== 'all' && event.owner !== ownerFilter) return false;
+    if (ownerFilter !== 'all' && !event.owners.some(o => o.name === ownerFilter)) return false;
+    if (tagFilter !== 'all' && !event.tags.includes(tagFilter)) return false;
     if (showBookmarkedOnly && !bookmarkedEvents.has(event.id)) return false;
-    if (labelFilter !== 'all' && !event.labelIds.includes(labelFilter)) return false;
     if (dateFrom && (!event.date || event.date < dateFrom)) return false;
     if (dateTo && (!event.date || event.date > dateTo)) return false;
     const q = searchQuery.trim().toLowerCase();
@@ -519,7 +720,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
             <select
               value={ownerFilter}
               onChange={(e) => setOwnerFilter(e.target.value)}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
+              className="appearance-none max-w-[11rem] truncate px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
             >
               <option value="all">All Owners</option>
               {owners.map(owner => (
@@ -529,23 +730,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
             <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
 
-          {/* Label / folder filter */}
-          <div className="relative">
-            <select
-              value={labelFilter}
-              onChange={(e) => {
-                if (e.target.value === '__create__') { void createLabelFromFilter(); return; }
-                setLabelFilter(e.target.value);
-                setExportOpen(false);
-              }}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-            >
-              <option value="all">All Labels</option>
-              {labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              <option value="__create__">+ Create label…</option>
-            </select>
-            <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
+          <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
 
           {/* Date filter — Past / All only */}
           {showDateFilter && (
@@ -586,24 +771,6 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Export (only when a label is selected) */}
-          {labelFilter !== 'all' && (
-            <div className="relative">
-              <button
-                onClick={() => setExportOpen((o) => !o)}
-                className="flex items-center gap-2 px-3 py-2 bg-white border border-black rounded-lg text-sm hover:bg-gray-50"
-              >
-                <Download className="w-4 h-4" /> Export
-              </button>
-              {exportOpen && (
-                <div className="absolute right-0 z-20 mt-1 w-44 bg-white border border-black rounded-lg shadow-lg p-1">
-                  <button onClick={() => doExport('summary')} className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-50 rounded">Events summary</button>
-                  <button onClick={() => doExport('attendees')} className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-50 rounded">Attendees (CSV)</button>
-                </div>
-              )}
-            </div>
-          )}
-
         <div className="flex gap-2 bg-white border border-black rounded-lg p-1">
           <button
             onClick={() => setViewMode('cards')}
@@ -651,12 +818,14 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
               )}
 
               <div className="flex items-center justify-between gap-2 mb-3 min-h-[2rem]">
-                <TagStack tags={event.tags} editable onChange={(tags) => setTags(event.id, tags)} />
+                <FormatPicker value={event.format} onChange={(f) => setFormatValue(event.id, f)} />
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-gray-300">|</span>
-                  <span className="text-gray-500 text-sm whitespace-nowrap">
-                    {event.attendeeCount != null ? `${event.attendeeCount} checked in` : NOT_CAPTURED}
-                  </span>
+                  {event.attendeeCount != null && (
+                    <>
+                      <span className="text-gray-300">|</span>
+                      <span className="text-gray-500 text-sm whitespace-nowrap">{event.attendeeCount} checked in</span>
+                    </>
+                  )}
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleBookmark(event.id); }}
                     className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -664,24 +833,29 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
                   >
                     <Bookmark className={`w-5 h-5 ${bookmarkedEvents.has(event.id) ? "fill-current text-gray-900" : "text-gray-400"}`} />
                   </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(event); }}
+                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    aria-label="Delete event"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
                 </div>
               </div>
 
               <h2 className="text-xl mb-2">{event.title}</h2>
               {event.seriesName && <p className="text-gray-500 text-sm mb-4">{event.seriesName}</p>}
 
-              <div className="flex flex-wrap gap-2 mb-6">
+              <div className="flex flex-wrap items-center gap-2 mb-6">
                 <span className="px-3 py-1 bg-gray-100 rounded-md text-sm flex items-center gap-1">
                   <Calendar className="w-3 h-3" />
                   {event.date ?? NOT_CAPTURED}
                 </span>
-                {event.format && (
-                  <span className="px-3 py-1 bg-gray-100 rounded-md text-sm">{event.format}</span>
-                )}
                 <span className="px-3 py-1 bg-gray-100 rounded-md text-sm flex items-center gap-1">
                   <MapPin className="w-3 h-3" />
                   {event.location ?? NOT_CAPTURED}
                 </span>
+                <TagStack tags={event.tags} editable onChange={(tags) => setTags(event.id, tags)} onTagClick={setTagFilter} />
               </div>
 
               {/* Luma attach / link —  pinned to the card's bottom edge */}
@@ -771,22 +945,29 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 transition-opacity group-hover/row:opacity-40">
-                    {event.tags.length > 0 ? (
-                      <TagStack tags={event.tags} expandOnHover={false} />
-                    ) : <span className="text-sm text-gray-400">{NOT_CAPTURED}</span>}
+                  <td className="px-6 py-4">
+                    <TagStack tags={event.tags} editable expandOnHover={false} onChange={(tags) => setTags(event.id, tags)} onTagClick={setTagFilter} />
                   </td>
                   <td className="px-6 py-4 text-sm transition-opacity group-hover/row:opacity-40">{event.date ?? <span className="text-gray-400">{NOT_CAPTURED}</span>}</td>
                   <td className="px-6 py-4 text-sm transition-opacity group-hover/row:opacity-40">{event.location ?? <span className="text-gray-400">{NOT_CAPTURED}</span>}</td>
                   <td className="px-6 py-4 text-sm transition-opacity group-hover/row:opacity-40">{event.owner ?? <span className="text-gray-400">{NOT_CAPTURED}</span>}</td>
                   <td className="px-6 py-4 text-sm transition-opacity group-hover/row:opacity-40">{event.attendeeCount ?? <span className="text-gray-400">—</span>}</td>
                   <td className="px-6 py-4">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleBookmark(event.id); }}
-                      className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
-                    >
-                      <Bookmark className={`w-4 h-4 ${bookmarkedEvents.has(event.id) ? "fill-current text-gray-900" : "text-gray-400"}`} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleBookmark(event.id); }}
+                        className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+                      >
+                        <Bookmark className={`w-4 h-4 ${bookmarkedEvents.has(event.id) ? "fill-current text-gray-900" : "text-gray-400"}`} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteTarget(event); }}
+                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-gray-200 rounded-lg transition-colors opacity-0 group-hover/row:opacity-100"
+                        aria-label="Delete event"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -800,6 +981,17 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople }
           events={events}
           onClose={() => setCreateOpen(false)}
           onCreated={async (id) => { await load(); setCreateOpen(false); setSelectedEventId(id); }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmModal
+          title="Delete event?"
+          message={`Permanently delete “${deleteTarget.title}” and everything attached to it (budget, vendors, planning, attendee links). This can’t be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDelete}
+          onClose={() => setDeleteTarget(null)}
         />
       )}
     </div>

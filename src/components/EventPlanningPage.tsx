@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 import {
-  ArrowLeft, Calendar, MapPin, Users, Plus, Trash2, Check, Paperclip,
+  Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List,
+  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic,
 } from "lucide-react";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, attachLuma, updateEventCover,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, attachLuma,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
-  addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection,
+  addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors,
   addTrackerLine, setLinePaymentStatus, attachLineDoc, setBudgetTarget,
-  addDeliverable, setDeliverableStatus, deleteDeliverable,
+  addDeliverable, setDeliverableStatus, setDeliverableDueDate, deleteDeliverable,
   getPlanningSummary, saveOverviewSummary,
   listEventUpdates, recordEventUpdate, detectUpdate, syncGmail, summarizeCorrespondence,
   ejectPage, regeneratePageDraft, setPageFields, promoteToLive, listDevelopers, addDeveloper, removeDeveloper,
@@ -17,31 +17,30 @@ import {
   MACRO_STAGES, ENGAGEMENT_STAGES,
   type EventPlanning, type EngagementWithCandidates, type VendorCandidate,
   type PlanningBudget, type BudgetLineTracker, type Deliverable, type CarriedLesson,
-  type PlanningFacts,
+  type PlanningFacts, type VendorSuggestion,
 } from "../lib/db";
 import { TagStack } from "./TagStack";
+import { LocationEdit } from "./LocationEdit";
+import { EditableTitle } from "./EditableTitle";
 import { StatusControl } from "./StatusControl";
 import { FileDrop } from "./FileDrop";
 import { EventPageBuilder } from "./EventPageBuilder";
+import { CoverImage } from "./CoverImage";
+import { OwnerPicker } from "./OwnerPicker";
+import { DateEdit } from "./DateEdit";
+import { EventSetup } from "./EventSetup";
 import { domainFromUrl, isFreeMailDomain } from "../lib/url";
 
 interface Props {
   eventId: string;
   onBack: () => void;
-  onViewPeople: (filter: { id: string; name: string; tag?: string | null; status?: 'all' | 'registered' | 'checkedIn' | 'waitlisted' }) => void;
+  onViewPeople: (filter: { id: string; name: string; tag?: string | null; status?: 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers' }) => void;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
 function money(n: number | null | undefined, currency = "USD"): string {
   if (n == null) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
-}
-function tMinus(date: string | null): string {
-  if (!date) return "Date TBD";
-  const days = Math.round((new Date(date + "T00:00:00").getTime() - new Date(today() + "T00:00:00").getTime()) / 86400000);
-  if (days > 0) return `T‑minus ${days} day${days === 1 ? "" : "s"}`;
-  if (days === 0) return "Today";
-  return `${-days} day${days === -1 ? "" : "s"} ago`;
 }
 
 const DELIVERABLE_PHASES = ["Planning", "Week-of", "Event day", "Wrap"];
@@ -93,7 +92,9 @@ function MacroStepper({ eventId, initial, eventDate }: { eventId: string; initia
   const manualIdx = Math.max(0, MACRO_STAGES.indexOf((stage ?? "") as any));
   const currentIdx = Math.max(manualIdx, timeIdx);
 
-  const set = (s: string, i: number) => { if (i >= MANUAL_STAGES) return; setStage(s); void setMacroStage(eventId, s); };
+  // Concept/Planning are self-chosen; the later stages are normally date-derived. But any
+  // stage can be clicked to override the date rule (e.g. to fill in / test a wrapped event).
+  const set = (s: string) => { setStage(s); void setMacroStage(eventId, s); };
 
   return (
     <div className="flex items-center gap-1 flex-wrap">
@@ -107,10 +108,9 @@ function MacroStepper({ eventId, initial, eventDate }: { eventId: string; initia
         return (
           <div key={s} className="flex items-center">
             <button
-              onClick={() => set(s, i)}
-              disabled={!manual}
-              title={manual ? undefined : "Reached automatically based on the event date"}
-              className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm border transition-colors ${base} ${manual ? "hover:border-gray-400 cursor-pointer" : "cursor-default"}`}
+              onClick={() => set(s)}
+              title={manual ? undefined : "Normally reached automatically by date — click to set manually"}
+              className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm border transition-colors cursor-pointer hover:border-gray-400 ${base}`}
             >
               {s}
               {!manual && <Clock className="w-3 h-3 opacity-60" />}
@@ -260,9 +260,13 @@ function VendorCardModal({ eventId, engagementId, candidate, onClose, onSaved }:
 // Advancing INTO these stages prompts for a comment/attachment first.
 const PROMPTED_STAGES = new Set(["Selected", "Contracted"]);
 
-function DecisionCard({ initial, eventId, onDelete, onChange }: { initial: EngagementWithCandidates; eventId: string; onDelete: () => void; onChange?: (e: EngagementWithCandidates) => void }) {
+function DecisionCard({ initial, eventId, location, onDelete, onChange }: { initial: EngagementWithCandidates; eventId: string; location?: string | null; onDelete: () => void; onChange?: (e: EngagementWithCandidates) => void }) {
   const [eng, setEng] = useState(initial);
   const [cardId, setCardId] = useState<string | null>(null); // candidate whose vendor card is open
+  // "See suggested" — pulls from the vendor database (not yet populated), ranked by location.
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<VendorSuggestion[] | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
   useEffect(() => { onChange?.(eng); /* keep the parent (chart view) in sync */ /* eslint-disable-next-line */ }, [eng]);
   const [candName, setCandName] = useState("");
   const [candQuote, setCandQuote] = useState("");
@@ -331,6 +335,22 @@ function DecisionCard({ initial, eventId, onDelete, onChange }: { initial: Engag
     const leavingContracted = eng.stage === "Contracted";
     await setEngagementStage(eng.id, prev, leavingContracted ? { confirmedAmount: null } : undefined);
     setEng((e) => ({ ...e, stage: prev, ...(leavingContracted ? { confirmedAmount: null } : {}) }));
+  };
+
+  const seeSuggested = async () => {
+    const next = !suggestOpen;
+    setSuggestOpen(next);
+    if (next && suggestions === null) {
+      setSuggesting(true);
+      try { setSuggestions(await suggestVendors(eng.category, location ?? null)); }
+      finally { setSuggesting(false); }
+    }
+  };
+  // Add a suggested vendor as a candidate on this decision.
+  const addSuggestion = async (s: VendorSuggestion) => {
+    const c = await addCandidate(eng.id, s.name, null, s.link ?? s.note ?? s.location ?? "—");
+    setEng((e) => ({ ...e, candidates: [...e.candidates, c] }));
+    setSuggestions((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev));
   };
 
   return (
@@ -447,9 +467,38 @@ function DecisionCard({ initial, eventId, onDelete, onChange }: { initial: Engag
           </div>
         </div>
       ) : (
-        <button onClick={() => setAddingCand(true)} className="mt-3 inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
-          <Plus className="w-4 h-4" /> Add vendor
-        </button>
+        <div className="mt-3 flex items-center gap-4">
+          <button onClick={() => setAddingCand(true)} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
+            <Plus className="w-4 h-4" /> Add vendor
+          </button>
+          <button onClick={seeSuggested} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
+            <Lightbulb className="w-4 h-4" /> {suggestOpen ? "Hide suggested" : "See suggested"}
+          </button>
+        </div>
+      )}
+
+      {suggestOpen && (
+        <div className="mt-2 bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm">
+          {suggesting ? (
+            <p className="text-gray-400">Finding {eng.category ?? "vendors"}{location ? ` near ${location}` : ""}…</p>
+          ) : suggestions && suggestions.length > 0 ? (
+            <ul className="divide-y divide-gray-200">
+              {suggestions.map((s) => (
+                <li key={s.id} className="flex items-center justify-between gap-2 py-1.5">
+                  <span className="min-w-0">
+                    <span className="font-medium">{s.name}</span>
+                    {s.location && <span className="text-gray-400"> · {s.location}</span>}
+                  </span>
+                  <button onClick={() => addSuggestion(s)} className="shrink-0 inline-flex items-center gap-1 text-gray-600 hover:text-gray-900"><Plus className="w-3.5 h-3.5" /> Add</button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-gray-400">
+              No vendor suggestions{location ? ` for ${location}` : ""} yet — our vendor database isn’t set up.
+            </p>
+          )}
+        </div>
       )}
 
       {cardId && (() => {
@@ -462,7 +511,7 @@ function DecisionCard({ initial, eventId, onDelete, onChange }: { initial: Engag
   );
 }
 
-function VendorDecisions({ eventId, initial }: { eventId: string; initial: EngagementWithCandidates[] }) {
+function VendorDecisions({ eventId, location, initial }: { eventId: string; location?: string | null; initial: EngagementWithCandidates[] }) {
   const [engs, setEngs] = useState(initial);
   const [newCat, setNewCat] = useState("");
   const [view, setView] = useState<"cards" | "chart">("cards");
@@ -485,7 +534,7 @@ function VendorDecisions({ eventId, initial }: { eventId: string; initial: Engag
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        {engs.length === 0 ? <p className="text-sm text-gray-400">No vendor decisions yet — add one below.</p> : <span />}
+        {engs.length === 0 ? <p className="text-sm text-gray-400">No vendors yet — add one below.</p> : <span />}
         <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-lg p-1">
           <button onClick={() => setView("cards")} className={`p-1.5 rounded ${view === "cards" ? "bg-gray-100" : "hover:bg-gray-50"}`} title="Cards"><LayoutGrid className="w-4 h-4" /></button>
           <button onClick={() => setView("chart")} className={`p-1.5 rounded ${view === "chart" ? "bg-gray-100" : "hover:bg-gray-50"}`} title="Chart"><List className="w-4 h-4" /></button>
@@ -494,7 +543,7 @@ function VendorDecisions({ eventId, initial }: { eventId: string; initial: Engag
 
       {view === "cards" ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {engs.map((e) => <DecisionCard key={e.id} initial={e} eventId={eventId} onDelete={() => remove(e.id)} onChange={updateEng} />)}
+          {engs.map((e) => <DecisionCard key={e.id} initial={e} eventId={eventId} location={location} onDelete={() => remove(e.id)} onChange={updateEng} />)}
         </div>
       ) : engs.length > 0 && (
         <div className="bg-white rounded-2xl border border-black overflow-hidden">
@@ -674,7 +723,7 @@ function Deliverables({ eventId, initial }: { eventId: string; initial: Delivera
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
   const [title, setTitle] = useState("");
   const [owner, setOwner] = useState("");
-  const [due, setDue] = useState("");
+  const [due, setDueInput] = useState("");
 
   const total = items.length;
   const done = items.filter((d) => d.status === "Done").length;
@@ -683,6 +732,10 @@ function Deliverables({ eventId, initial }: { eventId: string; initial: Delivera
   const setStatus = async (id: string, status: string) => {
     setItems((p) => p.map((d) => (d.id === id ? { ...d, status } : d)));
     await setDeliverableStatus(id, status);
+  };
+  const setDue = async (id: string, dueDate: string | null) => {
+    setItems((p) => p.map((d) => (d.id === id ? { ...d, dueDate } : d)));
+    await setDeliverableDueDate(id, dueDate);
   };
   const remove = async (id: string) => {
     await deleteDeliverable(id);
@@ -693,7 +746,7 @@ function Deliverables({ eventId, initial }: { eventId: string; initial: Delivera
     if (!t) return;
     const d = await addDeliverable(eventId, { title: t, phase, ownerRole: owner.trim() || null, dueDate: due || null });
     setItems((p) => [...p, d]);
-    setTitle(""); setOwner(""); setDue(""); setAdding(null);
+    setTitle(""); setOwner(""); setDueInput(""); setAdding(null);
   };
 
   const otherPhases = Array.from(new Set(items.map((d) => d.phase).filter((p): p is string => !!p && !DELIVERABLE_PHASES.includes(p))));
@@ -716,7 +769,7 @@ function Deliverables({ eventId, initial }: { eventId: string; initial: Delivera
             <div key={phase}>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-medium text-gray-700">{phase}</h3>
-                <button onClick={() => { setAdding(adding === phase ? null : phase); setTitle(""); setOwner(""); setDue(""); }} className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
+                <button onClick={() => { setAdding(adding === phase ? null : phase); setTitle(""); setOwner(""); setDueInput(""); }} className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
               </div>
               <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
                 {group.length === 0 && adding !== phase && <p className="px-3 py-2 text-sm text-gray-400">None.</p>}
@@ -726,7 +779,10 @@ function Deliverables({ eventId, initial }: { eventId: string; initial: Delivera
                     <div key={d.id} className="px-3 py-2 flex items-center gap-3 text-sm group">
                       <div className="flex-1 min-w-0">
                         <p className={d.status === "Done" ? "line-through text-gray-400" : ""}>{d.title}</p>
-                        {d.dueDate && <p className="text-xs text-gray-500"><span className={overdue ? "text-red-600 font-medium" : ""}>{overdue ? "overdue " : "due "}{d.dueDate}</span></p>}
+                        <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+                          {overdue && <span className="text-red-600 font-medium">overdue</span>}
+                          <DateEdit value={d.dueDate} onChange={(iso) => setDue(d.id, iso)} placeholder="add due date" emphasize={!!overdue} />
+                        </span>
                       </div>
                       {/* People/outreach tag — placeholder for a future outreach page. */}
                       <button title="People & outreach for this task — coming soon" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0">
@@ -743,7 +799,7 @@ function Deliverables({ eventId, initial }: { eventId: string; initial: Delivera
                   <div className="px-3 py-2 flex flex-wrap gap-2 items-center bg-gray-50">
                     <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(phase); }} placeholder="Task" className="flex-1 min-w-[8rem] px-2 py-1 border border-black rounded text-sm focus:outline-none" />
                     <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Owner role" className="w-28 px-2 py-1 border border-black rounded text-sm focus:outline-none" />
-                    <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className="px-2 py-1 border border-black rounded text-sm focus:outline-none" />
+                    <span className="px-1 border border-black rounded"><DateEdit value={due || null} onChange={(iso) => setDueInput(iso ?? "")} placeholder="due date" /></span>
                     <button onClick={() => add(phase)} disabled={!title.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add</button>
                     <button onClick={() => setAdding(null)} className="text-sm text-gray-500 hover:text-gray-900">Cancel</button>
                   </div>
@@ -1029,8 +1085,13 @@ function Overview({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: 
 
   const t = today();
   const contracted = plan.engagements.filter((e) => e.stage === "Contracted");
+  // Genuinely pending = in motion. Freshly-seeded categories (still at "Sourced" with no
+  // candidates) aren't actually pending yet, so they stay out of this box.
+  const pendingEngagements = plan.engagements.filter((e) => e.stage !== "Contracted" && (e.candidates.length > 0 || e.stage !== "Sourced"));
   const paidLines = (plan.budget?.lines ?? []).filter((l) => l.paymentStatus === "paid");
   const pendingLines = (plan.budget?.lines ?? []).filter((l) => l.paymentStatus === "pending");
+  // Status digest is stored as one fact per line → render as bullets.
+  const summaryBullets = (summary ?? "").split("\n").map((l) => l.replace(/^[\s•\-*]+/, "").trim()).filter(Boolean);
   const upcoming = plan.deliverables
     .filter((d) => d.status !== "Done")
     .sort((a, b) => (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"));
@@ -1040,9 +1101,13 @@ function Overview({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: 
       {/* Digest — cached; regenerated only on Resync (which also syncs Gmail). */}
       <div className="bg-white rounded-2xl border border-black p-5">
         <div className="flex items-start justify-between gap-3">
-          <p className="text-gray-700 leading-relaxed flex-1">
-            {summary ?? <span className="text-gray-400">No status digest yet — hit Resync to pull email and generate one.</span>}
-          </p>
+          {summaryBullets.length > 0 ? (
+            <ul className="flex-1 list-disc pl-5 space-y-1 text-gray-700 leading-relaxed">
+              {summaryBullets.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+          ) : (
+            <p className="text-gray-400 flex-1">No status digest yet — hit Resync to pull email and generate one.</p>
+          )}
           <button onClick={resync} disabled={resyncing} className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
             <RefreshCw className={`w-3 h-3 ${resyncing ? "animate-spin" : ""}`} /> {resyncing ? "Resyncing…" : "Resync"}
           </button>
@@ -1054,43 +1119,14 @@ function Overview({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <ProgressBar label="Deliverables" value={facts.deliverables.done} max={facts.deliverables.total}
           hint={`${facts.deliverables.done}/${facts.deliverables.total} done${facts.deliverables.overdue ? ` · ${facts.deliverables.overdue} overdue` : ""}`} />
-        <ProgressBar label="Vendor decisions" value={contracted.length} max={plan.engagements.length}
+        <ProgressBar label="Vendors" value={contracted.length} max={plan.engagements.length}
           hint={`${contracted.length}/${plan.engagements.length} contracted`} />
         <ProgressBar label="Budget vs target" value={facts.budget?.committed ?? 0} max={facts.budget?.target ?? 0}
           hint={facts.budget?.target != null ? `${money(facts.budget.committed)} of ${money(facts.budget.target)}` : `${money(facts.budget?.committed ?? 0)} committed`} />
       </div>
 
-      {/* Confirmed / Pending / Coming up */}
+      {/* Coming up / Pending / Confirmed */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-2xl border border-black p-5">
-          <h3 className="font-medium mb-3 text-green-700">Confirmed</h3>
-          <ul className="space-y-2 text-sm">
-            {contracted.length === 0 && paidLines.length === 0 && <li className="text-gray-400">Nothing locked yet.</li>}
-            {contracted.map((e) => (
-              <li key={e.id} className="flex justify-between gap-2">
-                <span>{e.category}{e.candidates.find((c) => c.isSelected)?.vendorName ? ` · ${e.candidates.find((c) => c.isSelected)!.vendorName}` : ""}</span>
-                <span className="text-gray-500 shrink-0">{money(e.confirmedAmount)}</span>
-              </li>
-            ))}
-            {paidLines.map((l) => (
-              <li key={l.id} className="flex justify-between gap-2 text-gray-500"><span>Paid: {l.label}</span><span className="shrink-0">{money(l.confirmedAmount)}</span></li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-black p-5">
-          <h3 className="font-medium mb-3 text-amber-700">Pending</h3>
-          <ul className="space-y-2 text-sm">
-            {plan.engagements.filter((e) => e.stage !== "Contracted").length === 0 && pendingLines.length === 0 && <li className="text-gray-400">Nothing pending.</li>}
-            {plan.engagements.filter((e) => e.stage !== "Contracted").map((e) => (
-              <li key={e.id} className="flex justify-between gap-2"><span>{e.category}</span><span className="text-gray-400 shrink-0">{e.stage}</span></li>
-            ))}
-            {pendingLines.map((l) => (
-              <li key={l.id} className="flex justify-between gap-2 text-gray-500"><span>Unpaid: {l.label}</span><span className="shrink-0">{money(l.confirmedAmount)}</span></li>
-            ))}
-          </ul>
-        </div>
-
         <div className="bg-white rounded-2xl border border-black p-5">
           <h3 className="font-medium mb-3">Coming up</h3>
           <ul className="space-y-2 text-sm">
@@ -1104,6 +1140,35 @@ function Overview({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: 
                 </li>
               );
             })}
+          </ul>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-black p-5">
+          <h3 className="font-medium mb-3 text-amber-700">Pending</h3>
+          <ul className="space-y-2 text-sm">
+            {pendingEngagements.length === 0 && pendingLines.length === 0 && <li className="text-gray-400">Nothing pending.</li>}
+            {pendingEngagements.map((e) => (
+              <li key={e.id} className="flex justify-between gap-2"><span>{e.category}</span><span className="text-gray-400 shrink-0">{e.stage}</span></li>
+            ))}
+            {pendingLines.map((l) => (
+              <li key={l.id} className="flex justify-between gap-2 text-gray-500"><span>Unpaid: {l.label}</span><span className="shrink-0">{money(l.confirmedAmount)}</span></li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-black p-5">
+          <h3 className="font-medium mb-3 text-green-700">Confirmed</h3>
+          <ul className="space-y-2 text-sm">
+            {contracted.length === 0 && paidLines.length === 0 && <li className="text-gray-400">Nothing locked yet.</li>}
+            {contracted.map((e) => (
+              <li key={e.id} className="flex justify-between gap-2">
+                <span>{e.category}{e.candidates.find((c) => c.isSelected)?.vendorName ? ` · ${e.candidates.find((c) => c.isSelected)!.vendorName}` : ""}</span>
+                <span className="text-gray-500 shrink-0">{money(e.confirmedAmount)}</span>
+              </li>
+            ))}
+            {paidLines.map((l) => (
+              <li key={l.id} className="flex justify-between gap-2 text-gray-500"><span>Paid: {l.label}</span><span className="shrink-0">{money(l.confirmedAmount)}</span></li>
+            ))}
           </ul>
         </div>
       </div>
@@ -1255,9 +1320,9 @@ function PageOwnership({ eventId, initial }: { eventId: string; initial: PageSta
 type Tab = "overview" | "vendors" | "budget" | "deliverables" | "page";
 const TABS: { key: Tab; label: string }[] = [
   { key: "overview", label: "Overview" },
-  { key: "vendors", label: "Vendor decisions" },
-  { key: "budget", label: "Budget" },
   { key: "deliverables", label: "Deliverables" },
+  { key: "vendors", label: "Vendor" },
+  { key: "budget", label: "Budget" },
   { key: "page", label: "Page" },
 ];
 
@@ -1279,8 +1344,8 @@ export function EventPlanningPage({ eventId, onBack, onViewPeople }: Props) {
   }, [eventId, tab, reload]);
 
   const back = (
-    <button onClick={onBack} className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-6 transition-colors">
-      <ArrowLeft className="w-5 h-5" /> Back to Events
+    <button onClick={onBack} className="inline-flex items-center gap-1 mb-6 px-3 py-1.5 bg-white border border-black rounded-lg text-black hover:bg-gray-50 transition-colors">
+      <ChevronLeft className="w-4 h-4" /> Previous
     </button>
   );
 
@@ -1295,28 +1360,37 @@ export function EventPlanningPage({ eventId, onBack, onViewPeople }: Props) {
 
       {/* Header */}
       <div className="bg-white rounded-2xl border border-black p-8 mb-6">
-        <div className="mb-3"><TagStack tags={plan.tags} editable onChange={(tags) => { setPlan((p) => (p ? { ...p, tags } : p)); void updateEventTags(eventId, tags); }} /></div>
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <h1 className="text-3xl">{plan.title}</h1>
-          <span className="shrink-0 px-3 py-1 rounded-full bg-gray-900 text-white text-sm">{tMinus(plan.date)}</span>
+        <div className="header-row flex gap-10">
+          <div className="flex-1 min-w-0">
+            <div className="mb-3"><TagStack tags={plan.tags} editable onChange={(tags) => { setPlan((p) => (p ? { ...p, tags } : p)); void updateEventTags(eventId, tags); }} /></div>
+            <div className="mb-4">
+              <EditableTitle value={plan.title} onChange={(name) => { setPlan((p) => (p ? { ...p, title: name } : p)); void updateEvent(eventId, { name }); }} className="text-3xl" />
+            </div>
+            <div className="mb-4 flex items-center gap-4 flex-wrap">
+              <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
+              <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 text-gray-600">
+              <div className="flex items-center gap-2"><Calendar className="w-5 h-5" /><span>{plan.date ?? "Date TBD"}</span></div>
+              <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
+              <button onClick={() => onViewPeople({ id: plan.id, name: plan.title, tag: plan.tags[0] ?? null, status: 'all' })} className="flex items-center gap-2 hover:text-gray-900 text-left">
+                <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
+              </button>
+              <button onClick={() => onViewPeople({ id: plan.id, name: plan.title, tag: plan.tags[0] ?? null, status: 'speakers' })} className="flex items-center gap-2 hover:text-gray-900 text-left">
+                <Mic className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">Speakers</span>
+              </button>
+              <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
+            </div>
+            <MacroStepper eventId={eventId} initial={plan.macroStage} eventDate={plan.date} />
+          </div>
+          <CoverImage
+            eventId={eventId}
+            cover={plan.coverImageUrl}
+            lumaCover={plan.lumaCoverUrl}
+            customCover={plan.customCoverUrl}
+            onChange={(patch) => setPlan((p) => (p ? { ...p, coverImageUrl: patch.cover, ...(patch.custom !== undefined ? { customCoverUrl: patch.custom } : {}) } : p))}
+          />
         </div>
-        <div className="mb-4 flex items-center gap-4 flex-wrap">
-          <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
-          <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} />
-          <span className="inline-flex items-center gap-2">
-            {plan.coverImageUrl && <img src={plan.coverImageUrl} alt="" className="w-8 h-8 rounded object-cover" />}
-            <FileDrop compact label={plan.coverImageUrl ? "change cover" : "add cover"} onUploaded={(url) => { setPlan((p) => (p ? { ...p, coverImageUrl: url } : p)); void updateEventCover(eventId, url); }} />
-          </span>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5 text-gray-600">
-          <div className="flex items-center gap-2"><Calendar className="w-5 h-5" /><span>{plan.date ?? "Date TBD"}</span></div>
-          <div className="flex items-center gap-2"><MapPin className="w-5 h-5" /><span>{plan.location ?? "—"}</span></div>
-          <button onClick={() => onViewPeople({ id: plan.id, name: plan.title, tag: plan.tags[0] ?? null, status: 'registered' })} className="flex items-center gap-2 hover:text-gray-900 text-left">
-            <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
-          </button>
-          <div><span className="font-medium">Owner:</span> {plan.owner ?? "—"}</div>
-        </div>
-        <MacroStepper eventId={eventId} initial={plan.macroStage} eventDate={plan.date} />
       </div>
 
       {/* Tabs */}
@@ -1332,11 +1406,20 @@ export function EventPlanningPage({ eventId, onBack, onViewPeople }: Props) {
             {tt.label}
           </button>
         ))}
+        {/* People isn't an inline tab — it navigates to the same place as the headcount button. */}
+        <button
+          onClick={() => onViewPeople({ id: plan.id, name: plan.title, tag: plan.tags[0] ?? null, status: 'all' })}
+          className="px-4 py-2 text-sm -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-800 transition-colors"
+        >
+          People
+        </button>
       </div>
 
       <div key={`${tab}-${version}`}>
-        {tab === "overview" && <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />}
-        {tab === "vendors" && <VendorDecisions eventId={eventId} initial={plan.engagements} />}
+        {tab === "overview" && (plan.setupComplete
+          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
+          : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
+        {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
         {tab === "budget" && (plan.budget
           ? <BudgetTracker budget={plan.budget} />
           : <div className="bg-white rounded-2xl border border-black p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}

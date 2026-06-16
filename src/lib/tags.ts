@@ -3,8 +3,15 @@
 // (custom/created) is hashed to a stable palette color — never gray — so created
 // tags look first-class wherever they appear.
 
-export const EVENT_TAGS = ['Fireside', 'Happy Hour', 'Hackathon', 'Conference', 'In-Office', 'Women in AI'] as const;
-export type EventTag = (typeof EVENT_TAGS)[number];
+// The fixed event-tag taxonomy: a few categories, one color per category (pinned in PRESET below).
+export interface TagCategory { name: string; tags: string[] }
+export const TAG_CATEGORIES: TagCategory[] = [
+  { name: 'Hosted', tags: ['Client summit', 'Brand & community event', 'Co-hosted partner event', 'Hackathon'] },
+  { name: 'Sponsorship', tags: ['Sponsorship'] },
+  { name: 'Internal', tags: ['Internal team social', 'Company milestone'] },
+];
+export const EVENT_TAGS = TAG_CATEGORIES.flatMap((c) => c.tags);
+export type EventTag = string;
 
 // Full literal class strings so Tailwind's scanner keeps them.
 interface Hue { color: string; ring: string; hover: string; }
@@ -26,9 +33,15 @@ const PALETTE: Hue[] = [
   { color: 'bg-emerald-100 text-emerald-700', ring: 'ring-emerald-400', hover: 'hover:ring-1 hover:ring-emerald-700' },
 ];
 
-// Presets pinned to specific hues (indices into PALETTE) so they never change.
+// Each taxonomy tag pinned to its category's hue (index into PALETTE) so a whole category
+// shares one color. Non-taxonomy strings (vendor categories, people tags) still hash below.
 const PRESET: Record<string, number> = {
-  Fireside: 0, 'Happy Hour': 1, Hackathon: 2, Conference: 3, 'In-Office': 4, 'Women in AI': 5,
+  // Hosted → green
+  'Client summit': 2, 'Brand & community event': 2, 'Co-hosted partner event': 2, Hackathon: 2,
+  // Sponsorship → amber
+  Sponsorship: 7,
+  // Internal → purple
+  'Internal team social': 1, 'Company milestone': 1,
 };
 
 function hueFor(tag: string | null | undefined): Hue {

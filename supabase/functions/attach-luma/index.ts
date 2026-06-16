@@ -72,7 +72,7 @@ Deno.serve(async (req) => {
     );
     const { error } = await sb
       .from('event')
-      .update({ luma_event_id: match.id, cover_image_url: match.cover_url, luma_url: match.url, luma_name: match.name })
+      .update({ luma_event_id: match.id, cover_image_url: match.cover_url, luma_cover_url: match.cover_url, luma_url: match.url, luma_name: match.name })
       .eq('id', eventId);
     if (error) return json({ error: error.message }, 500);
 

@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { PAGE_PUBLIC_FIELDS } from './page';
+import { dueOffsetForTitle } from './schedule';
 
 // The prototype's status tabs are future / in-process / past. Series carry richer
 // macro stages ("Wrapped", "Live", ...). Map them onto the three the UI has.
@@ -30,14 +31,17 @@ export interface EventListItem {
   location: string | null;
   date: string | null; // event_date; null = not captured
   status: EventStatus;
-  owner: string | null; // series.owning_team; null = not captured
+  owner: string | null; // joined owner names (for the list column/filter)
+  owners: { id: string; name: string; color: string | null }[];
   attendeeCount: number | null; // checked_in — the concrete attendance number
   rsvp: number | null;
   capacity: number | null;
   lumaEventId: string | null;
   lumaUrl: string | null;
   lumaName: string | null;
-  coverImageUrl: string | null;
+  coverImageUrl: string | null; // active/displayed cover
+  lumaCoverUrl: string | null;
+  customCoverUrl: string | null;
   coverPosition: string | null;
   labelIds: string[];
   macroStage: string | null; // set ⇒ an event we're actively planning (routes to the planning view)
@@ -138,6 +142,15 @@ function resolveStatus(row: any, series: SeriesJoin): EventStatus {
   return statusFromDate(row.event_date);
 }
 
+// Map the event_owner embed → owners array + a joined name string.
+function ownersOf(row: any): { owner: string | null; owners: { id: string; name: string; color: string | null }[] } {
+  const owners = (row.owners ?? [])
+    .map((o: any) => o.profile)
+    .filter(Boolean)
+    .map((p: any) => ({ id: p.id, name: p.name, color: p.color ?? null }));
+  return { owner: owners.length ? owners.map((o: any) => o.name).join(', ') : null, owners };
+}
+
 function toListItem(row: any): EventListItem {
   const series: SeriesJoin = row.series ?? null;
   return {
@@ -150,7 +163,7 @@ function toListItem(row: any): EventListItem {
     location: row.location ?? row.office ?? null,
     date: row.event_date ?? null,
     status: resolveStatus(row, series),
-    owner: series?.owning_team ?? row.owning_team ?? null,
+    ...ownersOf(row),
     attendeeCount: row.checked_in ?? null,
     rsvp: row.rsvp ?? null,
     capacity: row.capacity ?? null,
@@ -158,6 +171,8 @@ function toListItem(row: any): EventListItem {
     lumaUrl: row.luma_url ?? null,
     lumaName: row.luma_name ?? null,
     coverImageUrl: row.cover_image_url ?? null,
+    lumaCoverUrl: row.luma_cover_url ?? null,
+    customCoverUrl: row.custom_cover_url ?? null,
     coverPosition: row.cover_position ?? null,
     labelIds: (row.event_label ?? []).map((l: any) => l.label_id),
     macroStage: row.macro_stage ?? null,
@@ -170,9 +185,22 @@ export async function updateEventTags(eventId: string, tags: string[]): Promise<
   if (error) throw error;
 }
 
+/** Set the event's owner (owning team). */
+export async function updateEventOwner(eventId: string, owner: string | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ owning_team: owner }).eq('id', eventId);
+  if (error) throw error;
+}
+
 /** Set the manual status override (future | in-process | past). */
 export async function updateEventStatus(eventId: string, status: EventStatus): Promise<void> {
   const { error } = await supabase.from('event').update({ status }).eq('id', eventId);
+  if (error) throw error;
+}
+
+/** Permanently delete an event. FKs cascade (engagements, budget+lines, deliverables,
+ *  attendee links, owners, labels, …); shared attendees stay. No undo. */
+export async function deleteEvent(eventId: string): Promise<void> {
+  const { error } = await supabase.from('event').delete().eq('id', eventId);
   if (error) throw error;
 }
 
@@ -185,11 +213,13 @@ const newId = (prefix: string) => `${prefix}-` + (globalThis.crypto?.randomUUID?
  *  to the planning view. */
 export async function createPlanningEvent(input: {
   name: string; date: string | null; location: string | null; tags: string[]; template: GeneratedTemplate;
+  hosting?: 'solo' | 'cohost'; coHost?: string | null; modeledOnEventId?: string | null;
 }): Promise<string> {
   const eventId = newId('evt');
   const { error: eErr } = await supabase.from('event').insert({
     id: eventId, name: input.name, event_date: input.date, location: input.location,
-    tags: input.tags, macro_stage: 'Planning',
+    tags: input.tags, macro_stage: 'Planning', modeled_on_event_id: input.modeledOnEventId ?? null,
+    hosting: input.hosting ?? 'solo', co_host: input.hosting === 'cohost' ? (input.coHost?.trim() || null) : null,
   });
   if (eErr) throw eErr;
 
@@ -202,7 +232,18 @@ export async function createPlanningEvent(input: {
   const lineRows = input.template.budgetLines.map((l) => ({ id: newId('bl'), budget_id: budgetId, label: l.label, confirmed_amount: l.estimate }));
   if (lineRows.length) { const { error } = await supabase.from('budget_line').insert(lineRows); if (error) throw error; }
 
-  const delRows = input.template.progressCategories.map((p) => ({ id: newId('del'), event_id: eventId, title: p, phase: 'Planning', status: 'Todo' }));
+  // Seed each workstream's due offset from the standard schedule (compressed if the
+  // planning window is short). When the date is known at creation, resolve concrete due
+  // dates right away (date + offset); otherwise the setup walkthrough resolves them once
+  // the date is set.
+  const startDate = new Date().toISOString().slice(0, 10);
+  const base = input.date ? new Date(input.date + 'T00:00:00') : null;
+  const delRows = input.template.progressCategories.map((p) => {
+    const offset = dueOffsetForTitle(p, input.date, startDate);
+    let resolved: string | null = null;
+    if (base) { const due = new Date(base); due.setDate(due.getDate() + offset); resolved = due.toISOString().slice(0, 10); }
+    return { id: newId('del'), event_id: eventId, title: p, phase: 'Planning', status: 'Todo', due_offset_days: offset, resolved_due_date: resolved };
+  });
   if (delRows.length) { const { error } = await supabase.from('deliverable').insert(delRows); if (error) throw error; }
 
   return eventId;
@@ -216,6 +257,30 @@ export async function backfillEvent(input: { name: string; date: string | null; 
   });
   if (error) throw error;
   return id;
+}
+
+export interface VendorSuggestion {
+  id: string;
+  name: string;
+  category: string | null;
+  location: string | null;
+  link: string | null;
+  note: string | null;
+}
+
+/** Suggest vendors from our vendor database, ranked toward the event's location/category.
+ *  The `vendor` table isn't populated yet, so this returns [] gracefully until it is. */
+export async function suggestVendors(category: string | null, location: string | null): Promise<VendorSuggestion[]> {
+  try {
+    let q = supabase.from('vendor').select('id, name, category, location, link, note');
+    if (category) q = q.ilike('category', `%${category}%`);
+    if (location) q = q.ilike('location', `%${location}%`);
+    const { data, error } = await q.limit(10);
+    if (error) return []; // table not set up yet
+    return (data ?? []).map((r: any) => ({
+      id: r.id, name: r.name, category: r.category ?? null, location: r.location ?? null, link: r.link ?? null, note: r.note ?? null,
+    }));
+  } catch { return []; }
 }
 
 /** Upload a dropped file to the attachments bucket; returns its public URL. */
@@ -286,6 +351,18 @@ export async function generatePageDraft(eventId: string): Promise<{ headline: st
   return data as { headline: string; subhead: string; aboutBody: string };
 }
 
+export interface PageStyleTokens {
+  headingFont: PageFont; bodyFont: PageFont; accent: string;
+  accentOn: 'marker' | 'title'; headingStyle: 'plain' | 'marker';
+  bgColor: string | null; textColor: string | null; agendaLayout: AgendaLayout;
+}
+/** Infer page style tokens from reference image(s) (Claude vision); merged into the draft theme. */
+export async function generatePageStyle(images: { media_type: string; data: string }[]): Promise<PageStyleTokens> {
+  const { data, error } = await supabase.functions.invoke('generate-page-style', { body: { images } });
+  if (error || (data as any)?.error) throw new Error((data as any)?.error ?? error?.message ?? 'style inference failed');
+  return data as PageStyleTokens;
+}
+
 // Per-event Developer permission.
 export async function listDevelopers(eventId: string): Promise<Developer[]> {
   const { data, error } = await supabase.from('event_developer').select('id, email, created_at').eq('event_id', eventId).order('created_at');
@@ -300,6 +377,31 @@ export async function addDeveloper(eventId: string, email: string): Promise<Deve
 }
 export async function removeDeveloper(id: string): Promise<void> {
   const { error } = await supabase.from('event_developer').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ── Profiles (pre-auth "current user") ───────────────────────────────────────
+export interface Profile { id: string; name: string; email: string | null; color: string | null; createdAt: string; }
+export async function listProfiles(): Promise<Profile[]> {
+  const { data, error } = await supabase.from('profile').select('id, name, email, color, created_at').order('created_at');
+  if (error) throw error;
+  return (data ?? []).map((p: any) => ({ id: p.id, name: p.name, email: p.email ?? null, color: p.color ?? null, createdAt: p.created_at }));
+}
+export async function createProfile(name: string, email: string | null, color: string): Promise<Profile> {
+  const id = newId('prof');
+  const { error } = await supabase.from('profile').insert({ id, name, email, color });
+  if (error) throw error;
+  return { id, name, email, color, createdAt: new Date().toISOString() };
+}
+export async function updateProfile(id: string, fields: { name?: string; email?: string | null }): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if ('name' in fields) patch.name = fields.name;
+  if ('email' in fields) patch.email = fields.email;
+  const { error } = await supabase.from('profile').update(patch).eq('id', id);
+  if (error) throw error;
+}
+export async function deleteProfile(id: string): Promise<void> {
+  const { error } = await supabase.from('profile').delete().eq('id', id);
   if (error) throw error;
 }
 
@@ -323,6 +425,27 @@ export async function listVendors(): Promise<VendorRow[]> {
 }
 
 /** Every tag in use across all events — the global option list for tag pickers. */
+/** Managed list of event format (gathering type) options. */
+export async function listFormats(): Promise<string[]> {
+  const { data, error } = await supabase.from('format_catalog').select('name');
+  if (error) throw error;
+  return (data ?? []).map((r: any) => r.name as string).sort((a, b) => a.localeCompare(b));
+}
+export async function addFormat(name: string): Promise<void> {
+  const n = name.trim();
+  if (!n) return;
+  const { error } = await supabase.from('format_catalog').insert({ name: n });
+  if (error && !String(error.message ?? '').toLowerCase().includes('duplicate')) throw error;
+}
+export async function removeFormat(name: string): Promise<void> {
+  const { error } = await supabase.from('format_catalog').delete().eq('name', name);
+  if (error) throw error;
+}
+/** Set an event's format (the chosen gathering type). */
+export async function setEventFormat(eventId: string, format: string | null): Promise<void> {
+  await updateEvent(eventId, { format });
+}
+
 export async function getAllTags(): Promise<string[]> {
   const { data, error } = await supabase.from('event').select('tags');
   if (error) throw error;
@@ -677,8 +800,25 @@ export async function removeAttendeeFromEvent(eventId: string, attendeeId: strin
   if (!data || data.length === 0) await supabase.from('attendee').delete().eq('id', attendeeId);
 }
 
+/** Upload a custom cover: stores it + makes it the active cover (keeps any Luma cover). */
 export async function updateEventCover(eventId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ custom_cover_url: url, cover_image_url: url }).eq('id', eventId);
+  if (error) throw error;
+}
+
+/** Toggle which source is the active/displayed cover (Luma ⇄ custom). */
+export async function setActiveCover(eventId: string, url: string | null): Promise<void> {
   const { error } = await supabase.from('event').update({ cover_image_url: url }).eq('id', eventId);
+  if (error) throw error;
+}
+
+/** Add / remove an owner (profile) on an event. */
+export async function addEventOwner(eventId: string, profileId: string): Promise<void> {
+  const { error } = await supabase.from('event_owner').insert({ id: newId('eo'), event_id: eventId, profile_id: profileId });
+  if (error) throw error;
+}
+export async function removeEventOwner(eventId: string, profileId: string): Promise<void> {
+  const { error } = await supabase.from('event_owner').delete().eq('event_id', eventId).eq('profile_id', profileId);
   if (error) throw error;
 }
 
@@ -721,17 +861,23 @@ export async function addNote(attendeeId: string, body: string, contributor: str
 /** Edit a person's free-text context (notes, manually-added LinkedIn). */
 export async function updateAttendee(
   id: string,
-  fields: { note?: string | null; linkedinUrl?: string | null },
+  fields: { note?: string | null; linkedinUrl?: string | null; title?: string | null; org?: string | null },
 ): Promise<void> {
   const patch: Record<string, unknown> = {};
   if ('note' in fields) patch.note = fields.note;
   if ('linkedinUrl' in fields) patch.linkedin_url = fields.linkedinUrl;
+  if ('title' in fields) patch.title = fields.title;   // speaker role
+  if ('org' in fields) patch.org = fields.org;         // speaker company
   const { error } = await supabase.from('attendee').update(patch).eq('id', id);
   if (error) throw error;
 }
 
 // ── Claude-generated planning template ──────────────────────────────────────
 export interface GeneratedTemplate {
+  // Best-effort fields parsed from the description; null when not stated.
+  name?: string | null;
+  location?: string | null;
+  date?: string | null;
   vendorCategories: string[];
   budgetLines: { label: string; estimate: number }[];
   progressCategories: string[];
@@ -767,7 +913,7 @@ export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, format, location, office, event_date, rsvp, capacity, checked_in, macro_stage, owning_team, status, series_id, luma_event_id, luma_url, luma_name, cover_image_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
+      'id, name, tag, tags, format, location, office, event_date, rsvp, capacity, checked_in, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
     )
     .order('id');
   if (error) throw error;
@@ -778,7 +924,7 @@ export async function getEventDetail(id: string): Promise<EventDetail | null> {
   const { data: row, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, description, format, location, office, event_date, rsvp, capacity, checked_in, waitlist_admitted, actual_attendance_note, audience, notes, macro_stage, owning_team, status, series_id, cover_image_url, cover_position, ' +
+      'id, name, tag, tags, description, format, location, office, event_date, rsvp, capacity, checked_in, waitlist_admitted, actual_attendance_note, audience, notes, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, cover_image_url, luma_cover_url, custom_cover_url, cover_position, ' +
         'event_label ( label_id ), series:event_series ( id, name, type, status, owning_team, verdict )',
     )
     .eq('id', id)
@@ -980,11 +1126,14 @@ export interface EngagementWithCandidates {
   confirmedAmount: number | null;
   note: string | null;
   candidates: VendorCandidate[];
+  outreachStarted: boolean; // setup walkthrough: outreach kicked off for this category
+  watchInbox: boolean;      // setup walkthrough: opted in to inbox auto-log (V2 Gmail sync)
 }
 export interface BudgetLineTracker {
   id: string;
   label: string | null;
   confirmedAmount: number | null;
+  target: number | null;    // optional per-category budget target (vs the projected estimate)
   paymentStatus: 'paid' | 'pending' | null;
   docUrl: string | null;
   linkedEngagement: string | null;
@@ -1018,17 +1167,25 @@ export interface EventPlanning {
   capacity: number | null;
   rsvp: number | null;
   owner: string | null;
+  owners: { id: string; name: string; color: string | null }[];
   macroStage: string | null;
   status: EventStatus;
   overviewSummary: string | null;
   lumaUrl: string | null;
   lumaEventId: string | null;
   coverImageUrl: string | null;
+  lumaCoverUrl: string | null;
+  customCoverUrl: string | null;
   page: PageState;
   pageDraft: PageDraft | null;
   engagements: EngagementWithCandidates[];
   budget: PlanningBudget | null;
   deliverables: Deliverable[];
+  // Setup walkthrough state.
+  setupComplete: boolean;
+  headcount: number | null;
+  eventBudgetTarget: number | null;
+  setupProgress: string[]; // completed step keys
 }
 
 export type PageOwnership = 'generated' | 'dev-owned';
@@ -1046,15 +1203,28 @@ export interface Developer { id: string; email: string; createdAt: string; }
 // No-code page builder draft (editable content only; factual fields + the speaker
 // list stay data-bound). Section order/visibility + theme are user-controlled.
 export type PageFont = 'inter' | 'serif' | 'grotesk';
+export type AgendaLayout = 'list' | 'timeline' | 'cards';
 export interface AgendaItem { time: string; title: string; desc: string }
+export interface PageTheme {
+  headingFont: PageFont;          // font for section titles / hero
+  bodyFont: PageFont;             // font for body copy
+  accent: string;
+  accentOn: 'marker' | 'title';   // where the accent color lands on a section heading
+  headingStyle: 'plain' | 'marker'; // 'marker' = small square + uppercase tracked label
+  bgImageUrl: string | null;
+  bgColor: string | null;
+  textColor: string | null;       // overrides the default body/heading text color
+  scrollAnim: boolean;
+}
 export interface PageDraft {
-  theme: { font: PageFont; accent: string; bgImageUrl: string | null; bgColor: string | null; scrollAnim: boolean };
+  theme: PageTheme;
+  headingFonts: Record<string, PageFont>; // per-section heading-font override (key = section key)
   hero: { headline: string; subhead: string; coverUrl: string | null };
-  about: { body: string };
-  agenda: { title: string; items: AgendaItem[] };
-  speakers: { title: string }; // the list is data-bound (listEventSpeakers)
-  details: { rsvpLabel: string };
-  gallery: { images: string[] };
+  about: { title: string; body: string };
+  agenda: { title: string; items: AgendaItem[]; layout: AgendaLayout };
+  speakers: { title: string; cardStyle: 'circle' | 'card' }; // list is data-bound (listEventSpeakers)
+  details: { title: string; rsvpLabel: string };
+  gallery: { title: string; images: string[] };
   logos: { images: string[] };
   closing: { headline: string; body: string; rsvpLabel: string };
   order: string[];                 // body-section order (hero is fixed on top)
@@ -1062,13 +1232,14 @@ export interface PageDraft {
 }
 export function defaultPageDraft(): PageDraft {
   return {
-    theme: { font: 'inter', accent: '#111827', bgImageUrl: null, bgColor: null, scrollAnim: true },
+    theme: { headingFont: 'inter', bodyFont: 'inter', accent: '#111827', accentOn: 'marker', headingStyle: 'plain', bgImageUrl: null, bgColor: null, textColor: null, scrollAnim: true },
+    headingFonts: {},
     hero: { headline: '', subhead: '', coverUrl: null },
-    about: { body: '' },
-    agenda: { title: 'Agenda', items: [] },
-    speakers: { title: 'Speakers' },
-    details: { rsvpLabel: 'RSVP' },
-    gallery: { images: [] },
+    about: { title: 'About', body: '' },
+    agenda: { title: 'Agenda', items: [], layout: 'list' },
+    speakers: { title: 'Speakers', cardStyle: 'circle' },
+    details: { title: 'Details', rsvpLabel: 'RSVP' },
+    gallery: { title: 'Gallery', images: [] },
     logos: { images: [] },
     closing: { headline: 'Seats are limited.', body: 'Reserve your spot today.', rsvpLabel: 'RSVP' },
     order: ['about', 'agenda', 'speakers', 'details', 'gallery', 'logos', 'closing'],
@@ -1090,7 +1261,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, location, office, event_date, capacity, rsvp, macro_stage, owning_team, status, overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, location, office, event_date, capacity, rsvp, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -1099,12 +1270,12 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
   const [{ data: engs }, { data: budgets }, { data: dels }] = await Promise.all([
     supabase
       .from('engagement')
-      .select('id, category, stage, confirmed_amount, note, candidates:engagement_candidate ( id, vendor_id, vendor_name, quote_amount, is_selected, note, link, vendor:vendor ( name ) )')
+      .select('id, category, stage, confirmed_amount, note, outreach_started, watch_inbox, candidates:engagement_candidate ( id, vendor_id, vendor_name, quote_amount, is_selected, note, link, vendor:vendor ( name ) )')
       .eq('event_id', eventId)
       .order('id'),
     supabase
       .from('budget')
-      .select('id, currency, target_amount, lines:budget_line ( id, label, confirmed_amount, payment_status, doc_url, linked_engagement )')
+      .select('id, currency, target_amount, lines:budget_line ( id, label, confirmed_amount, target, payment_status, doc_url, linked_engagement )')
       .eq('event_id', eventId),
     supabase
       .from('deliverable')
@@ -1120,6 +1291,8 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     confirmedAmount: num(e.confirmed_amount),
     note: e.note,
     candidates: (e.candidates ?? []).map(mapCandidate),
+    outreachStarted: e.outreach_started ?? false,
+    watchInbox: e.watch_inbox ?? false,
   }));
 
   const b: any = (budgets ?? [])[0];
@@ -1132,6 +1305,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
           id: l.id,
           label: l.label,
           confirmedAmount: num(l.confirmed_amount),
+          target: num(l.target),
           paymentStatus: l.payment_status ?? null,
           docUrl: l.doc_url ?? null,
           linkedEngagement: l.linked_engagement ?? null,
@@ -1157,13 +1331,15 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     date: (row as any).event_date ?? null,
     capacity: (row as any).capacity ?? null,
     rsvp: (row as any).rsvp ?? null,
-    owner: (row as any).owning_team ?? (row as any).series?.owning_team ?? null,
+    ...ownersOf(row),
     macroStage: (row as any).macro_stage ?? null,
     status: resolveStatus(row, (row as any).series ?? null),
     overviewSummary: (row as any).overview_summary ?? null,
     lumaUrl: (row as any).luma_url ?? null,
     lumaEventId: (row as any).luma_event_id ?? null,
     coverImageUrl: (row as any).cover_image_url ?? null,
+    lumaCoverUrl: (row as any).luma_cover_url ?? null,
+    customCoverUrl: (row as any).custom_cover_url ?? null,
     page: {
       ownership: ((row as any).page_ownership ?? 'generated') as PageOwnership,
       repoRef: (row as any).repo_ref ?? null,
@@ -1177,6 +1353,10 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     engagements,
     budget,
     deliverables,
+    setupComplete: (row as any).setup_complete ?? false,
+    headcount: (row as any).headcount ?? null,
+    eventBudgetTarget: num((row as any).event_budget_target),
+    setupProgress: Array.isArray((row as any).setup_progress) ? (row as any).setup_progress as string[] : [],
   };
 }
 
@@ -1191,7 +1371,7 @@ export async function addEngagement(eventId: string, category: string): Promise<
   const id = genId('eng');
   const { error } = await supabase.from('engagement').insert({ id, event_id: eventId, category, stage: 'Sourced' });
   if (error) throw error;
-  return { id, category, stage: 'Sourced', confirmedAmount: null, note: null, candidates: [] };
+  return { id, category, stage: 'Sourced', confirmedAmount: null, note: null, candidates: [], outreachStarted: false, watchInbox: false };
 }
 export async function deleteEngagement(id: string): Promise<void> {
   const { error } = await supabase.from('engagement').delete().eq('id', id);
@@ -1252,7 +1432,7 @@ export async function addTrackerLine(budgetId: string, label: string, amount: nu
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, confirmed_amount: amount });
   if (error) throw error;
-  return { id, label, confirmedAmount: amount, paymentStatus: null, docUrl: null, linkedEngagement: null };
+  return { id, label, confirmedAmount: amount, target: null, paymentStatus: null, docUrl: null, linkedEngagement: null };
 }
 export async function setLinePaymentStatus(id: string, status: 'paid' | 'pending' | null): Promise<void> {
   const { error } = await supabase.from('budget_line').update({ payment_status: status }).eq('id', id);
@@ -1266,6 +1446,120 @@ export async function setBudgetTarget(budgetId: string, target: number | null): 
   const { error } = await supabase.from('budget').update({ target_amount: target }).eq('id', budgetId);
   if (error) throw error;
 }
+/** Optional per-category target (setup step 2), separate from the projected estimate. */
+export async function setBudgetLineTarget(lineId: string, target: number | null): Promise<void> {
+  const { error } = await supabase.from('budget_line').update({ target }).eq('id', lineId);
+  if (error) throw error;
+}
+/** Create a budget line for a projected category when the user first sets its target. */
+export async function addBudgetCategoryTarget(budgetId: string, label: string, target: number | null): Promise<BudgetLineTracker> {
+  const id = genId('bl');
+  const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, target });
+  if (error) throw error;
+  return { id, label, confirmedAmount: null, target, paymentStatus: null, docUrl: null, linkedEngagement: null };
+}
+
+// ── Event setup walkthrough ──────────────────────────────────────────────────
+/** Set the event date AND resolve the scaffolded deliverables' due dates from their
+ *  offsets (resolved_due_date = date + due_offset_days). Clearing the date leaves
+ *  resolved dates untouched. */
+export async function setEventDate(eventId: string, date: string | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ event_date: date }).eq('id', eventId);
+  if (error) throw error;
+  if (!date) return;
+  const { data: dels } = await supabase.from('deliverable').select('id, due_offset_days').eq('event_id', eventId);
+  const base = new Date(date + 'T00:00:00');
+  await Promise.all((dels ?? [])
+    .filter((d: any) => d.due_offset_days != null)
+    .map((d: any) => {
+      const due = new Date(base);
+      due.setDate(due.getDate() + d.due_offset_days);
+      return supabase.from('deliverable').update({ resolved_due_date: due.toISOString().slice(0, 10) }).eq('id', d.id);
+    }));
+}
+export async function setHeadcount(eventId: string, headcount: number | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ headcount }).eq('id', eventId);
+  if (error) throw error;
+}
+export async function setEventBudgetTarget(eventId: string, target: number | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ event_budget_target: target }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Persist setup progress (completed step keys) and the overall complete flag together. */
+export async function saveSetupState(eventId: string, progress: string[], complete: boolean): Promise<void> {
+  const { error } = await supabase.from('event').update({ setup_progress: progress, setup_complete: complete }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Setup step 3: kick off outreach for a vendor category and record the inbox-watch intent. */
+export async function startOutreach(engagementId: string, watchInbox: boolean): Promise<void> {
+  const { error } = await supabase.from('engagement').update({ outreach_started: true, watch_inbox: watchInbox, stage: 'Sourced' }).eq('id', engagementId);
+  if (error) throw error;
+}
+export async function setWatchInbox(engagementId: string, watchInbox: boolean): Promise<void> {
+  const { error } = await supabase.from('engagement').update({ watch_inbox: watchInbox }).eq('id', engagementId);
+  if (error) throw error;
+}
+
+export interface BudgetProjection {
+  category: string;
+  projected: number | null; // median of comparable past confirmed costs
+  low: number | null;
+  high: number | null;
+  pastEvents: number;       // how many comparable events contributed a value
+  lowConfidence: boolean;   // n <= 1
+}
+
+/** Per-category PROJECTED costs derived from comparable past events (same format).
+ *  Pulls confirmed engagement costs + confirmed budget-line amounts, one value per
+ *  past event per category, and reports the range + sample size as provenance. */
+export async function getBudgetProjections(eventId: string, categories: string[]): Promise<BudgetProjection[]> {
+  const norm = (s: string | null | undefined) => (s ?? '').trim().toLowerCase();
+  const wanted = new Map<string, string>(); // norm → display label (from the current event)
+  for (const c of categories) { const k = norm(c); if (k && !wanted.has(k)) wanted.set(k, c.trim()); }
+  if (wanted.size === 0) return [];
+
+  // This event's format → comparable past events of the same format.
+  const { data: self } = await supabase.from('event').select('format').eq('id', eventId).maybeSingle();
+  const format = (self as any)?.format ?? null;
+  let q = supabase.from('event').select('id').neq('id', eventId);
+  q = format ? q.eq('format', format) : q.not('event_date', 'is', null);
+  const { data: peers } = await q;
+  const peerIds = (peers ?? []).map((r: any) => r.id);
+  if (peerIds.length === 0) {
+    return [...wanted.values()].map((category) => ({ category, projected: null, low: null, high: null, pastEvents: 0, lowConfidence: true }));
+  }
+
+  // amounts[normCategory] = Map<peerEventId, summed amount> — one value per event.
+  const amounts = new Map<string, Map<string, number>>();
+  const add = (cat: string | null, evId: string, amt: number | null) => {
+    const k = norm(cat);
+    if (!wanted.has(k) || amt == null) return;
+    if (!amounts.has(k)) amounts.set(k, new Map());
+    const m = amounts.get(k)!;
+    m.set(evId, (m.get(evId) ?? 0) + amt);
+  };
+
+  const [{ data: engs }, { data: budgets }] = await Promise.all([
+    supabase.from('engagement').select('event_id, category, confirmed_amount').in('event_id', peerIds).eq('stage', 'Contracted'),
+    supabase.from('budget').select('event_id, lines:budget_line ( label, confirmed_amount )').in('event_id', peerIds),
+  ]);
+  for (const e of engs ?? []) add((e as any).category, (e as any).event_id, num((e as any).confirmed_amount));
+  for (const b of budgets ?? []) for (const l of (b as any).lines ?? []) add((l as any).label, (b as any).event_id, num((l as any).confirmed_amount));
+
+  return [...wanted.entries()].map(([k, category]) => {
+    const vals = [...(amounts.get(k)?.values() ?? [])].sort((a, b) => a - b);
+    const n = vals.length;
+    const median = n === 0 ? null : n % 2 ? vals[(n - 1) / 2] : Math.round((vals[n / 2 - 1] + vals[n / 2]) / 2);
+    return {
+      category,
+      projected: median,
+      low: n ? vals[0] : null,
+      high: n ? vals[n - 1] : null,
+      pastEvents: n,
+      lowConfidence: n <= 1,
+    };
+  });
+}
 
 // ── Deliverables ────────────────────────────────────────────────────────────
 export async function addDeliverable(eventId: string, fields: { title: string; phase: string; ownerRole: string | null; dueDate: string | null }): Promise<Deliverable> {
@@ -1278,6 +1572,11 @@ export async function addDeliverable(eventId: string, fields: { title: string; p
 }
 export async function setDeliverableStatus(id: string, status: string): Promise<void> {
   const { error } = await supabase.from('deliverable').update({ status }).eq('id', id);
+  if (error) throw error;
+}
+/** Manually override a deliverable's due date (yyyy-mm-dd, or null to clear). */
+export async function setDeliverableDueDate(id: string, date: string | null): Promise<void> {
+  const { error } = await supabase.from('deliverable').update({ resolved_due_date: date }).eq('id', id);
   if (error) throw error;
 }
 export async function deleteDeliverable(id: string): Promise<void> {
@@ -1391,7 +1690,7 @@ function summaryFallback(f: PlanningFacts): string {
   if (f.budget) parts.push(`${fmtMoney(f.budget.committed)} committed${f.budget.target != null ? ` of ${fmtMoney(f.budget.target)} target` : ""}, ${fmtMoney(f.budget.paid)} paid.`);
   parts.push(`Deliverables ${f.deliverables.done}/${f.deliverables.total} done${f.deliverables.overdue ? `, ${f.deliverables.overdue} overdue` : ""}.`);
   if (f.deliverables.upcoming.length) parts.push(`Coming up: ${f.deliverables.upcoming.join(", ")}.`);
-  return parts.join(" ");
+  return parts.join("\n"); // one fact per line → rendered as bullet points
 }
 
 /** Persist the Overview digest so it isn't regenerated on every view. */
@@ -1413,6 +1712,20 @@ export async function getPlanningSummary(facts: PlanningFacts): Promise<string> 
 export async function getCarriedLessons(eventId: string): Promise<CarriedLesson[]> {
   try {
     const { data, error } = await supabase.functions.invoke('comparable-lessons', { body: { eventId } });
+    if (error || (data as any)?.error) return [];
+    return ((data as any)?.lessons ?? []) as CarriedLesson[];
+  } catch {
+    return [];
+  }
+}
+
+/** Preview carried lessons for an event still being drafted (no row yet) — matched on the
+ *  draft's description/format/tags and the past event it's modeled on. */
+export async function previewCarriedLessons(draft: {
+  name?: string; format?: string | null; tags?: string[]; modeledOnEventId?: string | null;
+}): Promise<CarriedLesson[]> {
+  try {
+    const { data, error } = await supabase.functions.invoke('comparable-lessons', { body: { draft } });
     if (error || (data as any)?.error) return [];
     return ((data as any)?.lessons ?? []) as CarriedLesson[];
   } catch {

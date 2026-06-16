@@ -1,0 +1,133 @@
+import { Calendar, MapPin, CheckSquare, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { listEvents, type EventListItem } from "../lib/db";
+import { useProfile, initials } from "../lib/profile";
+import { TagStack } from "./TagStack";
+
+const NOT_CAPTURED = "Not captured";
+
+/** Profile-dependent landing page: events assigned to the current profile + a (future) todos rail. */
+export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId: string) => void; onCreateEvent: () => void }) {
+  const { current } = useProfile();
+  const [events, setEvents] = useState<EventListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    listEvents()
+      .then((e) => { if (!cancelled) setEvents(e); })
+      .catch((e) => { if (!cancelled) setError(e.message ?? String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Events the current profile owns. Future/in-process first (soonest), then past (most recent), undated last.
+  const myEvents = !current
+    ? []
+    : events
+        .filter((e) => e.owners.some((o) => o.id === current.id))
+        .sort((a, b) => {
+          const ad = a.date ?? "", bd = b.date ?? "";
+          const aPast = a.status === "past", bPast = b.status === "past";
+          if (aPast !== bPast) return aPast ? 1 : -1; // upcoming before past
+          if (!ad && !bd) return 0;
+          if (!ad) return 1;
+          if (!bd) return -1;
+          return aPast ? bd.localeCompare(ad) : ad.localeCompare(bd);
+        });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 mb-8">
+        <div className="flex items-center gap-3">
+          {current && (
+            <span className={`flex items-center justify-center w-10 h-10 rounded-full text-white text-sm ${current.color ?? "bg-gray-500"}`}>
+              {initials(current.name)}
+            </span>
+          )}
+          <div>
+            <h1 className="text-2xl">{current ? `Hi, ${current.name.split(/\s+/)[0]}` : "Home"}</h1>
+            <p className="text-gray-500 text-sm">{current ? "Here's what's assigned to you." : "Pick a profile to see your events."}</p>
+          </div>
+        </div>
+        <button
+          onClick={onCreateEvent}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-colors shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          Create Event
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Your events */}
+        <section className="lg:col-span-2">
+          <h2 className="text-lg mb-4">Your events</h2>
+
+          {loading && <p className="text-gray-500 text-sm">Loading…</p>}
+          {error && <p className="text-red-600 text-sm">{error}</p>}
+
+          {!loading && !error && myEvents.length === 0 && (
+            <div className="border border-dashed border-gray-300 rounded-2xl p-8 text-center text-gray-500 text-sm">
+              No events are assigned to {current ? current.name.split(/\s+/)[0] : "you"} yet.
+            </div>
+          )}
+
+          {!loading && !error && myEvents.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              {myEvents.map((event) => (
+                <button
+                  key={event.id}
+                  onClick={() => onOpenEvent(event.id)}
+                  className="text-left bg-white rounded-2xl border border-black p-6 hover:shadow-md transition-shadow overflow-hidden flex flex-col"
+                >
+                  {event.coverImageUrl && (
+                    <img
+                      src={event.coverImageUrl}
+                      alt=""
+                      className="-mx-6 -mt-6 mb-4 h-32 w-[calc(100%+3rem)] max-w-none object-cover"
+                      style={{ objectPosition: event.coverPosition ?? "50% 50%" }}
+                    />
+                  )}
+
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    {event.format && <span className="px-2.5 py-1 bg-gray-100 rounded-md text-xs">{event.format}</span>}
+                    {event.attendeeCount != null && (
+                      <span className="text-gray-500 text-xs whitespace-nowrap">{event.attendeeCount} checked in</span>
+                    )}
+                  </div>
+
+                  <h3 className="text-lg mb-1">{event.title}</h3>
+                  {event.seriesName && <p className="text-gray-500 text-sm mb-3">{event.seriesName}</p>}
+
+                  <div className="flex flex-wrap items-center gap-2 mt-auto pt-2">
+                    <span className="px-3 py-1 bg-gray-100 rounded-md text-sm flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      {event.date ?? NOT_CAPTURED}
+                    </span>
+                    <span className="px-3 py-1 bg-gray-100 rounded-md text-sm flex items-center gap-1">
+                      <MapPin className="w-3 h-3" />
+                      {event.location ?? NOT_CAPTURED}
+                    </span>
+                    {event.tags.length > 0 && <TagStack tags={event.tags} />}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Todos — placeholder, to be wired up later */}
+        <section>
+          <h2 className="text-lg mb-4">Todos</h2>
+          <div className="border border-dashed border-gray-300 rounded-2xl p-8 text-center text-gray-500">
+            <CheckSquare className="w-6 h-6 mx-auto mb-2 text-gray-400" />
+            <p className="text-sm">Todos coming soon.</p>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}

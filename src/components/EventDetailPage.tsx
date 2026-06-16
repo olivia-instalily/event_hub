@@ -1,4 +1,5 @@
-import { Calendar, MapPin, Users, ArrowLeft, AlertCircle, Pencil } from "lucide-react";
+import { Calendar, Users, ChevronLeft, AlertCircle, Pencil, Mic } from "lucide-react";
+import { LocationEdit, LocationInput } from "./LocationEdit";
 import { useEffect, useState } from "react";
 import {
   getEventDetail,
@@ -19,12 +20,14 @@ import {
 import { LabelPicker } from "./LabelPicker";
 import { TagStack } from "./TagStack";
 import { StatusControl } from "./StatusControl";
+import { CoverImage } from "./CoverImage";
+import { OwnerPicker } from "./OwnerPicker";
 import { Trash2, Plus } from "lucide-react";
 
 interface EventDetailPageProps {
   eventId: string;
   onBack: () => void;
-  onViewPeople: (filter: { id: string; name: string; tag?: string | null; status?: 'all' | 'registered' | 'checkedIn' | 'waitlisted' }) => void;
+  onViewPeople: (filter: { id: string; name: string; tag?: string | null; status?: 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers' }) => void;
 }
 
 const NOT_CAPTURED = "Not captured";
@@ -233,10 +236,10 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
   const back = (
     <button
       onClick={onBack}
-      className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-6 transition-colors"
+      className="inline-flex items-center gap-1 mb-6 px-3 py-1.5 bg-white border border-black rounded-lg text-black hover:bg-gray-50 transition-colors"
     >
-      <ArrowLeft className="w-5 h-5" />
-      Back to Events
+      <ChevronLeft className="w-4 h-4" />
+      Previous
     </button>
   );
 
@@ -252,7 +255,7 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
 
       {/* Event Header */}
       <div className="bg-white rounded-2xl border border-black p-8 mb-6">
-        <div className="flex gap-6">
+        <div className="header-row flex gap-10">
         <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between mb-4">
           {editing ? (
@@ -275,7 +278,7 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2">
                 <input value={formatInput} onChange={(e) => setFormatInput(e.target.value)} placeholder="Format" className="px-2 py-1 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                 <input value={audienceInput} onChange={(e) => setAudienceInput(e.target.value)} placeholder="Audience" className="px-2 py-1 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                <input value={locationInput} onChange={(e) => setLocationInput(e.target.value)} placeholder="Location" className="px-2 py-1 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <LocationInput value={locationInput} onChange={setLocationInput} className="px-2 py-1 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
               </div>
               <div className="flex items-center gap-2 mt-2">
                 <button onClick={saveEdit} disabled={savingEdit} className="px-4 py-1.5 bg-gray-200 text-black rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50">
@@ -324,18 +327,15 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
           />
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-2">
-          <div className="flex items-center gap-2 text-gray-600">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-2 text-gray-600">
+          <div className="flex items-center gap-2">
             <Calendar className="w-5 h-5" />
             <span>{event.date ?? NOT_CAPTURED}</span>
           </div>
-          <div className="flex items-center gap-2 text-gray-600">
-            <MapPin className="w-5 h-5" />
-            <span>{event.location ?? NOT_CAPTURED}</span>
-          </div>
+          <LocationEdit value={event.location} onChange={(location) => { setEvent({ ...event, location }); void updateEvent(event.id, { location }); }} />
           <button
             onClick={() => onViewPeople({ id: event.id, name: event.title, tag: event.tags[0] ?? null, status: 'checkedIn' })}
-            className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+            className="flex items-center gap-2 hover:text-gray-900 transition-colors"
             title="View checked-in people for this event"
           >
             <Users className="w-5 h-5" />
@@ -343,25 +343,28 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
               {event.attendeeCount != null ? `${event.attendeeCount} checked in` : NOT_CAPTURED}
             </span>
           </button>
-          <div className="text-gray-600">
-            <span className="font-medium">Owner:</span> {event.owner ?? NOT_CAPTURED}
-          </div>
+          <button
+            onClick={() => onViewPeople({ id: event.id, name: event.title, tag: event.tags[0] ?? null, status: 'speakers' })}
+            className="flex items-center gap-2 hover:text-gray-900 transition-colors"
+          >
+            <Mic className="w-5 h-5" />
+            <span className="underline decoration-dotted underline-offset-4">Speakers</span>
+          </button>
+          <OwnerPicker eventId={event.id} owners={event.owners} onChange={(owners) => setEvent((ev) => (ev ? { ...ev, owners, owner: owners.map((o) => o.name).join(", ") || null } : ev))} />
         </div>
 
         {event.seriesStatus && (
           <p className="text-sm text-gray-500 mt-4">Macro stage: <span className="font-medium">{event.seriesStatus}</span></p>
         )}
         </div>
-        {event.coverImageUrl && (
-          <div className="w-56 h-40 shrink-0 self-start rounded-2xl overflow-hidden border border-black">
-            <img
-              src={event.coverImageUrl}
-              alt="event cover"
-              className="w-full h-full object-cover"
-              style={{ objectPosition: event.coverPosition ?? "50% 50%" }}
-            />
-          </div>
-        )}
+        <CoverImage
+          eventId={event.id}
+          cover={event.coverImageUrl}
+          lumaCover={event.lumaCoverUrl}
+          customCover={event.customCoverUrl}
+          position={event.coverPosition}
+          onChange={(patch) => setEvent((ev) => (ev ? { ...ev, coverImageUrl: patch.cover, ...(patch.custom !== undefined ? { customCoverUrl: patch.custom } : {}) } : ev))}
+        />
         </div>
       </div>
 

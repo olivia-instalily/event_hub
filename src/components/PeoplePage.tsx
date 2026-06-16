@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Search, ChevronDown, Users, LayoutGrid, List, X, ExternalLink, Download, User, Mic, Plus } from "lucide-react";
+import { ChevronLeft, Search, ChevronDown, Users, LayoutGrid, List, X, ExternalLink, Download, User, Mic, Plus } from "lucide-react";
 import {
   listAllAttendees,
   listAttendeesForEvent,
@@ -24,8 +24,10 @@ import { tagColor } from "../lib/tags";
 import { downloadCsv } from "../lib/csv";
 import { LabelPicker } from "./LabelPicker";
 import { FileDrop } from "./FileDrop";
+import { Modal, PromptModal, ConfirmModal } from "./Modal";
+import { useProfile } from "../lib/profile";
 
-type TileFilter = 'all' | 'registered' | 'checkedIn' | 'waitlisted';
+type TileFilter = 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers';
 
 interface PeoplePageProps {
   eventFilter?: { id: string; name: string; tag?: string | null; status?: TileFilter } | null;
@@ -105,6 +107,7 @@ function PersonDetail({
   onRemoved: () => void;
   onLabelsChange: (labelIds: string[]) => void;
 }) {
+  const { current: currentProfile } = useProfile();
   const [events, setEvents] = useState<PersonEvent[] | null>(null);
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [newNote, setNewNote] = useState("");
@@ -114,6 +117,7 @@ function PersonDetail({
   const [isSpeaker, setIsSpeaker] = useState(person.role === "speaker");
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   const uploadPhoto = async (url: string) => { setPhoto(url); await setAttendeePhoto(person.id, url); onSaved({ photoUrl: url }); };
   const toggleSpeaker = async () => {
@@ -123,9 +127,8 @@ function PersonDetail({
     await setSpeakerRole(eventId, person.id, next);
     onSaved({ role: next ? "speaker" : "attendee" });
   };
-  const removeFromEvent = async () => {
+  const doRemove = async () => {
     if (!eventId) return;
-    if (!window.confirm(`Remove ${displayName(person)} from this event?`)) return;
     await removeAttendeeFromEvent(eventId, person.id);
     onRemoved();
   };
@@ -157,9 +160,8 @@ function PersonDetail({
     if (!body) return;
     setPosting(true);
     try {
-      // contributor is null for now — auth will populate the current user, and edit/
-      // delete will be gated to that author.
-      const created = await addNote(person.id, body, null);
+      // Attributed to the current profile (the pre-auth "current user").
+      const created = await addNote(person.id, body, currentProfile?.name ?? null);
       setNotes((prev) => [...(prev ?? []), created]);
       setNewNote("");
     } finally {
@@ -173,11 +175,10 @@ function PersonDetail({
         <div className="p-6">
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-start gap-3 min-w-0">
-              <div className="shrink-0 text-center">
+              <div className="shrink-0">
                 {photo
                   ? <img src={photo} alt="" className="w-14 h-14 rounded-full object-cover" />
                   : <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center text-gray-400"><User className="w-6 h-6" /></div>}
-                <div className="mt-1"><FileDrop compact label="photo" onUploaded={(url) => uploadPhoto(url)} /></div>
               </div>
               <div className="min-w-0">
                 {person.type && person.type !== "Unknown" && (
@@ -185,14 +186,19 @@ function PersonDetail({
                 )}
                 <h2 className="text-2xl mt-2">{displayName(person)}</h2>
                 {person.title && <p className="text-gray-600">{person.title}{person.org ? ` · ${person.org}` : ""}</p>}
-                {eventId && (
-                  <div className="mt-2 flex items-center gap-3 flex-wrap">
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  <FileDrop compact label="photo" onUploaded={(url) => uploadPhoto(url)} />
+                  {eventId && (
                     <button onClick={toggleSpeaker} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border transition-colors ${isSpeaker ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"}`}>
                       <Mic className="w-3 h-3" /> {isSpeaker ? "Speaker for this event" : "Mark as speaker"}
                     </button>
-                    <button onClick={removeFromEvent} className="text-xs text-gray-400 hover:text-red-600">Remove from event</button>
-                  </div>
-                )}
+                  )}
+                  {eventId && (
+                    <button onClick={() => setConfirmRemove(true)} title="Remove from event" aria-label="Remove from event" className="w-6 h-6 rounded-full border border-red-300 text-red-500 hover:bg-red-50 flex items-center justify-center shrink-0">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
             <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900 shrink-0" aria-label="Close">
@@ -316,7 +322,68 @@ function PersonDetail({
           </div>
         </div>
       </div>
+      {confirmRemove && (
+        <ConfirmModal
+          title="Remove from event"
+          message={`Remove ${displayName(person)} from this event?`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={() => void doRemove()}
+          onClose={() => setConfirmRemove(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// App-styled "add person" dialog. Only adds to an event (people live under an event).
+function AddPersonModal({ eventFilter, onClose, onAdded }: {
+  eventFilter: { id: string; name: string } | null;
+  onClose: () => void;
+  onAdded: (p: PersonView) => void;
+}) {
+  const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
+  const [org, setOrg] = useState("");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!eventFilter) {
+    return (
+      <Modal title="Add person" onClose={onClose} maxWidth="max-w-sm">
+        <p className="text-sm text-gray-600">Open an event's People view to add a person to it.</p>
+        <div className="flex justify-end mt-5"><button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Close</button></div>
+      </Modal>
+    );
+  }
+
+  const submit = async () => {
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true);
+    try {
+      const p = await addAttendee(eventFilter.id, { name: n, title: title.trim() || null, org: org.trim() || null, email: email.trim() || null });
+      onAdded(p);
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  const field = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
+  return (
+    <Modal title={`Add person to ${eventFilter.name}`} onClose={onClose}>
+      <div className="space-y-2">
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} placeholder="Name (required)" className={field} />
+        <div className="flex gap-2">
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" className={field} />
+          <input value={org} onChange={(e) => setOrg(e.target.value)} placeholder="Organization" className={field} />
+        </div>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={field} />
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
+        <button onClick={() => void submit()} disabled={busy || !name.trim()} className="px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50">{busy ? "Adding…" : "Add person"}</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -337,12 +404,12 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
   const [selectedPerson, setSelectedPerson] = useState<PersonView | null>(null);
   const [labels, setLabels] = useState<Label[]>([]);
   const [labelFilter, setLabelFilter] = useState<string>("all");
+  const [addOpen, setAddOpen] = useState(false);
+  const [newLabelOpen, setNewLabelOpen] = useState(false);
 
   useEffect(() => { listLabels("person").then(setLabels).catch(() => {}); }, []);
 
-  const createLabelFromFilter = async () => {
-    const name = window.prompt('New label name')?.trim();
-    if (!name) return;
+  const createNewLabel = async (name: string) => {
     const lbl = await createLabel(name, 'person');
     setLabels((prev) => [...prev, lbl].sort((a, b) => a.name.localeCompare(b.name)));
     setLabelFilter(lbl.id);
@@ -361,17 +428,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
     setSelectedPerson((prev) => (prev ? { ...prev, ...patch } : prev));
   };
 
-  const addPerson = async () => {
-    const name = window.prompt(eventFilter ? `Add a person to ${eventFilter.name}` : "New person — name")?.trim();
-    if (!name) return;
-    if (eventFilter) {
-      const p = await addAttendee(eventFilter.id, { name });
-      setPeople((prev) => [p, ...prev]);
-      setSelectedPerson(p);
-    } else {
-      window.alert("Open an event's People view to add a person to it.");
-    }
-  };
+  const onPersonAdded = (p: PersonView) => { setPeople((prev) => [p, ...prev]); setSelectedPerson(p); };
 
   useEffect(() => {
     let cancelled = false;
@@ -412,6 +469,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
     // Status tile filter (event-scoped only).
     if (eventFilter && tileFilter !== "all") {
       const s = (p.registrationStatus ?? "").toLowerCase();
+      if (tileFilter === "speakers" && p.role !== "speaker") return false;
       if (tileFilter === "checkedIn" && !p.checkedIn) return false;
       if (tileFilter === "registered" && s !== "approved") return false;
       if (tileFilter === "waitlisted" && s !== "waitlist") return false;
@@ -436,10 +494,10 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           {onBack && (
             <button
               onClick={onBack}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4 transition-colors"
+              className="inline-flex items-center gap-1 mb-4 px-3 py-1.5 bg-white border border-black rounded-lg text-black hover:bg-gray-50 transition-colors"
             >
-              <ArrowLeft className="w-5 h-5" />
-              Back to event
+              <ChevronLeft className="w-4 h-4" />
+              Previous
             </button>
           )}
           <div className="flex items-center justify-between gap-2">
@@ -447,7 +505,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
               <Users className="w-6 h-6 text-gray-500" />
               <h2 className="text-2xl">People · {eventFilter.name}</h2>
             </div>
-            <button onClick={addPerson} className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-200 rounded-lg text-sm hover:bg-gray-300"><Plus className="w-4 h-4" /> Add person</button>
+            <button onClick={() => setAddOpen(true)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-200 rounded-lg text-sm hover:bg-gray-300"><Plus className="w-4 h-4" /> Add person</button>
           </div>
         </div>
       ) : (
@@ -505,7 +563,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
             <select
               value={labelFilter}
               onChange={(e) => {
-                if (e.target.value === '__create__') { void createLabelFromFilter(); return; }
+                if (e.target.value === '__create__') { setNewLabelOpen(true); return; }
                 setLabelFilter(e.target.value);
               }}
               className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
@@ -667,6 +725,13 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
             setSelectedPerson((prev) => (prev ? { ...prev, labelIds } : prev));
           }}
         />
+      )}
+
+      {addOpen && (
+        <AddPersonModal eventFilter={eventFilter ? { id: eventFilter.id, name: eventFilter.name } : null} onClose={() => setAddOpen(false)} onAdded={onPersonAdded} />
+      )}
+      {newLabelOpen && (
+        <PromptModal title="New label" label="Label name" placeholder="e.g. VIPs" submitLabel="Create" onClose={() => setNewLabelOpen(false)} onSubmit={(v) => void createNewLabel(v)} />
       )}
     </div>
   );
