@@ -1,28 +1,28 @@
 import { useEffect, useState } from "react";
 import {
-  Calendar, Users, Link2, Check, ChevronDown, Lightbulb, AlertCircle,
-  Mail, DollarSign, ClipboardList, Handshake, ArrowRight,
+  Calendar, Users, Link2, Check, ChevronDown, AlertCircle,
+  DollarSign, ClipboardList, ArrowRight,
 } from "lucide-react";
 import {
   setEventDate, setHeadcount, setEventBudgetTarget, setBudgetTarget, saveSetupState,
-  setBudgetLineTarget, addBudgetCategoryTarget, startOutreach, setWatchInbox,
-  getBudgetProjections, getCarriedLessons, attachLuma, setDeliverableDueDate,
-  type EventPlanning, type BudgetProjection, type CarriedLesson, type EngagementWithCandidates,
+  setBudgetLineTarget, addBudgetCategoryTarget,
+  getBudgetProjections, attachLuma, setDeliverableDueDate,
+  type EventPlanning, type BudgetProjection,
 } from "../lib/db";
 import { OwnerPicker } from "./OwnerPicker";
 import { DateEdit } from "./DateEdit";
+import { BudgetDropZone, BudgetDropArea, BudgetImportModal } from "./BudgetImport";
+import { canonicalCategory, categoryKey } from "../lib/budgetCategories";
 
 const money = (n: number | null | undefined, currency = "USD") =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
 const numOrNull = (s: string) => (s.trim() === "" ? null : Number(s));
 
-type StepKey = "essentials" | "budget" | "vendors" | "timeline" | "lessons";
+type StepKey = "essentials" | "budget" | "timeline";
 const STEPS: { key: StepKey; title: string; blurb: string; Icon: typeof Calendar }[] = [
   { key: "essentials", title: "Confirm essentials", blurb: "Date, headcount, owner, Luma", Icon: Calendar },
   { key: "budget", title: "Review budget", blurb: "Projected costs from past events", Icon: DollarSign },
-  { key: "vendors", title: "Vendor outreach", blurb: "Kick off the categories you need", Icon: Handshake },
   { key: "timeline", title: "Check timeline", blurb: "Deliverables, now dated", Icon: ClipboardList },
-  { key: "lessons", title: "Carried lessons", blurb: "What comparable events taught us", Icon: Lightbulb },
 ];
 
 /** Post-creation guided setup. Grounds the template draft (date/owner/budget/vendors/
@@ -57,8 +57,10 @@ export function EventSetup({ plan, eventId, onApplied }: { plan: EventPlanning; 
           <p className="text-sm text-gray-500 mt-1">A few quick steps to ground the draft. You can change anything later from the tabs above.</p>
         </div>
         <div className="text-right shrink-0">
-          <p className="text-sm text-gray-600">{done.size}/{STEPS.length} done</p>
-          <button onClick={skip} className="text-xs text-gray-400 hover:text-gray-700 underline underline-offset-2 mt-1">Skip for now</button>
+          <p className="text-sm text-gray-600 mb-2">{done.size}/{STEPS.length} done</p>
+          <button onClick={skip} className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-200 text-black rounded-lg text-sm hover:bg-gray-300 transition-colors">
+            Jump to dashboard <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -91,14 +93,8 @@ export function EventSetup({ plan, eventId, onApplied }: { plan: EventPlanning; 
                   {step.key === "budget" && (
                     <BudgetStep plan={plan} eventId={eventId} onDone={() => completeStep("budget")} />
                   )}
-                  {step.key === "vendors" && (
-                    <VendorsStep initial={plan.engagements} onDone={() => completeStep("vendors")} />
-                  )}
                   {step.key === "timeline" && (
                     <TimelineStep plan={plan} hasDate={!!date} onNeedsDate={() => setOpen("essentials")} onDone={() => completeStep("timeline")} />
-                  )}
-                  {step.key === "lessons" && (
-                    <LessonsStep eventId={eventId} onDone={() => completeStep("lessons")} />
                   )}
                 </div>
               )}
@@ -193,8 +189,9 @@ function EssentialsStep({ plan, eventId, date, setDate, onDone }: {
 
 // ── Step 2: budget review ──────────────────────────────────────────────────
 function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: string; onDone: () => void }) {
+  const [dropFile, setDropFile] = useState<File | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
   const currency = plan.budget?.currency ?? "USD";
-  const norm = (s: string) => s.trim().toLowerCase();
   // Categories to project = budget line labels ∪ vendor decision categories.
   const categories = Array.from(new Set([
     ...(plan.budget?.lines ?? []).map((l) => l.label ?? "").filter(Boolean),
@@ -202,11 +199,11 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
   ]));
 
   const [projections, setProjections] = useState<BudgetProjection[] | null>(null);
-  // category(norm) → { lineId?, value } for the optional target.
-  const [targets, setTargets] = useState<Record<string, { lineId: string | null; value: string }>>(() => {
-    const init: Record<string, { lineId: string | null; value: string }> = {};
+  // categoryKey → { lineId?, value, label } for the editable per-category amount.
+  const [targets, setTargets] = useState<Record<string, { lineId: string | null; value: string; label: string }>>(() => {
+    const init: Record<string, { lineId: string | null; value: string; label: string }> = {};
     for (const l of plan.budget?.lines ?? []) {
-      if (l.label) init[norm(l.label)] = { lineId: l.id, value: l.target != null ? String(l.target) : "" };
+      if (l.label) init[categoryKey(l.label)] = { lineId: l.id, value: l.target != null ? String(l.target) : (l.confirmedAmount != null ? String(l.confirmedAmount) : ""), label: l.label };
     }
     return init;
   });
@@ -220,16 +217,31 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
   }, [eventId]);
 
   const saveTarget = async (category: string, raw: string) => {
-    const k = norm(category);
-    const cur = targets[k] ?? { lineId: null, value: "" };
-    setTargets((t) => ({ ...t, [k]: { ...cur, value: raw } }));
+    const k = categoryKey(category);
+    const cur = targets[k] ?? { lineId: null, value: "", label: category };
+    setTargets((t) => ({ ...t, [k]: { ...cur, value: raw, label: cur.label || category } }));
     const val = numOrNull(raw);
     if (!plan.budget) return;
     if (cur.lineId) { await setBudgetLineTarget(cur.lineId, val); }
     else if (val != null) {
       const line = await addBudgetCategoryTarget(plan.budget.id, category, val);
-      setTargets((t) => ({ ...t, [k]: { lineId: line.id, value: raw } }));
+      setTargets((t) => ({ ...t, [k]: { lineId: line.id, value: raw, label: category } }));
     }
+  };
+
+  // Drop-import: fuzzy-match each parsed line to an existing category and fill its (editable)
+  // field — matching categories drop into their existing field, the rest become new rows.
+  const fillFromImport = async (importLines: { label: string; amount: number | null }[]): Promise<string> => {
+    let n = 0;
+    for (const il of importLines) {
+      if (il.amount == null || !il.label.trim()) continue;
+      const k = categoryKey(il.label);
+      const proj = projections?.find((p) => categoryKey(p.category) === k);
+      const label = proj ? proj.category : (targets[k]?.label ?? canonicalCategory(il.label));
+      await saveTarget(label, String(il.amount));
+      n++;
+    }
+    return `Filled ${n} categor${n === 1 ? "y" : "ies"} from the breakdown.`;
   };
   const saveOverall = async (raw: string) => {
     setOverall(raw);
@@ -238,14 +250,29 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
     if (plan.budget) await setBudgetTarget(plan.budget.id, val); // mirror to the Budget tab's target
   };
 
+  // Unified rows: projected categories + any extra categories filled in (e.g. dropped from a
+  // breakdown) that aren't among the projections. Both render with the same row markup.
+  const projKeys = new Set((projections ?? []).map((p) => categoryKey(p.category)));
+  const extraRows = Object.entries(targets)
+    .filter(([k, v]) => !projKeys.has(k) && (v.value !== "" || v.lineId))
+    .map(([, v]) => v.label);
+  const rows: { category: string; proj: BudgetProjection | null }[] = [
+    ...(projections ?? []).map((p) => ({ category: p.category, proj: p as BudgetProjection | null })),
+    ...extraRows.map((c) => ({ category: c, proj: null as BudgetProjection | null })),
+  ];
+
   return (
-    <div className="mt-3">
-      <p className="text-sm text-gray-500 mb-3">Projected from comparable past events. Targets are optional — the projection stands if you leave them blank.</p>
+    <BudgetDropArea onFile={setDropFile} className="mt-3 rounded-lg">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <p className="text-sm text-gray-500">Projected from comparable past events. Drop a breakdown to fill these in — matching categories drop into their field; everything stays editable.</p>
+        {plan.budget && <BudgetDropZone label="or drop a breakdown" onFile={setDropFile} className="shrink-0" />}
+      </div>
+      {importNote && <p className="text-xs text-gray-500 mb-3 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5 text-green-600" /> {importNote}</p>}
 
       {projections === null ? (
         <p className="text-sm text-gray-400">Looking at past events…</p>
-      ) : projections.length === 0 ? (
-        <p className="text-sm text-gray-400">No categories to project yet.</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-gray-400">No categories yet — drop a breakdown to add some.</p>
       ) : (
         <div className="rounded-lg border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
@@ -258,19 +285,19 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
               </tr>
             </thead>
             <tbody>
-              {projections.map((p) => {
-                const t = targets[norm(p.category)]?.value ?? "";
+              {rows.map(({ category, proj }) => {
+                const t = targets[categoryKey(category)]?.value ?? "";
                 return (
-                  <tr key={p.category} className="border-t border-gray-100">
-                    <td className="px-3 py-2">{p.category}</td>
-                    <td className="px-3 py-2 text-right">{p.projected != null ? money(p.projected, currency) : <span className="text-gray-300">no history</span>}</td>
+                  <tr key={category} className="border-t border-gray-100">
+                    <td className="px-3 py-2">{category}</td>
+                    <td className="px-3 py-2 text-right">{proj?.projected != null ? money(proj.projected, currency) : <span className="text-gray-300">—</span>}</td>
                     <td className="px-3 py-2">
-                      {p.pastEvents === 0 ? (
-                        <span className="text-gray-400">no comparable events</span>
+                      {!proj || proj.pastEvents === 0 ? (
+                        <span className="text-gray-400">—</span>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 text-gray-500">
-                          {money(p.low, currency)}–{money(p.high, currency)} · {p.pastEvents} event{p.pastEvents === 1 ? "" : "s"}
-                          {p.lowConfidence && (
+                          {money(proj.low, currency)}–{money(proj.high, currency)} · {proj.pastEvents} event{proj.pastEvents === 1 ? "" : "s"}
+                          {proj.lowConfidence && (
                             <span title="Low confidence — based on one event or less" className="inline-flex items-center gap-0.5 text-amber-600">
                               <AlertCircle className="w-3.5 h-3.5" /> low
                             </span>
@@ -279,7 +306,7 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <input type="number" value={t} onChange={(e) => saveTarget(p.category, e.target.value)} placeholder="—" className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                      <input type="number" value={t} onChange={(e) => saveTarget(category, e.target.value)} placeholder="—" className="w-24 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                     </td>
                   </tr>
                 );
@@ -296,57 +323,22 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
       </div>
 
       <StepFooter onDone={onDone} />
-    </div>
-  );
-}
 
-// ── Step 3: vendor outreach ─────────────────────────────────────────────────
-function VendorsStep({ initial, onDone }: { initial: EngagementWithCandidates[]; onDone: () => void }) {
-  const [engs, setEngs] = useState(initial);
-  const patch = (id: string, f: Partial<EngagementWithCandidates>) => setEngs((p) => p.map((e) => (e.id === id ? { ...e, ...f } : e)));
-
-  const begin = async (id: string) => { patch(id, { outreachStarted: true }); await startOutreach(id, false); };
-  const toggleWatch = async (id: string, v: boolean) => { patch(id, { watchInbox: v }); await setWatchInbox(id, v); };
-
-  return (
-    <div className="mt-3">
-      {engs.length === 0 ? (
-        <p className="text-sm text-gray-400">No vendor categories scaffolded. Add them on the Vendor decisions tab.</p>
-      ) : (
-        <div className="space-y-2">
-          {engs.map((e) => (
-            <div key={e.id} className="rounded-lg border border-gray-200 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{e.category ?? "Uncategorized"}</span>
-                  {e.outreachStarted && <span className="px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700">Sourcing</span>}
-                </div>
-                {e.outreachStarted ? (
-                  <span className="text-xs text-green-700 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5" /> Outreach started</span>
-                ) : (
-                  <button onClick={() => begin(e.id)} className="px-3 py-1 bg-gray-900 text-white rounded-lg text-xs hover:bg-gray-800">Start outreach</button>
-                )}
-              </div>
-              {e.outreachStarted && (
-                <label className="mt-3 flex items-start gap-2 text-sm text-gray-600 cursor-pointer">
-                  <input type="checkbox" checked={e.watchInbox} onChange={(ev) => toggleWatch(e.id, ev.target.checked)} className="mt-0.5" />
-                  <span className="inline-flex items-center gap-1.5">
-                    <Mail className="w-4 h-4 text-gray-400" />
-                    Watch my inbox for replies from this vendor — auto-log + flag quotes/updates.
-                    <span className="text-gray-400">(turns on once email sync ships)</span>
-                  </span>
-                </label>
-              )}
-            </div>
-          ))}
-        </div>
+      {dropFile && plan.budget && (
+        <BudgetImportModal
+          budget={plan.budget}
+          currency={currency}
+          file={dropFile}
+          onClose={() => setDropFile(null)}
+          onConfirm={fillFromImport}
+          onApplied={(note) => { setDropFile(null); setImportNote(note); }}
+        />
       )}
-      <StepFooter onDone={onDone} />
-    </div>
+    </BudgetDropArea>
   );
 }
 
-// ── Step 4: timeline ────────────────────────────────────────────────────────
+// ── Step 3: timeline ────────────────────────────────────────────────────────
 function TimelineStep({ plan, hasDate, onNeedsDate, onDone }: { plan: EventPlanning; hasDate: boolean; onNeedsDate: () => void; onDone: () => void }) {
   const [dues, setDues] = useState<Record<string, string | null>>(
     Object.fromEntries(plan.deliverables.map((d) => [d.id, d.dueDate])),
@@ -383,35 +375,3 @@ function TimelineStep({ plan, hasDate, onNeedsDate, onDone }: { plan: EventPlann
   );
 }
 
-// ── Step 5: carried lessons ─────────────────────────────────────────────────
-function LessonsStep({ eventId, onDone }: { eventId: string; onDone: () => void }) {
-  const [lessons, setLessons] = useState<CarriedLesson[] | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    getCarriedLessons(eventId).then((l) => { if (!cancelled) setLessons(l); }).catch(() => { if (!cancelled) setLessons([]); });
-    return () => { cancelled = true; };
-  }, [eventId]);
-
-  return (
-    <div className="mt-3">
-      {lessons === null ? (
-        <p className="text-sm text-gray-400">Finding comparable past events…</p>
-      ) : lessons.length === 0 ? (
-        <p className="text-sm text-gray-400">No comparable past events with lessons yet.</p>
-      ) : (
-        <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
-          {lessons.map((l, i) => (
-            <div key={i} className="px-4 py-3 flex gap-3">
-              <Lightbulb className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm text-gray-700">{l.body}</p>
-                <p className="text-xs text-gray-400 mt-1">from {l.sourceEventName}{l.why ? ` · ${l.why}` : ""}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      <StepFooter onDone={onDone} label="Got it" />
-    </div>
-  );
-}

@@ -17,7 +17,6 @@ import {
   type Reflection,
   type BudgetView,
 } from "../lib/db";
-import { LabelPicker } from "./LabelPicker";
 import { TagStack } from "./TagStack";
 import { StatusControl } from "./StatusControl";
 import { CoverImage } from "./CoverImage";
@@ -309,21 +308,13 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
           )}
         </div>
 
-        {/* Status + Labels */}
+        {/* Status */}
         <div className="mb-3">
           <StatusControl
             eventId={event.id}
             status={event.status}
             eventDate={event.date}
             onChange={(s) => setEvent((e) => (e ? { ...e, status: s } : e))}
-          />
-        </div>
-        <div className="mb-2">
-          <LabelPicker
-            scope="event"
-            itemId={event.id}
-            initialLabelIds={event.labelIds}
-            onChange={(ids) => setEvent((e) => (e ? { ...e, labelIds: ids } : e))}
           />
         </div>
 

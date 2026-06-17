@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic,
+  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock,
 } from "lucide-react";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, attachLuma,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventFormat, attachLuma,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
-  addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors,
-  addTrackerLine, setLinePaymentStatus, attachLineDoc, setBudgetTarget,
+  addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
+  addTrackerLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetTarget, updateBudgetLine,
   addDeliverable, setDeliverableStatus, setDeliverableDueDate, deleteDeliverable,
   getPlanningSummary, saveOverviewSummary,
   listEventUpdates, recordEventUpdate, detectUpdate, syncGmail, summarizeCorrespondence,
@@ -17,9 +17,10 @@ import {
   MACRO_STAGES, ENGAGEMENT_STAGES,
   type EventPlanning, type EngagementWithCandidates, type VendorCandidate,
   type PlanningBudget, type BudgetLineTracker, type Deliverable, type CarriedLesson,
-  type PlanningFacts, type VendorSuggestion,
+  type PlanningFacts, type VendorSuggestion, type BudgetStatus, BUDGET_STATUSES,
 } from "../lib/db";
 import { TagStack } from "./TagStack";
+import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationEdit } from "./LocationEdit";
 import { EditableTitle } from "./EditableTitle";
 import { StatusControl } from "./StatusControl";
@@ -28,7 +29,10 @@ import { EventPageBuilder } from "./EventPageBuilder";
 import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
 import { DateEdit } from "./DateEdit";
+import { BudgetDropZone, BudgetDropArea, BudgetImportModal } from "./BudgetImport";
 import { EventSetup } from "./EventSetup";
+import { ScopingForm } from "./ScopingForm";
+import { loadScoping, saveScoping, fundingFor, leadTimeCheck, STATUS_LABEL, type ScopingForm as ScopingData } from "../lib/scoping";
 import { domainFromUrl, isFreeMailDomain } from "../lib/url";
 
 interface Props {
@@ -592,24 +596,119 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
 }
 
 // ── Budget tracker ──────────────────────────────────────────────────────────
-function BudgetTracker({ budget }: { budget: PlanningBudget }) {
+const BUDGET_STATUS_META: Record<BudgetStatus, { label: string; badge: string; ring: string }> = {
+  estimate:  { label: "Estimate",  badge: "bg-gray-100 text-gray-600",   ring: "ring-gray-300" },
+  quoted:    { label: "Quoted",    badge: "bg-blue-100 text-blue-700",   ring: "ring-blue-400" },
+  in_review: { label: "In review", badge: "bg-amber-100 text-amber-700", ring: "ring-amber-400" },
+  paid:      { label: "Paid",      badge: "bg-green-100 text-green-700", ring: "ring-green-400" },
+};
+
+/** Click-into-category detail: edit label/amount, move status, attach material, and add a
+ *  web address whose email updates feed the general updates + progress areas. */
+function BudgetLineModal({ eventId, line, onClose, onChange }: {
+  eventId: string;
+  line: BudgetLineTracker;
+  onClose: () => void;
+  onChange: (f: Partial<BudgetLineTracker>) => void;
+}) {
+  const [label, setLabel] = useState(line.label ?? "");
+  const [amount, setAmount] = useState(line.confirmedAmount != null ? String(line.confirmedAmount) : "");
+  const [sync, setSync] = useState(line.syncUrl ?? "");
+  const [savingSync, setSavingSync] = useState(false);
+
+  const saveMeta = async () => {
+    const amt = amount.trim() === "" ? null : Number(amount);
+    onChange({ label: label.trim() || null, confirmedAmount: amt });
+    await updateBudgetLine(line.id, { label: label.trim(), amount: amt });
+  };
+  const setStatus = async (s: BudgetStatus) => { onChange({ status: s }); await setBudgetStatus(line.id, s); };
+  const setDoc = async (url: string | null) => { onChange({ docUrl: url }); await attachLineDoc(line.id, url); };
+  const saveSync = async () => {
+    const url = sync.trim() || null;
+    setSavingSync(true);
+    try {
+      onChange({ syncUrl: url });
+      await setBudgetSyncUrl(line.id, url);
+      // Surface in the general updates feed (and, once email sync ships, auto-updates land here).
+      if (url) await recordEventUpdate(eventId, { source: "manual", summary: `Budget · ${label.trim() || "line"}: linked for email updates`, detail: null, linkUrl: url });
+    } finally { setSavingSync(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl border border-black max-w-lg w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl">Budget line</h2>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex gap-2">
+            <input value={label} onChange={(e) => setLabel(e.target.value)} onBlur={saveMeta} placeholder="Category" className="flex-1 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+            <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} onBlur={saveMeta} placeholder="Amount" className="w-32 px-3 py-2 text-right border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+          </div>
+
+          <div>
+            <p className="text-sm font-medium mb-1.5">Status</p>
+            <div className="flex flex-wrap gap-1.5">
+              {BUDGET_STATUSES.map((s) => (
+                <button key={s} onClick={() => setStatus(s)} className={`px-3 py-1 rounded-full text-sm border ${line.status === s ? "bg-gray-900 text-white border-gray-900" : `border-gray-200 hover:border-gray-400 ${BUDGET_STATUS_META[s].badge}`}`}>
+                  {BUDGET_STATUS_META[s].label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-sm font-medium mb-1.5">Material</p>
+            {line.docUrl ? (
+              <span className="inline-flex items-center gap-3 text-sm">
+                <a href={line.docUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-gray-700 hover:text-gray-900"><Paperclip className="w-4 h-4" /> View attachment</a>
+                <button onClick={() => setDoc(null)} className="text-gray-400 hover:text-red-600 text-xs">remove</button>
+              </span>
+            ) : (
+              <FileDrop label="Attach a quote / invoice / contract" onUploaded={(url) => setDoc(url)} />
+            )}
+          </div>
+
+          <div>
+            <p className="text-sm font-medium mb-1.5">Sync from email</p>
+            <div className="flex gap-2">
+              <input value={sync} onChange={(e) => setSync(e.target.value)} placeholder="Vendor portal / quote thread URL" className="flex-1 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+              <button onClick={saveSync} disabled={savingSync || sync.trim() === (line.syncUrl ?? "")} className="px-3 py-2 bg-gray-200 rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50">{savingSync ? "Saving…" : "Save"}</button>
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5 inline-flex items-start gap-1"><Mail className="w-3.5 h-3.5 mt-0.5 shrink-0" /> Replies on this thread will auto-log to this line and flow into the event's updates & progress (once email sync ships).</p>
+          </div>
+        </div>
+
+        <div className="flex justify-end mt-6 pt-4 border-t border-gray-100">
+          <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded-lg text-sm hover:bg-gray-300">Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BudgetTracker({ budget, eventId }: { budget: PlanningBudget; eventId: string }) {
   const [lines, setLines] = useState(budget.lines);
   const [target, setTarget] = useState<number | null>(budget.targetAmount);
   const [targetInput, setTargetInput] = useState(budget.targetAmount != null ? String(budget.targetAmount) : "");
-  const [filter, setFilter] = useState<"all" | "paid" | "pending">("all");
+  const [filter, setFilter] = useState<"all" | BudgetStatus>("all");
   const [newLabel, setNewLabel] = useState("");
   const [newAmount, setNewAmount] = useState("");
+  const [dropFile, setDropFile] = useState<File | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null); // budget line whose detail card is open
   const cur = budget.currency;
 
-  const committed = lines.filter((l) => l.paymentStatus != null).reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
-  const paid = lines.filter((l) => l.paymentStatus === "paid").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
-  const pending = committed - paid;
+  // "committed" = anything past a raw estimate; used against the target.
+  const committed = lines.filter((l) => l.status !== "estimate").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
+  const sumFor = (st: BudgetStatus) => lines.filter((l) => l.status === st).reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
 
-  const shown = lines.filter((l) => filter === "all" || l.paymentStatus === filter);
+  const shown = lines.filter((l) => filter === "all" || l.status === filter);
 
   const patch = (id: string, f: Partial<BudgetLineTracker>) => setLines((p) => p.map((l) => (l.id === id ? { ...l, ...f } : l)));
-  const setStatus = async (id: string, s: "paid" | "pending" | null) => { patch(id, { paymentStatus: s }); await setLinePaymentStatus(id, s); };
-  const setDoc = async (id: string, url: string) => { patch(id, { docUrl: url || null }); await attachLineDoc(id, url || null); };
+  const setStatus = async (id: string, s: BudgetStatus) => { patch(id, { status: s }); await setBudgetStatus(id, s); };
   const addLine = async () => {
     const label = newLabel.trim();
     if (!label) return;
@@ -619,15 +718,20 @@ function BudgetTracker({ budget }: { budget: PlanningBudget }) {
   };
   const saveTarget = async (v: string) => { const n = v.trim() === "" ? null : Number(v); setTarget(n); await setBudgetTarget(budget.id, n); };
 
-  const tiles = [
-    { label: "Pending", value: pending, ring: "ring-amber-400" },
-    { label: "Committed", value: committed, ring: "ring-blue-400" },
-    { label: "Paid", value: paid, ring: "ring-green-400" },
-  ];
+  const tiles = BUDGET_STATUSES.map((st) => ({ label: BUDGET_STATUS_META[st].label, value: sumFor(st), ring: BUDGET_STATUS_META[st].ring }));
+  const openLine = lines.find((l) => l.id === openId) ?? null;
 
   return (
-    <div className="bg-white rounded-2xl border border-black p-6">
-      <div className="grid grid-cols-3 gap-4 mb-5">
+    <BudgetDropArea onFile={setDropFile} className="bg-white rounded-2xl border border-black p-6">
+      {importNote && <p className="text-xs text-gray-500 inline-flex items-center gap-1 mb-3"><Check className="w-3.5 h-3.5 text-green-600" /> {importNote}</p>}
+      {lines.length === 0 ? (
+        <BudgetDropZone label="Drop a budget breakdown (CSV) here, or click to choose" onFile={setDropFile} className="w-full min-h-[5rem] mb-5" />
+      ) : (
+        <div className="flex justify-end mb-4">
+          <BudgetDropZone label="Drop or choose a breakdown" onFile={setDropFile} className="shrink-0" />
+        </div>
+      )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
         {tiles.map((t) => (
           <div key={t.label} className={`rounded-2xl ring-2 ring-inset ${t.ring} p-4`}>
             <p className="text-gray-500 text-sm mb-1">{t.label}</p>
@@ -636,11 +740,30 @@ function BudgetTracker({ budget }: { budget: PlanningBudget }) {
         ))}
       </div>
 
+      {dropFile && (
+        <BudgetImportModal
+          budget={{ ...budget, lines }}
+          currency={cur}
+          file={dropFile}
+          onClose={() => setDropFile(null)}
+          onApplied={async (note) => { setDropFile(null); setImportNote(note); setLines(await listBudgetLines(budget.id)); }}
+        />
+      )}
+
+      {openLine && (
+        <BudgetLineModal
+          eventId={eventId}
+          line={openLine}
+          onClose={() => setOpenId(null)}
+          onChange={(f) => patch(openLine.id, f)}
+        />
+      )}
+
       <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
-        <div className="flex items-center gap-1">
-          {(["all", "pending", "paid"] as const).map((f) => (
+        <div className="flex items-center gap-1 flex-wrap">
+          {(["all", ...BUDGET_STATUSES] as const).map((f) => (
             <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1 rounded-full text-sm border ${filter === f ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"}`}>
-              {f === "all" ? "All" : f === "pending" ? "Pending" : "Paid"}
+              {f === "all" ? "All" : BUDGET_STATUS_META[f].label}
             </button>
           ))}
         </div>
@@ -670,35 +793,33 @@ function BudgetTracker({ budget }: { budget: PlanningBudget }) {
               <th className="text-left px-3 py-2 font-normal">Line</th>
               <th className="text-right px-3 py-2 font-normal">Amount</th>
               <th className="text-left px-3 py-2 font-normal">Status</th>
-              <th className="text-left px-3 py-2 font-normal">Doc</th>
-              <th className="px-3 py-2 font-normal text-right">Actions</th>
+              <th className="px-3 py-2 font-normal text-right">Links</th>
             </tr>
           </thead>
           <tbody>
-            {shown.length === 0 && <tr><td colSpan={5} className="px-3 py-3 text-gray-400">No lines.</td></tr>}
-            {shown.map((l) => {
-              const badge = l.paymentStatus === "paid" ? "bg-green-100 text-green-700" : l.paymentStatus === "pending" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500";
-              return (
-                <tr key={l.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2">{l.label}</td>
-                  <td className="px-3 py-2 text-right">{money(l.confirmedAmount, cur)}</td>
-                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded-full text-xs ${badge}`}>{l.paymentStatus ?? "estimate"}</span></td>
-                  <td className="px-3 py-2">
-                    {l.docUrl
-                      ? <span className="inline-flex items-center gap-2">
-                          <a href={l.docUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-900"><Paperclip className="w-3.5 h-3.5" /> view</a>
-                          <button onClick={() => setDoc(l.id, "")} className="text-gray-300 hover:text-red-600 text-xs">remove</button>
-                        </span>
-                      : <FileDrop compact label="attach / drop" onUploaded={(url) => setDoc(l.id, url)} />}
-                  </td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {l.paymentStatus == null && <button onClick={() => setStatus(l.id, "pending")} className="text-xs text-gray-600 hover:text-gray-900">Commit</button>}
-                    {l.paymentStatus === "pending" && <button onClick={() => setStatus(l.id, "paid")} className="text-xs text-green-700 hover:text-green-800">Mark paid</button>}
-                    {l.paymentStatus === "paid" && <button onClick={() => setStatus(l.id, "pending")} className="text-xs text-gray-500 hover:text-gray-800">Mark unpaid</button>}
-                  </td>
-                </tr>
-              );
-            })}
+            {shown.length === 0 && <tr><td colSpan={4} className="px-3 py-3 text-gray-400">No lines.</td></tr>}
+            {shown.map((l) => (
+              <tr key={l.id} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => setOpenId(l.id)} title="Open details">
+                <td className="px-3 py-2">{l.label}</td>
+                <td className="px-3 py-2 text-right">{money(l.confirmedAmount, cur)}</td>
+                <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                  <select
+                    value={l.status}
+                    onChange={(e) => setStatus(l.id, e.target.value as BudgetStatus)}
+                    className={`px-2 py-0.5 rounded-full text-xs border-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-gray-300 ${BUDGET_STATUS_META[l.status].badge}`}
+                  >
+                    {BUDGET_STATUSES.map((s) => <option key={s} value={s}>{BUDGET_STATUS_META[s].label}</option>)}
+                  </select>
+                </td>
+                <td className="px-3 py-2 text-right whitespace-nowrap text-gray-400">
+                  <span className="inline-flex items-center gap-2 justify-end">
+                    {l.docUrl && <Paperclip className="w-3.5 h-3.5" />}
+                    {l.syncUrl && <Link2 className="w-3.5 h-3.5" />}
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </span>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -713,7 +834,7 @@ function BudgetTracker({ budget }: { budget: PlanningBudget }) {
         <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
         Projected view (predicted cost per category from comparable past events) needs more budget history — coming later.
       </p>
-    </div>
+    </BudgetDropArea>
   );
 }
 
@@ -1048,8 +1169,8 @@ function buildFacts(plan: EventPlanning): PlanningFacts {
   }));
   const pendingDecisions = plan.engagements.filter((e) => e.stage !== "Contracted").map((e) => ({ category: e.category ?? "—", stage: e.stage ?? "—" }));
   const lines = plan.budget?.lines ?? [];
-  const committed = lines.filter((l) => l.paymentStatus != null).reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
-  const paid = lines.filter((l) => l.paymentStatus === "paid").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
+  const committed = lines.filter((l) => l.status !== "estimate").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
+  const paid = lines.filter((l) => l.status === "paid").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
   const budget = plan.budget ? { committed, paid, pending: committed - paid, target: plan.budget.targetAmount } : null;
   const done = plan.deliverables.filter((d) => d.status === "Done").length;
   const overdue = plan.deliverables.filter((d) => d.dueDate && d.dueDate < t && d.status !== "Done").length;
@@ -1062,12 +1183,83 @@ function buildFacts(plan: EventPlanning): PlanningFacts {
   return { name: plan.title, macroStage: plan.macroStage, daysOut, confirmed, pendingDecisions, budget, deliverables: { done, total: plan.deliverables.length, overdue, upcoming } };
 }
 
+/** Compact at-a-glance scoping summary for the Overview — status + a few key facts, with a
+ *  deep-link into the full form (which lives in the Budget flow). If not yet generated, this
+ *  is a prompt to start. */
+function ScopingGlance({ plan, scoping, roughTotal, onOpen }: { plan: EventPlanning; scoping: ScopingData; roughTotal: number; onOpen: () => void }) {
+  const funding = fundingFor(plan.tags);
+  const lead = leadTimeCheck(plan.date);
+  const statusCls = scoping.status === "assigned" ? "bg-green-100 text-green-700" : scoping.status === "submitted" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-600";
+
+  if (!scoping.generated) {
+    return (
+      <div className="bg-white rounded-2xl border border-black p-5 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-medium">Scoping form</h3>
+          <p className="text-sm text-gray-400 mt-0.5">Not started — generate the brief to request a budget.</p>
+        </div>
+        <button onClick={onOpen} className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 shrink-0">Start scoping</button>
+      </div>
+    );
+  }
+  return (
+    <div className="bg-white rounded-2xl border border-black p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <h3 className="font-medium">Scoping</h3>
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${statusCls}`}>{scoping.status === "assigned" && <Lock className="w-3 h-3" />}{STATUS_LABEL[scoping.status]}</span>
+      </div>
+      <dl className="space-y-1.5 text-sm">
+        <div className="flex justify-between gap-2"><dt className="text-gray-500">Date</dt><dd>{plan.date ?? "—"} {lead.days != null && (lead.ok ? <span className="text-green-600">· {lead.days}d ✓</span> : <span className="text-red-600">· {lead.days}d ⚠</span>)}</dd></div>
+        <div className="flex justify-between gap-2"><dt className="text-gray-500">Funding</dt><dd>{funding.fundingLine} · {funding.tier}</dd></div>
+        <div className="flex justify-between gap-2"><dt className="text-gray-500">Rough cost</dt><dd>{money(roughTotal)}</dd></div>
+        {scoping.assignedBudget != null && (
+          <div className="flex justify-between gap-2"><dt className="text-gray-500">Assigned</dt><dd className="inline-flex items-center gap-1"><Lock className="w-3 h-3 text-gray-400" />{money(scoping.assignedBudget)}</dd></div>
+        )}
+      </dl>
+      <button onClick={onOpen} className="mt-3 text-sm text-gray-600 hover:text-gray-900 inline-flex items-center gap-1">View full form <ChevronRight className="w-4 h-4" /></button>
+    </div>
+  );
+}
+
+/** Budget flow: (1) submit scoping form — opened from here, (2) receive budget (Karim's
+ *  assigned target), (3) track budget — guidance to track spend + add vendor info. */
+function BudgetFlow({ scoping, onOpenScoping }: { scoping: ScopingData; onOpenScoping: () => void }) {
+  const step1 = scoping.status !== "draft";
+  const step2 = scoping.assignedBudget != null;
+  return (
+    <div className="bg-white rounded-2xl border border-black p-5">
+      <h3 className="font-medium mb-3">Budget flow</h3>
+      <ol className="space-y-3">
+        <li className="flex items-center gap-3">
+          <span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs shrink-0 ${step1 ? "bg-green-600 text-white" : "bg-gray-100 text-gray-500"}`}>{step1 ? <Check className="w-3.5 h-3.5" /> : 1}</span>
+          <span className="flex-1 text-sm"><span className={step1 ? "text-gray-500 line-through" : ""}>Submit scoping form</span> <span className="text-gray-400">· {step1 ? "submitted" : "generate & submit the brief"}</span></span>
+          <button onClick={onOpenScoping} className="px-3 py-1 bg-gray-200 rounded-lg text-xs hover:bg-gray-300 shrink-0">{scoping.generated ? "Open" : "Start"} scoping form</button>
+        </li>
+        <li className="flex items-center gap-3">
+          <span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs shrink-0 ${step2 ? "bg-green-600 text-white" : "bg-gray-100 text-gray-500"}`}>{step2 ? <Check className="w-3.5 h-3.5" /> : 2}</span>
+          <span className="flex-1 text-sm"><span className={step2 ? "text-gray-500 line-through" : ""}>Receive budget</span> <span className="text-gray-400">· {step2 ? `assigned ${money(scoping.assignedBudget)}` : step1 ? "awaiting Karim's assignment" : "pending scoping submission"}</span></span>
+        </li>
+        <li className="flex items-start gap-3">
+          <span className="flex items-center justify-center w-6 h-6 rounded-full text-xs shrink-0 bg-gray-100 text-gray-500">3</span>
+          <span className="flex-1 text-sm"><span>Track budget</span> <span className="text-gray-400">· track spend against the assigned budget on the Budget tab — add vendor info on the Vendor tab to keep tracking accurate.</span></span>
+        </li>
+      </ol>
+    </div>
+  );
+}
+
 function Overview({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: string; onApplied: () => void }) {
   const facts = buildFacts(plan);
   // Use the cached digest; only regenerate on Resync (which also pulls Gmail).
   const [summary, setSummary] = useState<string | null>(plan.overviewSummary);
   const [resyncing, setResyncing] = useState(false);
   const [resyncMsg, setResyncMsg] = useState<string | null>(null);
+
+  // Scoping (client-side). The full form opens as a modal from the budget flow / glance card.
+  const [scoping, setScoping] = useState<ScopingData>(() => loadScoping(eventId));
+  const [scopingOpen, setScopingOpen] = useState(false);
+  const updateScoping = (s: ScopingData) => { setScoping(s); saveScoping(eventId, s); };
+  const roughTotal = (plan.budget?.lines ?? []).reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
 
   const resync = async () => {
     setResyncing(true); setResyncMsg(null);
@@ -1088,8 +1280,8 @@ function Overview({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: 
   // Genuinely pending = in motion. Freshly-seeded categories (still at "Sourced" with no
   // candidates) aren't actually pending yet, so they stay out of this box.
   const pendingEngagements = plan.engagements.filter((e) => e.stage !== "Contracted" && (e.candidates.length > 0 || e.stage !== "Sourced"));
-  const paidLines = (plan.budget?.lines ?? []).filter((l) => l.paymentStatus === "paid");
-  const pendingLines = (plan.budget?.lines ?? []).filter((l) => l.paymentStatus === "pending");
+  const paidLines = (plan.budget?.lines ?? []).filter((l) => l.status === "paid");
+  const pendingLines = (plan.budget?.lines ?? []).filter((l) => l.status === "quoted" || l.status === "in_review");
   // Status digest is stored as one fact per line → render as bullets.
   const summaryBullets = (summary ?? "").split("\n").map((l) => l.replace(/^[\s•\-*]+/, "").trim()).filter(Boolean);
   const upcoming = plan.deliverables
@@ -1114,6 +1306,15 @@ function Overview({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: 
         </div>
         {resyncMsg && <p className="text-xs text-gray-400 mt-2">{resyncMsg}</p>}
       </div>
+
+      {/* Scoping at-a-glance + budget flow (scoping form opens from here) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ScopingGlance plan={plan} scoping={scoping} roughTotal={roughTotal} onOpen={() => setScopingOpen(true)} />
+        <BudgetFlow scoping={scoping} onOpenScoping={() => setScopingOpen(true)} />
+      </div>
+      {scopingOpen && (
+        <ScopingForm plan={plan} scoping={scoping} roughTotal={roughTotal} onChange={updateScoping} onClose={() => setScopingOpen(false)} />
+      )}
 
       {/* Progress bars */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1373,6 +1574,7 @@ export function EventPlanningPage({ eventId, onBack, onViewPeople }: Props) {
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 text-gray-600">
               <div className="flex items-center gap-2"><Calendar className="w-5 h-5" /><span>{plan.date ?? "Date TBD"}</span></div>
               <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
+              <FormatPicker value={parseFormats(plan.format)} onChange={(arr) => { const format = joinFormats(arr); setPlan((p) => (p ? { ...p, format } : p)); void setEventFormat(eventId, format); }} />
               <button onClick={() => onViewPeople({ id: plan.id, name: plan.title, tag: plan.tags[0] ?? null, status: 'all' })} className="flex items-center gap-2 hover:text-gray-900 text-left">
                 <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
               </button>
@@ -1421,7 +1623,7 @@ export function EventPlanningPage({ eventId, onBack, onViewPeople }: Props) {
           : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
         {tab === "budget" && (plan.budget
-          ? <BudgetTracker budget={plan.budget} />
+          ? <BudgetTracker budget={plan.budget} eventId={eventId} />
           : <div className="bg-white rounded-2xl border border-black p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && <Deliverables eventId={eventId} initial={plan.deliverables} />}
         {tab === "page" && (

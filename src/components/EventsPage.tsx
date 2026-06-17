@@ -1,16 +1,21 @@
-import { Bookmark, Calendar, MapPin, LayoutGrid, List, Plus, ChevronDown, Link2, X, Search, Trash2, Check, Lightbulb } from "lucide-react";
+import { Bookmark, Calendar, MapPin, LayoutGrid, List, Plus, ChevronDown, Link2, X, Search, Trash2, Check } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, setEventFormat, generateTemplate, createPlanningEvent, backfillEvent, deleteEvent, previewCarriedLessons, type EventListItem, type EventStatus, type GeneratedTemplate, type CarriedLesson } from "../lib/db";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, generateTemplate, createPlanningEvent, backfillEvent, deleteEvent, type EventListItem, type EventStatus, type GeneratedTemplate } from "../lib/db";
 import { TagStack } from "./TagStack";
-import { FormatPicker } from "./FormatPicker";
+import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
 import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage } from "./EventPlanningPage";
 import { ConfirmModal } from "./Modal";
-import { tagColor } from "../lib/tags";
+import { EVENT_TAGS, TAG_CATEGORIES, tagColor } from "../lib/tags";
 
 const NOT_CAPTURED = "Not captured";
+
+// Solo "Just us" events get tagged by audience: internal events draw from the
+// Internal taxonomy category, external from the Hosted one.
+const INTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Internal")?.tags ?? [];
+const EXTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Hosted")?.tags ?? [];
 
 /**
  * A thin sliver of the event's dominant cover color in the lines view. On row hover
@@ -94,6 +99,52 @@ function templateDescription(e: EventListItem): string {
   return [heading, ...specs, "", "What’s different this time: "].join("\n");
 }
 
+/** Site-styled select dropdown — replaces the native <select> so the menu matches the
+ *  rest of the UI (white panel, black border, rounded) instead of the OS picker. */
+function SelectMenu({ value, options, onChange, className = "" }: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const current = options.find((o) => o.value === value) ?? options[0];
+  return (
+    <div className={`relative ${className}`} ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 w-full px-4 py-2 pr-3 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
+      >
+        <span className="truncate text-gray-700">{current?.label}</span>
+        <ChevronDown className="w-4 h-4 text-gray-400 shrink-0 ml-auto" />
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 left-0 min-w-full max-h-72 overflow-y-auto bg-white border border-black rounded-lg shadow-lg p-1">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+              className={`flex items-center justify-between gap-2 w-full text-left px-2 py-1.5 rounded text-sm hover:bg-gray-50 ${value === o.value ? 'bg-gray-100' : ''}`}
+            >
+              <span className="truncate">{o.label}</span>
+              {value === o.value && <Check className="w-4 h-4 text-gray-700 shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Site-styled tag filter dropdown — tags render as colored pills, like on the cards. */
 function TagFilter({ tags, value, onChange }: { tags: string[]; value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -123,13 +174,33 @@ function TagFilter({ tags, value, onChange }: { tags: string[]; value: string; o
           <button onClick={() => pick('all')} className={`flex items-center w-full text-left px-2 py-1.5 rounded text-sm hover:bg-gray-50 ${value === 'all' ? 'bg-gray-100' : ''}`}>
             All Tags
           </button>
-          {tags.length === 0 && <p className="px-2 py-1.5 text-sm text-gray-400">No tags yet.</p>}
-          {tags.map((t) => (
-            <button key={t} onClick={() => pick(t)} className={`flex items-center justify-between gap-2 w-full text-left px-2 py-1.5 rounded hover:bg-gray-50 ${value === t ? 'bg-gray-100' : ''}`}>
-              <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(t)}`}>{t}</span>
-              {value === t && <Check className="w-4 h-4 text-gray-700 shrink-0" />}
-            </button>
-          ))}
+          {/* Grouped by the tag taxonomy — same category headers + colors as the ＋ add-tag
+              dropdown. The full taxonomy is always shown so it matches the ＋ dropdown exactly. */}
+          {TAG_CATEGORIES.map((cat) => {
+            return (
+              <div key={cat.name} className="mt-1">
+                <p className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wide uppercase text-gray-400">{cat.name}</p>
+                {cat.tags.map((t) => (
+                  <button key={t} onClick={() => pick(t)} className={`flex items-center justify-between gap-2 w-full text-left px-2 py-1 rounded hover:bg-gray-50 ${value === t ? 'bg-gray-100' : ''}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(t)}`}>{t}</span>
+                    {value === t && <Check className="w-4 h-4 text-gray-700 shrink-0" />}
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+          {/* Custom/legacy tags outside the taxonomy. */}
+          {tags.filter((t) => !EVENT_TAGS.includes(t)).length > 0 && (
+            <div className="mt-1 border-t border-gray-100 pt-1">
+              <p className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wide uppercase text-gray-400">Other</p>
+              {tags.filter((t) => !EVENT_TAGS.includes(t)).map((t) => (
+                <button key={t} onClick={() => pick(t)} className={`flex items-center justify-between gap-2 w-full text-left px-2 py-1 rounded hover:bg-gray-50 ${value === t ? 'bg-gray-100' : ''}`}>
+                  <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(t)}`}>{t}</span>
+                  {value === t && <Check className="w-4 h-4 text-gray-700 shrink-0" />}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -137,9 +208,12 @@ function TagFilter({ tags, value, onChange }: { tags: string[]; value: string; o
 }
 
 function CreateEventModal({ events, onClose, onCreated }: { events: EventListItem[]; onClose: () => void; onCreated: (eventId: string) => void }) {
-  const [mode, setMode] = useState<'choose' | 'planFork' | 'planning' | 'backfill'>('choose');
+  const [mode, setMode] = useState<'choose' | 'planFork' | 'audience' | 'planning' | 'backfill'>('choose');
   // Set on the planning fork: solo (InstaLILY hosts alone) vs cohost (sharing hosting & cost).
   const [planKind, setPlanKind] = useState<'solo' | 'cohost'>('solo');
+  // Solo path only: internal vs external audience, then the specific taxonomy tag to apply.
+  const [audience, setAudience] = useState<'internal' | 'external' | null>(null);
+  const [eventTag, setEventTag] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   // The spec text we auto-filled from the selected template; lets us swap/clear it
@@ -165,32 +239,13 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
   // Once the description has real substance, give it room by shrinking the past-event grid.
   const descLong = description.trim().length > 140 || description.split('\n').length > 4;
 
-  // Carried lessons preview — surfaced before the draft is generated, matched on the
-  // start-from event and what's been described so far. Debounced; re-runs as inputs change.
-  const [lessons, setLessons] = useState<CarriedLesson[] | null>(null);
-  const [lessonsLoading, setLessonsLoading] = useState(false);
-  useEffect(() => {
-    if (mode !== 'planning') return;
-    const seed = events.find((e) => e.id === selected);
-    if (!selected && description.trim().length < 12) { setLessons(null); return; }
-    let cancelled = false;
-    setLessonsLoading(true);
-    const h = setTimeout(() => {
-      previewCarriedLessons({ name: description.trim() || seed?.title || '', format: seed?.format ?? null, tags: seed?.tags ?? [], modeledOnEventId: selected })
-        .then((l) => { if (!cancelled) setLessons(l); })
-        .catch(() => { if (!cancelled) setLessons([]); })
-        .finally(() => { if (!cancelled) setLessonsLoading(false); });
-    }, 600);
-    return () => { cancelled = true; clearTimeout(h); };
-  }, [mode, description, selected, events]);
-
   const createPlanned = async () => {
     if (!draft || !meta.name.trim()) return;
     setCreating(true); setCreateError(null);
     try {
-      // Solo events skip the up-front budget estimate — seed no budget lines.
-      const template = planKind === 'solo' ? { ...draft, budgetLines: [] } : draft;
-      const id = await createPlanningEvent({ name: meta.name.trim(), date: meta.date || null, location: meta.location.trim() || null, tags: [], template, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
+      // Budget make-up isn't set during create — it's populated later on the dashboard.
+      const template = { ...draft, budgetLines: [] };
+      const id = await createPlanningEvent({ name: meta.name.trim(), date: meta.date || null, location: meta.location.trim() || null, tags: eventTag ? [eventTag] : [], template, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
       if (meta.lumaUrl.trim()) { try { await attachLuma(id, meta.lumaUrl.trim()); } catch { /* event still created; attach later from the card */ } }
       onCreated(id);
     } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
@@ -220,6 +275,9 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
   const templateQuery = templateSearch.trim().toLowerCase();
   const templates = events
     .filter((e) => e.status === 'past')
+    // Only suggest past events sharing the tag chosen for this event, so the starting
+    // point matches its kind. No tag chosen yet → no constraint.
+    .filter((e) => !eventTag || e.tags.includes(eventTag))
     .filter((e) => !templateQuery || `${e.title} ${e.location ?? ''} ${e.seriesName ?? ''}`.toLowerCase().includes(templateQuery))
     .sort((a, b) => infoScore(b) - infoScore(a));
 
@@ -252,6 +310,14 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
     setGenError(null);
     try {
       const t = await generateTemplate(seed ? `${desc}\n\n(Model it loosely on a past event: ${seed.title})` : desc);
+      // Internal events (team socials, company milestones) don't need a marketing/promotion
+      // workstream by default — drop it from the drafted workstreams. Still re-addable below.
+      const isInternal = audience === 'internal' || (!!eventTag && INTERNAL_TAGS.includes(eventTag));
+      if (isInternal) {
+        t.progressCategories = t.progressCategories.filter(
+          (p) => !/market|promo|advertis|publicity|press|\bPR\b|\bcomms\b/i.test(p),
+        );
+      }
       setDraft(t);
       // Prefill event details parsed from the description — but never clobber what the user already typed.
       setMeta((m) => ({
@@ -295,7 +361,7 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
           <div>
             <p className="text-sm text-gray-600 mb-4">Are you planning this alone, or alongside someone else?</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <button onClick={() => { setPlanKind('solo'); setMode('planning'); }} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
+              <button onClick={() => { setPlanKind('solo'); setMode('audience'); }} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
                 <p className="text-lg font-medium">Just us</p>
                 <p className="text-sm text-gray-500 mt-1">InstaLILY hosts and covers the cost alone.</p>
               </button>
@@ -306,6 +372,41 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
             </div>
             <div className="mt-6 pt-4 border-t border-gray-100">
               <button onClick={() => setMode('choose')} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
+            </div>
+          </div>
+        ) : mode === 'audience' ? (
+          <div>
+            <p className="text-sm text-gray-600 mb-4">Is this an internal or external event?</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button onClick={() => { setAudience('internal'); setEventTag(null); }} className={`border rounded-xl p-6 text-left transition-colors ${audience === 'internal' ? 'border-black ring-2 ring-black' : 'border-black hover:bg-gray-50'}`}>
+                <p className="text-lg font-medium">Internal</p>
+                <p className="text-sm text-gray-500 mt-1">For our own team — team socials and company milestones.</p>
+              </button>
+              <button onClick={() => { setAudience('external'); setEventTag(null); }} className={`border rounded-xl p-6 text-left transition-colors ${audience === 'external' ? 'border-black ring-2 ring-black' : 'border-black hover:bg-gray-50'}`}>
+                <p className="text-lg font-medium">External</p>
+                <p className="text-sm text-gray-500 mt-1">For clients, partners, or the wider community.</p>
+              </button>
+            </div>
+
+            {audience && (
+              <div className="mt-6">
+                <h3 className="text-sm font-medium mb-3">Pick a tag</h3>
+                <div className="flex flex-wrap gap-2">
+                  {(audience === 'internal' ? INTERNAL_TAGS : EXTERNAL_TAGS).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => { setEventTag(t); setMode('planning'); }}
+                      className={`px-3 py-1.5 rounded-full text-sm transition ${tagColor(t)} ${eventTag === t ? 'ring-2 ring-black' : 'hover:brightness-95'}`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 pt-4 border-t border-gray-100">
+              <button onClick={() => { setAudience(null); setEventTag(null); setMode('planFork'); }} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
             </div>
           </div>
         ) : mode === 'planning' ? (
@@ -351,27 +452,6 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
               </div>
             )}
 
-            {(lessonsLoading || (lessons && lessons.length > 0)) && (
-              <div className="mt-5">
-                <h3 className="text-sm font-medium mb-2 flex items-center gap-1.5"><Lightbulb className="w-4 h-4 text-amber-500" /> Lessons from past events</h3>
-                {lessonsLoading && !lessons ? (
-                  <p className="text-sm text-gray-400">Finding comparable past events…</p>
-                ) : (
-                  <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 max-h-44 overflow-y-auto">
-                    {lessons!.map((l, i) => (
-                      <div key={i} className="px-3 py-2 flex gap-2">
-                        <Lightbulb className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
-                        <div>
-                          <p className="text-sm text-gray-700">{l.body}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">from {l.sourceEventName}{l.why ? ` · ${l.why}` : ''}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
             {!draft ? (
               <div className="mt-6">
                 {genError && <p className="text-red-600 text-sm mb-2">{genError}</p>}
@@ -408,35 +488,8 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
                   <ChipEditor items={draft.vendorCategories} onChange={(v) => patch({ vendorCategories: v })} placeholder="Add category" />
                 </div>
 
-                {/* Budget make-up — co-host only for now. Solo events skip the up-front
-                    estimate; budget comes later as a more exact breakdown. */}
-                {planKind === 'cohost' && (
-                  <div>
-                    <h3 className="text-sm font-medium mb-2">Budget make-up</h3>
-                    <div className="space-y-2">
-                      {draft.budgetLines.map((line, i) => (
-                        <div key={i} className="flex gap-2">
-                          <input
-                            value={line.label}
-                            onChange={(e) => patch({ budgetLines: draft.budgetLines.map((l, j) => (j === i ? { ...l, label: e.target.value } : l)) })}
-                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                          />
-                          <input
-                            type="number"
-                            value={line.estimate}
-                            onChange={(e) => patch({ budgetLines: draft.budgetLines.map((l, j) => (j === i ? { ...l, estimate: Number(e.target.value) } : l)) })}
-                            className="w-28 px-2 py-1 text-right border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                          />
-                          <button onClick={() => patch({ budgetLines: draft.budgetLines.filter((_, j) => j !== i) })} className="text-gray-400 hover:text-red-600"><X className="w-4 h-4" /></button>
-                        </div>
-                      ))}
-                      <button onClick={() => patch({ budgetLines: [...draft.budgetLines, { label: 'New line', estimate: 0 }] })} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
-                        <Plus className="w-4 h-4" /> Add line
-                      </button>
-                    </div>
-                    <p className="text-sm text-gray-500 mt-1">Est. total: ${draft.budgetLines.reduce((s, l) => s + (l.estimate || 0), 0).toLocaleString()}</p>
-                  </div>
-                )}
+                {/* Budget make-up is set up later on the planning dashboard (Review budget /
+                    Budget tab), where it can be dropped in as an exact breakdown. */}
 
                 <div>
                   <h3 className="text-sm font-medium mb-2">Progress workstreams</h3>
@@ -447,7 +500,7 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
 
             {createError && <p className="text-red-600 text-sm mt-4">{createError}</p>}
             <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-100">
-              <button onClick={() => (draft ? setDraft(null) : setMode('planFork'))} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
+              <button onClick={() => (draft ? setDraft(null) : setMode(planKind === 'solo' ? 'audience' : 'planFork'))} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
               <button
                 onClick={createPlanned}
                 disabled={!draft || !meta.name.trim() || creating}
@@ -575,7 +628,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       .catch((e) => setError(e.message ?? String(e)))
       .finally(() => setLoading(false));
 
-  useEffect(() => { void load(); }, []);
+  // Reload on mount and whenever we return from an event view, so edits made inside an
+  // event (e.g. formats) are reflected on its card.
+  useEffect(() => { void load(); }, [selectedEventId]);
 
   const submitLuma = async (eventId: string) => {
     setLumaBusy(true);
@@ -702,54 +757,36 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
             />
           </div>
 
-          <div className="relative">
-            <select
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-            >
-              <option value="all">All Locations</option>
-              {locations.map(location => (
-                <option key={location} value={location}>{location}</option>
-              ))}
-            </select>
-            <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
+          <SelectMenu
+            value={locationFilter}
+            onChange={setLocationFilter}
+            options={[{ value: 'all', label: 'All Locations' }, ...locations.map((l) => ({ value: l, label: l }))]}
+          />
 
-          <div className="relative">
-            <select
-              value={ownerFilter}
-              onChange={(e) => setOwnerFilter(e.target.value)}
-              className="appearance-none max-w-[11rem] truncate px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-            >
-              <option value="all">All Owners</option>
-              {owners.map(owner => (
-                <option key={owner} value={owner}>{owner}</option>
-              ))}
-            </select>
-            <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
+          <SelectMenu
+            value={ownerFilter}
+            onChange={setOwnerFilter}
+            className="max-w-[11rem]"
+            options={[{ value: 'all', label: 'All Owners' }, ...owners.map((o) => ({ value: o, label: o }))]}
+          />
 
           <TagFilter tags={tags} value={tagFilter} onChange={setTagFilter} />
 
           {/* Date filter — Past / All only */}
           {showDateFilter && (
             <>
-              <div className="relative">
-                <select
-                  value={dateRange}
-                  onChange={(e) => setDateRange(e.target.value as typeof dateRange)}
-                  className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-                >
-                  <option value="all">Any date</option>
-                  <option value="week">Past week</option>
-                  <option value="month">Past month</option>
-                  <option value="3months">Past 3 months</option>
-                  <option value="year">Past year</option>
-                  <option value="custom">Custom range…</option>
-                </select>
-                <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-              </div>
+              <SelectMenu
+                value={dateRange}
+                onChange={(v) => setDateRange(v as typeof dateRange)}
+                options={[
+                  { value: 'all', label: 'Any date' },
+                  { value: 'week', label: 'Past week' },
+                  { value: 'month', label: 'Past month' },
+                  { value: '3months', label: 'Past 3 months' },
+                  { value: 'year', label: 'Past year' },
+                  { value: 'custom', label: 'Custom range…' },
+                ]}
+              />
               {dateRange === 'custom' && (
                 <div className="flex items-center gap-2">
                   <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="px-3 py-2 border border-black rounded-lg text-sm" />
@@ -818,7 +855,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               )}
 
               <div className="flex items-center justify-between gap-2 mb-3 min-h-[2rem]">
-                <FormatPicker value={event.format} onChange={(f) => setFormatValue(event.id, f)} />
+                <TagStack tags={event.tags} editable onChange={(tags) => setTags(event.id, tags)} onTagClick={setTagFilter} />
                 <div className="flex items-center gap-2 shrink-0">
                   {event.attendeeCount != null && (
                     <>
@@ -855,7 +892,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                   <MapPin className="w-3 h-3" />
                   {event.location ?? NOT_CAPTURED}
                 </span>
-                <TagStack tags={event.tags} editable onChange={(tags) => setTags(event.id, tags)} onTagClick={setTagFilter} />
+                <FormatPicker value={parseFormats(event.format)} onChange={(arr) => setFormatValue(event.id, joinFormats(arr))} />
               </div>
 
               {/* Luma attach / link —  pinned to the card's bottom edge */}
