@@ -30,6 +30,8 @@ export interface EventListItem {
   format: string | null; // → eventType chip
   location: string | null;
   date: string | null; // event_date; null = not captured
+  startTime: string | null; // local "HH:MM"
+  endTime: string | null;   // local "HH:MM"
   status: EventStatus;
   owner: string | null; // joined owner names (for the list column/filter)
   owners: { id: string; name: string; color: string | null }[];
@@ -162,6 +164,8 @@ function toListItem(row: any): EventListItem {
     format: row.format ?? null,
     location: row.location ?? row.office ?? null,
     date: row.event_date ?? null,
+    startTime: row.start_time ?? null,
+    endTime: row.end_time ?? null,
     status: resolveStatus(row, series),
     ...ownersOf(row),
     attendeeCount: row.checked_in ?? null,
@@ -213,11 +217,13 @@ const newId = (prefix: string) => `${prefix}-` + (globalThis.crypto?.randomUUID?
  *  to the planning view. */
 export async function createPlanningEvent(input: {
   name: string; date: string | null; location: string | null; tags: string[]; template: GeneratedTemplate;
-  format?: string | null; hosting?: 'solo' | 'cohost'; coHost?: string | null; modeledOnEventId?: string | null;
+  format?: string | null; startTime?: string | null; endTime?: string | null;
+  hosting?: 'solo' | 'cohost'; coHost?: string | null; modeledOnEventId?: string | null;
 }): Promise<string> {
   const eventId = newId('evt');
   const { error: eErr } = await supabase.from('event').insert({
     id: eventId, name: input.name, event_date: input.date, location: input.location, format: input.format ?? null,
+    start_time: input.startTime ?? null, end_time: input.endTime ?? null,
     tags: input.tags, macro_stage: 'Planning', modeled_on_event_id: input.modeledOnEventId ?? null,
     hosting: input.hosting ?? 'solo', co_host: input.hosting === 'cohost' ? (input.coHost?.trim() || null) : null,
   });
@@ -464,6 +470,8 @@ export async function updateEvent(
     format?: string | null;
     audience?: string | null;
     location?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
   },
 ): Promise<void> {
   const patch: Record<string, unknown> = {};
@@ -473,6 +481,8 @@ export async function updateEvent(
   if ('format' in fields) patch.format = fields.format;
   if ('audience' in fields) patch.audience = fields.audience;
   if ('location' in fields) patch.location = fields.location;
+  if ('startTime' in fields) patch.start_time = fields.startTime;
+  if ('endTime' in fields) patch.end_time = fields.endTime;
   const { error } = await supabase.from('event').update(patch).eq('id', eventId);
   if (error) throw error;
 }
@@ -504,10 +514,11 @@ export async function addBudgetLine(budgetId: string, label: string, amount: num
   if (error) throw error;
   return { id, label, confirmedAmount: amount, linkedEngagement: null, isUncategorized: false, note: null };
 }
-export async function updateBudgetLine(id: string, fields: { label?: string; amount?: number | null }): Promise<void> {
+export async function updateBudgetLine(id: string, fields: { label?: string; amount?: number | null; note?: string | null }): Promise<void> {
   const patch: Record<string, unknown> = {};
   if ('label' in fields) patch.label = fields.label;
   if ('amount' in fields) patch.confirmed_amount = fields.amount;
+  if ('note' in fields) patch.note = fields.note;
   const { error } = await supabase.from('budget_line').update(patch).eq('id', id);
   if (error) throw error;
 }
@@ -909,11 +920,28 @@ export async function attachLuma(
   return data as any;
 }
 
+/** Create a brand-new Luma event from this event's info (name, date, start/end, location,
+ *  description) via the Luma API, then attach it. Server-side — holds the Luma key. */
+export async function createLumaEvent(
+  eventId: string,
+  overrides?: { name?: string; date?: string | null; startTime?: string | null; endTime?: string | null; location?: string | null; description?: string | null; timezone?: string },
+): Promise<{ lumaEventId: string; name: string | null; lumaUrl: string; coverImageUrl: string | null }> {
+  const { data, error } = await supabase.functions.invoke('create-luma', { body: { eventId, ...overrides } });
+  if (error) {
+    // supabase-js gives a generic message on non-2xx; the real error is in the response body.
+    let msg = (data as any)?.error ?? error.message ?? String(error);
+    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as any;
+}
+
 export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, format, location, office, event_date, rsvp, capacity, checked_in, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
+      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
     )
     .order('id');
   if (error) throw error;
@@ -991,7 +1019,7 @@ export async function getEventDetail(id: string): Promise<EventDetail | null> {
   const { data: row, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, description, format, location, office, event_date, rsvp, capacity, checked_in, waitlist_admitted, actual_attendance_note, audience, notes, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, cover_image_url, luma_cover_url, custom_cover_url, cover_position, ' +
+      'id, name, tag, tags, description, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, waitlist_admitted, actual_attendance_note, audience, notes, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, cover_image_url, luma_cover_url, custom_cover_url, cover_position, ' +
         'event_label ( label_id ), series:event_series ( id, name, type, status, owning_team, verdict )',
     )
     .eq('id', id)
@@ -1213,6 +1241,7 @@ export interface BudgetLineTracker {
   status: BudgetStatus;
   syncUrl: string | null;   // web address (vendor portal / quote thread) for email-synced updates
   docUrl: string | null;
+  note: string | null;      // free-text update / comment ("venue sent contract, waiting on…")
   linkedEngagement: string | null;
 }
 export interface PlanningBudget {
@@ -1242,6 +1271,8 @@ export interface EventPlanning {
   format: string | null;
   location: string | null;
   date: string | null;
+  startTime: string | null;
+  endTime: string | null;
   capacity: number | null;
   rsvp: number | null;
   owner: string | null;
@@ -1339,7 +1370,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, location, office, event_date, capacity, rsvp, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, location, office, event_date, start_time, end_time, capacity, rsvp, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -1353,7 +1384,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
       .order('id'),
     supabase
       .from('budget')
-      .select('id, currency, target_amount, lines:budget_line ( id, label, confirmed_amount, target, payment_status, sync_url, doc_url, linked_engagement )')
+      .select('id, currency, target_amount, lines:budget_line ( id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement )')
       .eq('event_id', eventId),
     supabase
       .from('deliverable')
@@ -1387,6 +1418,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
           status: normBudgetStatus(l.payment_status),
           syncUrl: l.sync_url ?? null,
           docUrl: l.doc_url ?? null,
+          note: l.note ?? null,
           linkedEngagement: l.linked_engagement ?? null,
         })),
       }
@@ -1408,6 +1440,8 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     tags: (row as any).tags ?? [],
     format: (row as any).format ?? null,
     location: (row as any).location ?? (row as any).office ?? null,
+    startTime: (row as any).start_time ?? null,
+    endTime: (row as any).end_time ?? null,
     date: (row as any).event_date ?? null,
     capacity: (row as any).capacity ?? null,
     rsvp: (row as any).rsvp ?? null,
@@ -1512,7 +1546,7 @@ export async function addTrackerLine(budgetId: string, label: string, amount: nu
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, confirmed_amount: amount });
   if (error) throw error;
-  return { id, label, confirmedAmount: amount, target: null, status: 'estimate', syncUrl: null, docUrl: null, linkedEngagement: null };
+  return { id, label, confirmedAmount: amount, target: null, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null };
 }
 export async function setBudgetStatus(id: string, status: BudgetStatus): Promise<void> {
   const { error } = await supabase.from('budget_line').update({ payment_status: status }).eq('id', id);
@@ -1540,18 +1574,18 @@ export async function addBudgetCategoryTarget(budgetId: string, label: string, t
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, target });
   if (error) throw error;
-  return { id, label, confirmedAmount: null, target, status: 'estimate', syncUrl: null, docUrl: null, linkedEngagement: null };
+  return { id, label, confirmedAmount: null, target, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null };
 }
 /** Re-read a budget's lines (used to refresh in place after a drop-import). */
 export async function listBudgetLines(budgetId: string): Promise<BudgetLineTracker[]> {
   const { data, error } = await supabase
     .from('budget_line')
-    .select('id, label, confirmed_amount, target, payment_status, sync_url, doc_url, linked_engagement')
+    .select('id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement')
     .eq('budget_id', budgetId);
   if (error) throw error;
   return (data ?? []).map((l: any) => ({
     id: l.id, label: l.label, confirmedAmount: l.confirmed_amount ?? null, target: l.target ?? null,
-    status: normBudgetStatus(l.payment_status), syncUrl: l.sync_url ?? null, docUrl: l.doc_url ?? null, linkedEngagement: l.linked_engagement ?? null,
+    status: normBudgetStatus(l.payment_status), syncUrl: l.sync_url ?? null, docUrl: l.doc_url ?? null, note: l.note ?? null, linkedEngagement: l.linked_engagement ?? null,
   }));
 }
 /** Bulk-insert budget lines (from a dropped breakdown). Amount → confirmed_amount. */

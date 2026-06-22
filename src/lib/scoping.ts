@@ -69,3 +69,33 @@ export const STATUS_LABEL: Record<ScopingStatus, string> = {
   submitted: "Submitted · awaiting budget",
   assigned: "Budget assigned",
 };
+
+// Required fields for submission.
+export const scopingComplete = (s: ScopingForm): boolean =>
+  s.type.trim() !== "" && s.audience.trim() !== "" && s.headcount.trim() !== "" && s.strategicJustification.trim() !== "";
+
+const fmtMoney = (n: number | null | undefined) =>
+  n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+
+// Formatted summary posted to the budget channel on submit (manual paste in V0). Shared by the
+// full form and the glance card so both produce the same text.
+export function buildScopingSummary(opts: { title: string; date: string | null; tags: string[]; scoping: ScopingForm; roughTotal: number }): string {
+  const { title, date, tags, scoping, roughTotal } = opts;
+  const funding = fundingFor(tags);
+  const lead = leadTimeCheck(date);
+  const headNum = Number(scoping.headcount) || null;
+  const perPerson = headNum && roughTotal ? roughTotal / headNum : null;
+  return [
+    `Scoping — ${title}`,
+    `Date: ${date ?? "TBD"}${lead.days != null ? ` (${lead.days}d lead${lead.ok ? "" : " — under 30d ⚠"})` : ""}`,
+    `Funding line: ${funding.fundingLine} · ${funding.tier}`,
+    `Type: ${scoping.type || "—"}`,
+    `Audience: ${scoping.audience || "—"} · ~${scoping.headcount || "—"} people`,
+    `Venue: ${scoping.venue || "—"}`,
+    `Components: ${scoping.components.join(", ") || "—"}`,
+    `Rough cost: ${fmtMoney(roughTotal)}${perPerson != null ? ` (${fmtMoney(perPerson)}/person)` : ""}`,
+    scoping.execSponsor ? `Exec sponsor: ${scoping.execSponsor}` : "",
+    "",
+    `Justification: ${scoping.strategicJustification}`,
+  ].filter(Boolean).join("\n");
+}

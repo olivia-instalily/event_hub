@@ -49,6 +49,32 @@ const isTotalLabel = (s: string) => /\b(total|subtotal|sum|grand\s*total)\b/i.te
 
 type Line = { label: string; amount: number | null };
 
+/** One-shot budget parse (no UI): delimiter-detect, pick the amount column (most parseable
+ *  numbers), label = first other column, skip header + total rows. Shared with the drop ingest
+ *  so dropping a CSV anywhere parses it the same way as the import modal. */
+export function parseBudgetText(text: string): Line[] {
+  const grid = parseDelimited(text);
+  if (grid.length === 0) return [];
+  const cols = Math.max(...grid.map((r) => r.length));
+  let amtCol = 1, best = -1;
+  for (let c = 0; c < cols; c++) {
+    const score = grid.filter((r) => parseAmount(r[c] ?? "") != null).length;
+    if (score > best) { best = score; amtCol = c; }
+  }
+  const labelCol = amtCol === 0 ? 1 : 0;
+  const hasHeader = parseAmount(grid[0][amtCol] ?? "") == null; // first row's amount cell isn't a number → header
+  const body = hasHeader ? grid.slice(1) : grid;
+  const out: Line[] = [];
+  for (const r of body) {
+    const label = (r[labelCol] ?? "").trim();
+    const amount = parseAmount(r[amtCol] ?? "");
+    if (!label && amount == null) continue;
+    if (isTotalLabel(label)) continue;
+    out.push({ label: label || "Untitled", amount });
+  }
+  return out;
+}
+
 // ── Click-to-choose control (explicit affordance; drag is handled by BudgetDropArea) ──
 export function BudgetDropZone({ label, onFile, className }: { label: string; onFile: (f: File) => void; className?: string }) {
   const inputRef = useRef<HTMLInputElement>(null);

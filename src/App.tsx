@@ -94,7 +94,7 @@ export default function Component() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
-              <button onClick={() => navTo('home')} className="text-xl mr-8 hover:opacity-70 transition-opacity" title="Home">InstaEvent</button>
+              <button onClick={() => navTo('home')} className="text-xl mr-8 hover:opacity-70 transition-opacity" title="Home">EventHub</button>
               <div className="flex gap-2">
                 {tab('home', <Home className="w-4 h-4" />, 'Home')}
                 {tab('events', <Calendar className="w-4 h-4" />, 'Events')}

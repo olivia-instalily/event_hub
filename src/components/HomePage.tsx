@@ -1,8 +1,9 @@
-import { Calendar, MapPin, CheckSquare, Plus } from "lucide-react";
+import { Calendar, MapPin, CheckSquare, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { listEvents, type EventListItem } from "../lib/db";
+import { listEvents, deleteEvent, type EventListItem } from "../lib/db";
 import { useProfile, initials } from "../lib/profile";
 import { TagStack } from "./TagStack";
+import { ConfirmModal } from "./Modal";
 
 const NOT_CAPTURED = "Not captured";
 
@@ -12,6 +13,14 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EventListItem | null>(null);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setEvents((prev) => prev.filter((e) => e.id !== id)); // optimistic
+    setDeleteTarget(null);
+    try { await deleteEvent(id); } catch (e: any) { setError(e.message ?? String(e)); }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -78,11 +87,18 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
           {!loading && !error && myEvents.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               {myEvents.map((event) => (
-                <button
+                <div
                   key={event.id}
                   onClick={() => onOpenEvent(event.id)}
-                  className="text-left bg-white rounded-2xl border border-black p-6 hover:shadow-md transition-shadow overflow-hidden flex flex-col"
+                  className="group relative text-left bg-white rounded-2xl border border-black p-6 hover:shadow-md transition-shadow overflow-hidden flex flex-col cursor-pointer"
                 >
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(event); }}
+                    className="absolute top-2 right-2 z-10 p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                    aria-label="Delete event"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                   {event.coverImageUrl && (
                     <img
                       src={event.coverImageUrl}
@@ -113,7 +129,7 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
                     </span>
                     {event.tags.length > 0 && <TagStack tags={event.tags} />}
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}
@@ -128,6 +144,17 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
           </div>
         </section>
       </div>
+
+      {deleteTarget && (
+        <ConfirmModal
+          title="Delete event"
+          message={`Delete “${deleteTarget.title}”? This can't be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmDelete}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   );
 }

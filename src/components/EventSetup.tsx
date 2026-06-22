@@ -1,18 +1,31 @@
 import { useEffect, useState } from "react";
 import {
   Calendar, Users, Link2, Check, ChevronDown, AlertCircle,
-  DollarSign, ClipboardList, ArrowRight,
+  DollarSign, ClipboardList, ArrowRight, Plus,
 } from "lucide-react";
 import {
   setEventDate, setHeadcount, setEventBudgetTarget, setBudgetTarget, saveSetupState,
   setBudgetLineTarget, addBudgetCategoryTarget,
-  getBudgetProjections, attachLuma, setDeliverableDueDate,
-  type EventPlanning, type BudgetProjection,
+  getBudgetProjections, attachLuma, setDeliverableDueDate, addDeliverable,
+  type EventPlanning, type BudgetProjection, type Deliverable,
 } from "../lib/db";
+import { dueOffsetForTitle } from "../lib/schedule";
 import { OwnerPicker } from "./OwnerPicker";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal } from "./BudgetImport";
 import { canonicalCategory, categoryKey } from "../lib/budgetCategories";
+
+// Standard deliverables we can guess for any event — surfaced as tentative suggestions in the
+// timeline step (each addable via ＋). Titles align with the schedule's workstream offsets.
+const TENTATIVE_DELIVERABLES: { title: string; phase: string }[] = [
+  { title: "Book venue & confirm space", phase: "Venue" },
+  { title: "Launch registration page", phase: "Marketing" },
+  { title: "Finalize catering & menu", phase: "Catering" },
+  { title: "Confirm speakers & moderators", phase: "Program" },
+  { title: "Lock A/V & production", phase: "Production" },
+  { title: "Send invites & track RSVPs", phase: "Guests" },
+  { title: "Run-of-show & day-of staffing", phase: "Logistics" },
+];
 
 const money = (n: number | null | undefined, currency = "USD") =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -94,7 +107,7 @@ export function EventSetup({ plan, eventId, onApplied }: { plan: EventPlanning; 
                     <BudgetStep plan={plan} eventId={eventId} onDone={() => completeStep("budget")} />
                   )}
                   {step.key === "timeline" && (
-                    <TimelineStep plan={plan} hasDate={!!date} onNeedsDate={() => setOpen("essentials")} onDone={() => completeStep("timeline")} />
+                    <TimelineStep plan={plan} eventId={eventId} hasDate={!!date} onNeedsDate={() => setOpen("essentials")} onDone={() => completeStep("timeline")} />
                   )}
                 </div>
               )}
@@ -339,15 +352,36 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
 }
 
 // ── Step 3: timeline ────────────────────────────────────────────────────────
-function TimelineStep({ plan, hasDate, onNeedsDate, onDone }: { plan: EventPlanning; hasDate: boolean; onNeedsDate: () => void; onDone: () => void }) {
+function TimelineStep({ plan, eventId, hasDate, onNeedsDate, onDone }: { plan: EventPlanning; eventId: string; hasDate: boolean; onNeedsDate: () => void; onDone: () => void }) {
+  const [items, setItems] = useState<Deliverable[]>(plan.deliverables);
   const [dues, setDues] = useState<Record<string, string | null>>(
     Object.fromEntries(plan.deliverables.map((d) => [d.id, d.dueDate])),
   );
-  const items = [...plan.deliverables].sort((a, b) => ((dues[a.id] ?? "9999").localeCompare(dues[b.id] ?? "9999")));
+  const sorted = [...items].sort((a, b) => ((dues[a.id] ?? "9999").localeCompare(dues[b.id] ?? "9999")));
   const setDue = async (id: string, iso: string | null) => {
     setDues((p) => ({ ...p, [id]: iso }));
     await setDeliverableDueDate(id, iso);
   };
+
+  // Guessed due date for a title: event date shifted by the standard offset.
+  const guessDue = (title: string): string | null => {
+    if (!plan.date) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const offset = dueOffsetForTitle(title, plan.date, today);
+    const d = new Date(plan.date + "T00:00:00"); d.setDate(d.getDate() + offset);
+    return d.toISOString().slice(0, 10);
+  };
+
+  // Tentative deliverables not yet added — each addable via ＋, which makes it a real, dated row.
+  const present = new Set(items.map((d) => d.title.toLowerCase().trim()));
+  const suggestions = TENTATIVE_DELIVERABLES.filter((s) => !present.has(s.title.toLowerCase()));
+  const addSuggestion = async (s: { title: string; phase: string }) => {
+    const due = guessDue(s.title);
+    const d = await addDeliverable(eventId, { title: s.title, phase: s.phase, ownerRole: null, dueDate: due });
+    setItems((p) => [...p, d]);
+    setDues((p) => ({ ...p, [d.id]: due }));
+  };
+
   return (
     <div className="mt-3">
       {!hasDate && (
@@ -355,11 +389,10 @@ function TimelineStep({ plan, hasDate, onNeedsDate, onDone }: { plan: EventPlann
           <AlertCircle className="w-4 h-4 shrink-0" /> Set the event date in step 1 to auto-schedule these — or set any date manually below. <span className="underline">Go to essentials</span>
         </button>
       )}
-      {items.length === 0 ? (
-        <p className="text-sm text-gray-400">No deliverables scaffolded.</p>
-      ) : (
+
+      {sorted.length > 0 && (
         <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
-          {items.map((d) => (
+          {sorted.map((d) => (
             <div key={d.id} className="px-3 py-2 flex items-center justify-between gap-3 text-sm">
               <div className="min-w-0">
                 <p className="truncate">{d.title}</p>
@@ -370,6 +403,25 @@ function TimelineStep({ plan, hasDate, onNeedsDate, onDone }: { plan: EventPlann
           ))}
         </div>
       )}
+
+      {suggestions.length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs font-medium text-gray-500 mb-1.5">{sorted.length === 0 ? "Suggested deliverables — add the ones you need" : "Add more"}</p>
+          <div className="rounded-lg border border-dashed border-gray-200 divide-y divide-gray-100">
+            {suggestions.map((s) => (
+              <div key={s.title} className="px-3 py-2 flex items-center justify-between gap-3 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate text-gray-500">{s.title}</p>
+                  <p className="text-xs text-gray-400">{s.phase}{plan.date ? ` · ~${guessDue(s.title)}` : ""}</p>
+                </div>
+                <button onClick={() => addSuggestion(s)} className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300 shrink-0"><Plus className="w-3.5 h-3.5" /> Add</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sorted.length === 0 && suggestions.length === 0 && <p className="text-sm text-gray-400">No deliverables.</p>}
       <StepFooter onDone={onDone} label="Looks good" />
     </div>
   );

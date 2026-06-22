@@ -1,7 +1,7 @@
-import { Bookmark, Calendar, MapPin, LayoutGrid, List, Plus, ChevronDown, Link2, X, Search, Trash2, Check } from "lucide-react";
+import { Bookmark, Calendar, MapPin, LayoutGrid, List, Plus, ChevronDown, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, setEventFormat, generateTemplate, createPlanningEvent, backfillEvent, deleteEvent, type EventListItem, type EventStatus, type GeneratedTemplate } from "../lib/db";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, type EventListItem, type EventStatus, type GeneratedTemplate } from "../lib/db";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
@@ -9,6 +9,8 @@ import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage } from "./EventPlanningPage";
 import { ConfirmModal } from "./Modal";
 import { EVENT_TAGS, TAG_CATEGORIES, tagColor } from "../lib/tags";
+import { emptyScoping, saveScoping } from "../lib/scoping";
+import { parseBudgetText } from "./BudgetImport";
 
 const NOT_CAPTURED = "Not captured";
 
@@ -16,6 +18,172 @@ const NOT_CAPTURED = "Not captured";
 // Internal taxonomy category, external from the Hosted one.
 const INTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Internal")?.tags ?? [];
 const EXTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Hosted")?.tags ?? [];
+
+// ── Event-brief (markdown/text) parsing ───────────────────────────────────────
+const titleCase = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());
+// Known formats, priority order. "networking"/"reception" are venues for mingling, not the
+// headline format, so they're excluded — a fireside + networking reception is a "Fireside".
+const FORMAT_KEYWORDS = ["fireside chat", "fireside", "happy hour", "dinner", "breakfast", "lunch", "summit", "hackathon", "workshop", "panel", "roundtable", "conference", "meetup", "demo day", "open house", "launch party", "launch", "retreat", "offsite", "mixer", "webinar"];
+function detectFormatKeyword(s: string): string | null {
+  const t = s.toLowerCase();
+  for (const kw of FORMAT_KEYWORDS) if (t.includes(kw)) return titleCase(kw);
+  return null;
+}
+function to24(h: string, mi: string | undefined, ap: string | undefined): string {
+  let hr = Number(h) % 12;
+  if ((ap ?? "").toLowerCase() === "pm") hr += 12;
+  return `${String(hr).padStart(2, "0")}:${(mi ?? "00").padStart(2, "0")}`;
+}
+function parseTimeRange(s: string): { start: string | null; end: string | null } | null {
+  const r = s.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:–|—|-|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+  if (r) {
+    const endAp = r[6].toLowerCase();
+    const startAp = (r[3] ?? endAp).toLowerCase(); // bare start time inherits the end's meridiem
+    return { start: to24(r[1], r[2], startAp), end: to24(r[4], r[5], endAp) };
+  }
+  const one = s.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+  return one ? { start: to24(one[1], one[2], one[3]), end: null } : null;
+}
+function parseBudgetAmount(text: string): number | null {
+  const m = text.match(/\$\s?([\d,]+(?:\.\d+)?)\s*(k|thousand|m|million)?/i);
+  if (!m) return null;
+  let n = Number(m[1].replace(/,/g, ""));
+  const unit = (m[2] || "").toLowerCase();
+  if (unit === "k" || unit === "thousand") n *= 1000;
+  if (unit === "m" || unit === "million") n *= 1_000_000;
+  return Number.isFinite(n) ? n : null;
+}
+interface ParsedBrief { title: string | null; owner: string | null; format: string | null; date: string | null; startTime: string | null; endTime: string | null; location: string | null; headcount: string | null; audience: string | null; justification: string | null; budgetTotal: number | null; }
+function parseBrief(text: string): ParsedBrief {
+  const lines = text.split(/\r?\n/);
+  // "**Key:** value" pairs (tolerant of leading bullets and the colon inside/outside the bold).
+  const labels: Record<string, string> = {};
+  for (const ln of lines) {
+    const m = ln.match(/^[-*\s]*\*\*\s*([^:*]+?)\s*:?\s*\*\*\s*:?\s*(.+?)\s*$/);
+    if (m) labels[m[1].trim().toLowerCase()] = m[2].trim();
+  }
+  const h1 = lines.find((l) => /^#\s+/.test(l));
+  const title = h1 ? h1.replace(/^#\s+/, "").replace(/^(event\s+brief|brief)\s*:\s*/i, "").trim() : null;
+  const dateLine = labels["target date"] ?? labels["date"] ?? text;
+  const tr = parseTimeRange(dateLine) ?? parseTimeRange(text);
+  // Headcount: a labeled field, or a fallback "~40 people / 40 guests / 40 attendees" anywhere.
+  const headcountLabel = labels["expected headcount"] ?? labels["headcount"] ?? labels["expected attendance"] ?? labels["attendance"] ?? "";
+  const headcount = (headcountLabel.match(/\d[\d,]*/)?.[0] ?? text.match(/(?:~|around |about |approx\.?\s*)?(\d{2,5})\s*(?:high-signal\s+)?(?:people|guests|attendees|engineers|folks|ppl)\b/i)?.[1] ?? "").replace(/,/g, "");
+  const sec = text.match(/##\s*(?:why|overview|strategic)[^\n]*\n+([\s\S]*?)(?:\n##|$)/i);
+  return {
+    title,
+    owner: labels["owner"] ?? null,
+    format: detectFormatKeyword(labels["type"] ?? "") ?? detectFormatKeyword(text),
+    date: parseDatePhrase(dateLine),
+    startTime: tr?.start ?? null,
+    endTime: tr?.end ?? null,
+    location: labels["location"] ?? null,
+    headcount: headcount || null,
+    audience: labels["audience"] ?? null,
+    justification: sec ? sec[1].trim().replace(/\n+/g, " ") : null,
+    budgetTotal: parseBudgetAmount(text),
+  };
+}
+
+// Collect files from a drop, descending into a dropped folder (entries are captured
+// synchronously during the drop, then traversed). Falls back to the flat file list.
+async function filesFromDrop(dt: DataTransfer): Promise<File[]> {
+  const entries = Array.from(dt.items || []).map((i) => (i as any).webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) return Array.from(dt.files);
+  const out: File[] = [];
+  const walk = async (entry: any): Promise<void> => {
+    if (entry.isFile) await new Promise<void>((res) => entry.file((f: File) => { out.push(f); res(); }, () => res()));
+    else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const readBatch = (): Promise<any[]> => new Promise((res) => reader.readEntries((e: any[]) => res(e), () => res([])));
+      let batch = await readBatch();
+      while (batch.length) { for (const e of batch) await walk(e); batch = await readBatch(); }
+    }
+  };
+  for (const e of entries) await walk(e);
+  return out.length ? out : Array.from(dt.files);
+}
+
+// ── Drop ingest: classify by CONTENT + type (not filename), extract, build a review ──
+type DropKind = "cover" | "budget" | "brief" | "unknown";
+interface Classified { kind: DropKind; name: string; text?: string; dataUrl?: string; file?: File }
+
+async function classifyDropFile(f: File): Promise<Classified> {
+  if (f.type.startsWith("image/")) return { kind: "cover", name: f.name, file: f, dataUrl: await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(f); }) };
+  let text = "";
+  try { text = await f.text(); } catch { return { kind: "unknown", name: f.name }; }
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const delimited = lines.filter((l) => /[,\t;]/.test(l));
+  const numericRows = lines.filter((l) => { const p = l.split(/[,\t;]/); return p.length > 1 && /\d/.test(p[p.length - 1] ?? ""); });
+  const delimitedFrac = lines.length ? delimited.length / lines.length : 0;
+  const numericFrac = lines.length ? numericRows.length / lines.length : 0;
+  // Markdown/brief structure wins for prose; a strongly tabular file (most rows delimited
+  // with a numeric last column) is a budget even if a cell happens to contain a sentence.
+  const hasMarkdown = /(^|\n)#{1,6}\s/.test(text) || /\*\*[^*\n]+:\*\*/.test(text);
+  const strongBudget = lines.length >= 2 && delimitedFrac >= 0.7 && numericFrac >= 0.5;
+  if (strongBudget && !hasMarkdown) return { kind: "budget", name: f.name, text };
+  if (hasMarkdown) return { kind: "brief", name: f.name, text };
+  if (strongBudget) return { kind: "budget", name: f.name, text };
+  const looksProse = /[.!?]\s/.test(text) && text.split(/\s+/).length > 20 && delimitedFrac < 0.5;
+  if (looksProse) return { kind: "brief", name: f.name, text };
+  if (delimitedFrac >= 0.5 && numericFrac >= 0.4) return { kind: "budget", name: f.name, text };
+  return { kind: "unknown", name: f.name, text };
+}
+
+interface IngestFields { name: string; format: string[]; date: string; startTime: string; endTime: string; headcount: string; venue: string; audience: string; components: string; justification: string }
+interface Ingest {
+  fields: IngestFields;
+  hasBrief: boolean;
+  cover: string | null;      // data URL for preview
+  coverFile: File | null;    // original image, uploaded to storage on create
+  budgetLines: { label: string; amount: number | null }[];
+  budgetSource: "file" | "brief" | null;
+  budgetLowConfidence: boolean;
+  conflict: { brief: number; file: number; fileLines: { label: string; amount: number | null }[]; briefLines: { label: string; amount: number | null }[] } | null;
+  owner: string | null;
+  warnings: string[];
+}
+
+// Lightweight parse of a free-text event description into title + date — used by the
+// "Skip & create" path (the generate path parses server-side). Format/type is handled
+// separately by the format-catalog auto-detect.
+const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function parseEventDescription(text: string): { title: string | null; date: string | null } {
+  const titleMatch = text.match(/\b(?:titled?|called)[:\s]+([^,;\n]+)/i);
+  return { title: titleMatch ? titleMatch[1].trim() : null, date: parseDatePhrase(text) };
+}
+// Planning is forward-looking — a parsed date in the past rolls to its next occurrence.
+function ensureUpcoming(iso: string | null): string | null {
+  if (!iso) return iso;
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (d >= todayMid) return iso;
+  d.setFullYear(now.getFullYear());
+  if (d < todayMid) d.setFullYear(now.getFullYear() + 1);
+  return d.toISOString().slice(0, 10);
+}
+function parseDatePhrase(text: string): string | null {
+  const iso = (y: number, mo: number, d: number) => `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const inferYear = (mo: number, d: number) => {
+    const now = new Date();
+    const cand = new Date(now.getFullYear(), mo - 1, d);
+    const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return cand < todayMid ? now.getFullYear() + 1 : now.getFullYear();
+  };
+  const t = text.toLowerCase();
+  let m = t.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?/);
+  if (m) { const mo = MONTHS[m[1]]; const d = Number(m[2]); return iso(m[3] ? Number(m[3]) : inferYear(mo, d), mo, d); }
+  m = t.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
+  if (m) {
+    const mo = Number(m[1]); const d = Number(m[2]);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) { let y = m[3] ? Number(m[3]) : inferYear(mo, d); if (y < 100) y += 2000; return iso(y, mo, d); }
+  }
+  return null;
+}
 
 /**
  * A thin sliver of the event's dominant cover color in the lines view. On row hover
@@ -208,7 +376,7 @@ function TagFilter({ tags, value, onChange }: { tags: string[]; value: string; o
 }
 
 function CreateEventModal({ events, onClose, onCreated }: { events: EventListItem[]; onClose: () => void; onCreated: (eventId: string) => void }) {
-  const [mode, setMode] = useState<'choose' | 'planFork' | 'audience' | 'planning' | 'backfill'>('choose');
+  const [mode, setMode] = useState<'choose' | 'planFork' | 'audience' | 'planning' | 'review' | 'backfill'>('choose');
   // Set on the planning fork: solo (InstaLILY hosts alone) vs cohost (sharing hosting & cost).
   const [planKind, setPlanKind] = useState<'solo' | 'cohost'>('solo');
   // Solo path only: internal vs external audience, then the specific taxonomy tag to apply.
@@ -223,11 +391,108 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [draft, setDraft] = useState<GeneratedTemplate | null>(null);
-  const [meta, setMeta] = useState({ name: '', date: '', location: '', lumaUrl: '', coHost: '' });
+  const [meta, setMeta] = useState({ name: '', date: '', startTime: '', endTime: '', location: '', lumaUrl: '', coHost: '' });
   const [bf, setBf] = useState({ name: '', date: '', location: '', description: '', lumaUrl: '' });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
+
+  // Format catalog + the event's formats. Auto-detected from the name/description (any
+  // catalog format whose term appears verbatim) until the user edits the field themselves.
+  const [formatCatalog, setFormatCatalog] = useState<string[]>([]);
+  const [formats, setFormats] = useState<string[]>([]);
+  const [formatTouched, setFormatTouched] = useState(false);
+  useEffect(() => { listFormats().then(setFormatCatalog).catch(() => {}); }, []);
+
+  // Dropped event-brief artifacts: a text brief prefills now; a cover image + budget sheet
+  // are stashed and applied right after the event is created.
+  const [briefDragOver, setBriefDragOver] = useState(false);
+  const [ingest, setIngest] = useState<Ingest | null>(null);
+  // Files dropped on the first (choose) screen, held until the user picks one of the three.
+  const [pendingDrop, setPendingDrop] = useState<File[] | null>(null);
+  const [choice, setChoice] = useState<'planning' | 'backfill' | null>(null);
+  const dragDepth = useRef(0);
+  const chooseFileRef = useRef<HTMLInputElement>(null);
+
+  // Continue from the choose screen: ingest the dropped files (if any) per the selection,
+  // else proceed through the normal flow.
+  const continueFromChoose = () => {
+    if (choice === 'planning') {
+      if (pendingDrop) { setPlanKind('solo'); const fs = pendingDrop; setPendingDrop(null); void handleBriefDrop(fs); }
+      else setMode('planFork');
+    } else if (choice === 'backfill') {
+      if (pendingDrop) { const fs = pendingDrop; setPendingDrop(null); void handleBackfillDrop(fs); }
+      else setMode('backfill');
+    }
+  };
+  // Classify every dropped input by content, extract per type, and assemble a single review.
+  const handleBriefDrop = async (files: File[]) => {
+    const classified = await Promise.all(files.map(classifyDropFile));
+    const briefs = classified.filter((c) => c.kind === "brief");
+    const budgets = classified.filter((c) => c.kind === "budget");
+    const covers = classified.filter((c) => c.kind === "cover");
+    const warnings: string[] = [];
+    if (briefs.length > 1) warnings.push(`${briefs.length} files looked like briefs — using the first; check the fields.`);
+    if (budgets.length > 1) warnings.push(`${budgets.length} files looked like budgets — using the first.`);
+    classified.filter((c) => c.kind === "unknown").forEach((c) => warnings.push(`Couldn't classify "${c.name}" — ignored.`));
+
+    const b = briefs[0]?.text ? parseBrief(briefs[0].text!) : null;
+    const fields: IngestFields = {
+      name: b?.title ?? "",
+      format: b?.format ? [b.format] : [],
+      date: ensureUpcoming(b?.date ?? null) ?? "",
+      startTime: b?.startTime ?? "",
+      endTime: b?.endTime ?? "",
+      headcount: b?.headcount ?? "",
+      venue: b?.location ?? "",
+      audience: b?.audience ?? "",
+      components: "",
+      justification: b?.justification ?? "",
+    };
+
+    const fileLines = budgets[0]?.text ? parseBudgetText(budgets[0].text!) : [];
+    const briefTotal = b?.budgetTotal ?? null;
+    const fileTotal = fileLines.reduce((s, r) => s + (r.amount ?? 0), 0);
+    const briefLines = briefTotal != null ? [{ label: "Estimated total (brief)", amount: briefTotal }] : [];
+
+    let budgetLines: { label: string; amount: number | null }[] = [];
+    let budgetSource: "file" | "brief" | null = null;
+    let budgetLowConfidence = false;
+    let conflict: Ingest["conflict"] = null;
+    if (fileLines.length && briefTotal != null && Math.abs(fileTotal - briefTotal) > 1) {
+      conflict = { brief: briefTotal, file: fileTotal, fileLines, briefLines };
+    } else if (fileLines.length) { budgetLines = fileLines; budgetSource = "file"; }
+    else if (briefTotal != null) { budgetLines = briefLines; budgetSource = "brief"; budgetLowConfidence = true; }
+
+    if (!briefs.length && (budgets.length || covers.length)) warnings.push("No brief detected — fill the event details below.");
+
+    setIngest({ fields, hasBrief: briefs.length > 0, cover: covers[0]?.dataUrl ?? null, coverFile: covers[0]?.file ?? null, budgetLines, budgetSource, budgetLowConfidence, conflict, owner: b?.owner ?? null, warnings });
+    setMode("review");
+  };
+
+  // Backfill (past event) drop: prefill the backfill form from a dropped brief. Keeps the
+  // parsed date as-is (it's a past event — don't roll it forward).
+  const handleBackfillDrop = async (files: File[]) => {
+    const classified = await Promise.all(files.map(classifyDropFile));
+    const brief = classified.find((c) => c.kind === "brief");
+    if (brief?.text) {
+      const b = parseBrief(brief.text);
+      setBf((prev) => ({
+        ...prev,
+        name: prev.name || b.title || "",
+        date: prev.date || b.date || "",
+        location: prev.location || b.location || "",
+        description: prev.description || brief.text!.slice(0, 2000),
+      }));
+    }
+    setMode("backfill");
+  };
+  useEffect(() => {
+    if (formatTouched || formatCatalog.length === 0) return;
+    const text = `${meta.name} ${description}`;
+    const found = formatCatalog.filter((f) => f.trim() && new RegExp(`\\b${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text));
+    setFormats(found);
+  }, [description, meta.name, formatCatalog, formatTouched]);
 
   // Auto-grow the describe box to fit its content (capped), so it expands as you type.
   useEffect(() => {
@@ -240,16 +505,54 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
   const descLong = description.trim().length > 140 || description.split('\n').length > 4;
 
   const createPlanned = async () => {
-    if (!draft || !meta.name.trim()) return;
+    // When skipping the draft, parse the free-text description for title/date (the generate
+    // path parses server-side); format/type is auto-detected into `formats` already.
+    const parsed = draft ? { title: null, date: null } : parseEventDescription(description);
+    const name = meta.name.trim() || parsed.title || description.trim().split('\n')[0].slice(0, 120).trim();
+    if (!name) return;
+    const date = meta.date || ensureUpcoming(parsed.date) || null;
     setCreating(true); setCreateError(null);
     try {
-      // Budget make-up isn't set during create — it's populated later on the dashboard.
-      const template = { ...draft, budgetLines: [] };
-      const id = await createPlanningEvent({ name: meta.name.trim(), date: meta.date || null, location: meta.location.trim() || null, tags: eventTag ? [eventTag] : [], template, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
+      // Skip the draft → a bare template; budget make-up is populated later on the dashboard.
+      const template: GeneratedTemplate = draft
+        ? { ...draft, budgetLines: [] }
+        : { name, vendorCategories: [], budgetLines: [], progressCategories: [] };
+      const id = await createPlanningEvent({ name, date, startTime: meta.startTime || null, endTime: meta.endTime || null, location: meta.location.trim() || null, tags: eventTag ? [eventTag] : [], format: joinFormats(formats), template, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
       if (meta.lumaUrl.trim()) { try { await attachLuma(id, meta.lumaUrl.trim()); } catch { /* event still created; attach later from the card */ } }
       onCreated(id);
     } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
   };
+
+  // Create from a reviewed drop ingest: event + cover + ESTIMATED budget lines (rough cost,
+  // never the assigned target) + seeded scoping fields. Owner matched by name if possible.
+  const createFromIngest = async () => {
+    if (!ingest) return;
+    const f = ingest.fields;
+    const name = f.name.trim() || 'Untitled event';
+    setCreating(true); setCreateError(null);
+    try {
+      const template: GeneratedTemplate = { name, vendorCategories: [], budgetLines: [], progressCategories: [] };
+      const id = await createPlanningEvent({ name, date: f.date || null, startTime: f.startTime || null, endTime: f.endTime || null, location: f.venue.trim() || null, tags: eventTag ? [eventTag] : [], format: joinFormats(f.format), template, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
+      // Upload the dropped cover to storage for a real hosted URL (Luma-reachable, no data: bloat);
+      // fall back to the inline data URL if the upload fails.
+      if (ingest.coverFile) { try { await updateEventCover(id, await uploadAttachment(ingest.coverFile)); } catch { if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } } } }
+      else if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } }
+      const lines = ingest.budgetLines.filter((l) => l.label.trim());
+      if (lines.length) { try { const p = await getEventPlanning(id); if (p?.budget) await addBudgetLines(p.budget.id, lines); } catch { /* non-fatal */ } }
+      if (ingest.owner) { try { const profs = await listProfiles(); const o = ingest.owner.toLowerCase(); const m = profs.find((p) => p.name.toLowerCase() === o) ?? profs.find((p) => p.name.toLowerCase().includes(o) || o.includes(p.name.toLowerCase())); if (m) await addEventOwner(id, m.id); } catch { /* non-fatal */ } }
+      const headNum = f.headcount.trim() ? Number(f.headcount) : null;
+      if (headNum != null && Number.isFinite(headNum)) { try { await setHeadcount(id, headNum); } catch { /* non-fatal */ } }
+      // Seed the scoping brief (assigned_budget stays null — Karim assigns it later).
+      saveScoping(id, { ...emptyScoping(), type: joinFormats(f.format) ?? '', audience: f.audience, venue: f.venue, components: f.components.split(',').map((s) => s.trim()).filter(Boolean), strategicJustification: f.justification, headcount: f.headcount, generated: !!ingest.hasBrief });
+      // If the drop already filled what the setup walkthrough collects (date, headcount,
+      // budget), skip Confirm essentials / Review budget / Check timeline → straight to Overview.
+      const setupCovered = !!f.date && headNum != null && lines.length > 0;
+      if (setupCovered) { try { await saveSetupState(id, ['essentials', 'budget', 'timeline'], true); } catch { /* non-fatal */ } }
+      onCreated(id);
+    } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
+  };
+  const patchIngest = (p: Partial<Ingest>) => setIngest((g) => (g ? { ...g, ...p } : g));
+  const patchIngestField = (k: keyof IngestFields, v: any) => setIngest((g) => (g ? { ...g, fields: { ...g.fields, [k]: v } } : g));
   const createBackfill = async () => {
     if (!bf.name.trim() || !bf.date) return;
     setCreating(true); setCreateError(null);
@@ -324,7 +627,7 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
         ...m,
         name: m.name.trim() || (t.name ?? ''),
         location: m.location.trim() || (t.location ? canonicalCity(t.location) : ''),
-        date: m.date || (t.date ?? ''),
+        date: m.date || ensureUpcoming(t.date ?? null) || '',
       }));
     } catch (e: any) {
       setGenError(e.message ?? String(e));
@@ -334,28 +637,57 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
   };
   const patch = (p: Partial<GeneratedTemplate>) => setDraft((d) => (d ? { ...d, ...p } : d));
 
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl border border-black max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="relative bg-white rounded-2xl border border-black max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6"
+        onClick={(e) => e.stopPropagation()}
+        onDragEnter={(e) => { if (mode === 'choose' && hasFiles(e)) { e.preventDefault(); dragDepth.current++; setBriefDragOver(true); } }}
+        onDragOver={(e) => { if (mode === 'choose' && hasFiles(e)) e.preventDefault(); }}
+        onDragLeave={() => { if (mode === 'choose') { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setBriefDragOver(false); } }}
+        onDrop={(e) => { if (mode !== 'choose') return; e.preventDefault(); dragDepth.current = 0; setBriefDragOver(false); void filesFromDrop(e.dataTransfer).then((fs) => { if (fs.length) setPendingDrop(fs); }); }}
+      >
+        {/* Drop overlay — covers the create popup while dragging files over it. */}
+        {mode === 'choose' && briefDragOver && (
+          <div className="absolute inset-0 z-20 bg-gray-200/85 border-4 border-dashed border-gray-400 rounded-2xl flex items-center justify-center pointer-events-none">
+            <span className="text-lg text-gray-700 inline-flex items-center gap-2"><Plus className="w-5 h-5" /> Drop CSV, brief, or folder to populate</span>
+          </div>
+        )}
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-2xl">Create event</h2>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
         </div>
 
         {mode === 'choose' ? (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <button onClick={() => setMode('planFork')} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
-              <p className="text-lg font-medium">We&apos;re planning</p>
-              <p className="text-sm text-gray-500 mt-1">InstaLILY is running this event — alone or alongside a co-host.</p>
-            </button>
-            <button disabled className="border border-gray-200 rounded-xl p-6 text-left opacity-60 cursor-not-allowed">
-              <p className="text-lg font-medium">I&apos;m attending</p>
-              <p className="text-sm text-gray-500 mt-1">A third party owns it; we attend, exhibit, or sponsor. Coming soon.</p>
-            </button>
-            <button onClick={() => setMode('backfill')} className="border border-black rounded-xl p-6 text-left hover:bg-gray-50 transition-colors">
-              <p className="text-lg font-medium">Backfill a past event</p>
-              <p className="text-sm text-gray-500 mt-1">Log an event that already happened.</p>
-            </button>
+          <div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <button onClick={() => setChoice('planning')} className={`border rounded-xl p-6 text-left transition-colors ${choice === 'planning' ? 'border-black ring-2 ring-black bg-gray-50' : 'border-black hover:bg-gray-50'}`}>
+                <p className="text-lg font-medium">We&apos;re planning</p>
+                <p className="text-sm text-gray-500 mt-1">InstaLILY is running this event — alone or alongside a co-host.</p>
+              </button>
+              <button disabled className="border border-gray-200 rounded-xl p-6 text-left opacity-60 cursor-not-allowed">
+                <p className="text-lg font-medium">I&apos;m attending</p>
+                <p className="text-sm text-gray-500 mt-1">A third party owns it; we attend, exhibit, or sponsor. Coming soon.</p>
+              </button>
+              <button onClick={() => setChoice('backfill')} className={`border rounded-xl p-6 text-left transition-colors ${choice === 'backfill' ? 'border-black ring-2 ring-black bg-gray-50' : 'border-black hover:bg-gray-50'}`}>
+                <p className="text-lg font-medium">Backfill a past event</p>
+                <p className="text-sm text-gray-500 mt-1">Log an event that already happened.</p>
+              </button>
+            </div>
+            <div className="flex items-center justify-between gap-3 mt-6 pt-4 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => chooseFileRef.current?.click()}
+                className={`inline-flex items-center gap-2 text-sm rounded-lg border border-dashed px-3 py-2 transition-colors ${pendingDrop ? 'border-green-400 text-green-700 bg-green-50' : 'border-gray-300 text-gray-500 hover:bg-gray-50'}`}
+              >
+                {pendingDrop
+                  ? <><Check className="w-4 h-4" /> {pendingDrop.length} file{pendingDrop.length === 1 ? '' : 's'} attached</>
+                  : <><Plus className="w-4 h-4" /> Drag &amp; drop or click — brief, CSV, cover, or folder</>}
+                <input ref={chooseFileRef} type="file" multiple hidden onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) setPendingDrop(fs); e.target.value = ''; }} />
+              </button>
+              <button onClick={continueFromChoose} disabled={!choice} className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40">Continue <ArrowRight className="w-4 h-4" /></button>
+            </div>
           </div>
         ) : mode === 'planFork' ? (
           <div>
@@ -410,15 +742,23 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
             </div>
           </div>
         ) : mode === 'planning' ? (
-          <div>
+          <div
+            onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); setBriefDragOver(true); } }}
+            onDragLeave={() => setBriefDragOver(false)}
+            onDrop={(e) => { e.preventDefault(); setBriefDragOver(false); void filesFromDrop(e.dataTransfer).then((fs) => { if (fs.length) void handleBriefDrop(fs); }); }}
+            className={`relative rounded-lg ${briefDragOver ? 'ring-2 ring-gray-400 ring-offset-4' : ''}`}
+          >
             <label className="text-sm font-medium block mb-1">Describe the event</label>
             <textarea
               ref={descRef}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="e.g. Fireside chat & networking for ~120 in Toronto…"
-              className="w-full px-3 py-2 border border-black rounded-lg text-sm mb-5 min-h-[5rem] resize-none overflow-hidden transition-[height] duration-150 focus:outline-none focus:ring-2 focus:ring-gray-300"
+              className="w-full px-3 py-2 border border-black rounded-lg text-sm mb-2 min-h-[5rem] resize-none overflow-hidden transition-[height] duration-150 focus:outline-none focus:ring-2 focus:ring-gray-300"
             />
+            <p className="text-xs mb-4 text-gray-400">
+              …or drop a brief, budget sheet (CSV), or cover image here — or a folder with all three. You'll review everything before anything's created.
+            </p>
 
             <h3 className="text-sm font-medium mb-3">Start from a past event <span className="text-gray-400 font-normal">(optional)</span></h3>
             <div className="relative mb-3">
@@ -474,9 +814,15 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
                     placeholder="Event name (required)"
                     className="w-full mb-2 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
                   />
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <input type="date" value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                    <span className="inline-flex items-center gap-1 text-sm text-gray-500">
+                      <input type="time" value={meta.startTime} onChange={(e) => setMeta({ ...meta, startTime: e.target.value })} title="Start time" className="px-2 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                      <span>–</span>
+                      <input type="time" value={meta.endTime} onChange={(e) => setMeta({ ...meta, endTime: e.target.value })} title="End time" className="px-2 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                    </span>
                     <LocationInput value={meta.location} onChange={(v) => setMeta({ ...meta, location: v })} style={{ width: `${Math.max(10, meta.location.length + 2)}ch` }} className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                    <FormatPicker value={formats} onChange={(arr) => { setFormats(arr); setFormatTouched(true); }} />
                   </div>
                   <input value={meta.lumaUrl} onChange={(e) => setMeta({ ...meta, lumaUrl: e.target.value })} placeholder="Luma link (optional) — add now or later" className="w-full mt-2 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                   {planKind === 'cohost' && (
@@ -503,12 +849,93 @@ function CreateEventModal({ events, onClose, onCreated }: { events: EventListIte
               <button onClick={() => (draft ? setDraft(null) : setMode(planKind === 'solo' ? 'audience' : 'planFork'))} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
               <button
                 onClick={createPlanned}
-                disabled={!draft || !meta.name.trim() || creating}
-                title={draft ? 'Creates the event and opens its planning dashboard' : 'Generate a template first'}
+                disabled={creating || (!meta.name.trim() && !description.trim())}
+                title={draft ? 'Creates the event and opens its planning dashboard' : 'Skips the draft and creates the event — flesh it out on the dashboard'}
                 className="px-4 py-2 bg-gray-200 text-black rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50 transition-colors"
               >
-                {creating ? 'Creating…' : 'Create event'}
+                {creating ? 'Creating…' : draft ? 'Create event' : 'Skip & create event'}
               </button>
+            </div>
+          </div>
+        ) : mode === 'review' && ingest ? (
+          <div className="space-y-5">
+            <p className="text-sm text-gray-500">Review everything pulled from what you dropped. Edit anything — nothing's created until you confirm.</p>
+
+            {ingest.warnings.length > 0 && (
+              <div className="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 space-y-1">
+                {ingest.warnings.map((w, i) => <p key={i} className="inline-flex items-start gap-1.5"><AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> {w}</p>)}
+              </div>
+            )}
+
+            {/* Event details — from the brief */}
+            <div className="rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-medium">Event details</h3>
+                <span className="text-[10px] uppercase tracking-wide text-gray-400 bg-gray-100 rounded px-1.5 py-0.5">{ingest.hasBrief ? 'from brief' : 'no brief — fill in'}</span>
+              </div>
+              <input value={ingest.fields.name} onChange={(e) => patchIngestField('name', e.target.value)} placeholder="Event name" className="w-full mb-2 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <input type="date" value={ingest.fields.date} onChange={(e) => patchIngestField('date', e.target.value)} className="px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <input type="time" value={ingest.fields.startTime} onChange={(e) => patchIngestField('startTime', e.target.value)} className="px-2 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <span className="text-gray-400">–</span>
+                <input type="time" value={ingest.fields.endTime} onChange={(e) => patchIngestField('endTime', e.target.value)} className="px-2 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <FormatPicker value={ingest.fields.format} onChange={(arr) => patchIngestField('format', arr)} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                <input value={ingest.fields.venue} onChange={(e) => patchIngestField('venue', e.target.value)} placeholder="Venue / location" className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <input value={ingest.fields.audience} onChange={(e) => patchIngestField('audience', e.target.value)} placeholder="Audience" className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <input value={ingest.fields.headcount} onChange={(e) => patchIngestField('headcount', e.target.value)} placeholder="Headcount" className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+              </div>
+              <textarea value={ingest.fields.justification} onChange={(e) => patchIngestField('justification', e.target.value)} rows={2} placeholder="Strategic justification (feeds the scoping form)" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-gray-300" />
+            </div>
+
+            {/* Budget — rough cost, never the assigned target */}
+            <div className="rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="font-medium">Budget <span className="text-gray-400 font-normal text-sm">· rough cost (scoping input)</span></h3>
+                {ingest.budgetSource && <span className={`text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 ${ingest.budgetLowConfidence ? 'bg-amber-100 text-amber-700' : 'text-gray-400 bg-gray-100'}`}>{ingest.budgetSource === 'file' ? 'from budget file' : 'from brief · low confidence'}</span>}
+              </div>
+              <p className="text-xs text-gray-400 mb-3">Not the assigned budget — Karim's locked target is set later in the scoping flow.</p>
+
+              {ingest.conflict ? (
+                <div className="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
+                  Conflict — the brief says <b>${ingest.conflict.brief.toLocaleString()}</b> but the budget file totals <b>${ingest.conflict.file.toLocaleString()}</b>. Pick the source of truth (I won't merge them):
+                  <span className="flex flex-wrap gap-2 mt-2">
+                    <button onClick={() => patchIngest({ budgetLines: ingest.conflict!.fileLines, budgetSource: 'file', budgetLowConfidence: false, conflict: null })} className="px-2.5 py-1 bg-gray-200 rounded text-xs hover:bg-gray-300">Use budget file (${ingest.conflict.file.toLocaleString()})</button>
+                    <button onClick={() => patchIngest({ budgetLines: ingest.conflict!.briefLines, budgetSource: 'brief', budgetLowConfidence: true, conflict: null })} className="px-2.5 py-1 bg-gray-200 rounded text-xs hover:bg-gray-300">Use brief (${ingest.conflict.brief.toLocaleString()})</button>
+                  </span>
+                </div>
+              ) : ingest.budgetLines.length === 0 ? (
+                <p className="text-sm text-gray-400">No budget detected — add lines on the Budget tab later.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {ingest.budgetLines.map((l, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input value={l.label} onChange={(e) => patchIngest({ budgetLines: ingest.budgetLines.map((x, j) => j === i ? { ...x, label: e.target.value } : x) })} className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                      <input type="number" value={l.amount ?? ''} onChange={(e) => patchIngest({ budgetLines: ingest.budgetLines.map((x, j) => j === i ? { ...x, amount: e.target.value === '' ? null : Number(e.target.value) } : x) })} className="w-28 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                      <button onClick={() => patchIngest({ budgetLines: ingest.budgetLines.filter((_, j) => j !== i) })} className="text-gray-300 hover:text-red-600"><X className="w-4 h-4" /></button>
+                    </div>
+                  ))}
+                  <p className="text-sm text-gray-500 text-right pt-1">Total: ${ingest.budgetLines.reduce((s, l) => s + (l.amount ?? 0), 0).toLocaleString()}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Cover */}
+            {ingest.cover && (
+              <div className="rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center justify-between mb-3"><h3 className="font-medium">Cover</h3><span className="text-[10px] uppercase tracking-wide text-gray-400 bg-gray-100 rounded px-1.5 py-0.5">from image</span></div>
+                <div className="flex items-center gap-3">
+                  <img src={ingest.cover} alt="" className="h-20 w-32 object-cover rounded-lg border border-gray-200" />
+                  <button onClick={() => patchIngest({ cover: null })} className="text-sm text-gray-500 hover:text-red-600">Remove</button>
+                </div>
+              </div>
+            )}
+
+            {createError && <p className="text-red-600 text-sm">{createError}</p>}
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+              <button onClick={() => { setIngest(null); setChoice(null); setMode('choose'); }} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
+              <button onClick={createFromIngest} disabled={creating || !ingest.fields.name.trim() || !!ingest.conflict} title={ingest.conflict ? 'Resolve the budget conflict first' : undefined} className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-50">{creating ? 'Creating…' : 'Create event'}</button>
             </div>
           </div>
         ) : (
@@ -886,7 +1313,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               <div className="flex flex-wrap items-center gap-2 mb-6">
                 <span className="px-3 py-1 bg-gray-100 rounded-md text-sm flex items-center gap-1">
                   <Calendar className="w-3 h-3" />
-                  {event.date ?? NOT_CAPTURED}
+                  {event.date ?? NOT_CAPTURED}{event.startTime ? ` · ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}` : ""}
                 </span>
                 <span className="px-3 py-1 bg-gray-100 rounded-md text-sm flex items-center gap-1">
                   <MapPin className="w-3 h-3" />
