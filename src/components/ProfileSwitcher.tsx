@@ -5,7 +5,7 @@ import { createProfile, updateProfile, deleteProfile, type Profile } from "../li
 
 function Avatar({ p }: { p: Profile | null }) {
   return (
-    <span className={`w-7 h-7 rounded-full text-white text-xs font-medium flex items-center justify-center shrink-0 ${p?.color ?? "bg-gray-400"}`}>
+    <span className={`w-7 h-7 rounded-full text-white text-[15px] font-medium flex items-center justify-center shrink-0 ${p?.color ?? "bg-gray-400"}`}>
       {p ? initials(p.name) : "?"}
     </span>
   );
@@ -52,8 +52,8 @@ export function ProfileSwitcher() {
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => { setOpen(false); setAdding(false); setEditId(null); }} />
-          <div className="absolute right-0 z-40 mt-1 w-72 bg-white border border-black rounded-lg shadow-lg p-1">
-            <p className="px-2 py-1 text-[11px] text-gray-400 uppercase tracking-wide">Acting as</p>
+          <div className="absolute right-0 z-40 mt-1 w-72 bg-white border border-border rounded-lg shadow-lg p-1">
+            <p className="px-2 py-1 text-[15px] text-gray-400 uppercase tracking-wide">Acting as</p>
             <div className="max-h-64 overflow-y-auto">
               {profiles.length === 0 && <p className="px-2 py-2 text-sm text-gray-400">No profiles yet — create one.</p>}
               {profiles.map((p) => (
@@ -62,7 +62,7 @@ export function ProfileSwitcher() {
                     <>
                       <Avatar p={p} />
                       <input autoFocus value={editName} onChange={(e) => setEditName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveEdit(p.id); }} className="flex-1 px-1 py-0.5 border border-gray-300 rounded text-sm focus:outline-none" />
-                      <button onClick={() => saveEdit(p.id)} className="text-xs text-gray-600 hover:text-gray-900">Save</button>
+                      <button onClick={() => saveEdit(p.id)} className="text-[15px] text-gray-600 hover:text-gray-900">Save</button>
                     </>
                   ) : (
                     <>
@@ -70,7 +70,7 @@ export function ProfileSwitcher() {
                         <Avatar p={p} />
                         <span className="min-w-0">
                           <span className="block text-sm truncate">{p.name}</span>
-                          {p.email && <span className="block text-xs text-gray-400 truncate">{p.email}</span>}
+                          {p.email && <span className="block text-[15px] text-gray-400 truncate">{p.email}</span>}
                         </span>
                       </button>
                       {current?.id === p.id && <Check className="w-4 h-4 text-gray-700 shrink-0" />}

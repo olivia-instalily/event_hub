@@ -19,17 +19,29 @@ const SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    kind: { type: "string", enum: ["contract", "complete", "note"] },
+    kind: { type: "string", enum: ["contract", "complete", "status", "note"] },
+    status: { type: "string", enum: ["Todo", "In Progress", "Done", ""], description: "target status when kind='status' (e.g. reopening → Todo, starting → In Progress); empty otherwise" },
     engagementId: { type: "string", description: "matched engagement id, or empty string" },
     deliverableId: { type: "string", description: "matched deliverable id, or empty string" },
     matchedName: { type: "string", description: "the vendor/category or task matched, or empty" },
     summary: { type: "string", description: "one-line activity summary" },
   },
-  required: ["kind", "engagementId", "deliverableId", "matchedName", "summary"],
+  required: ["kind", "status", "engagementId", "deliverableId", "matchedName", "summary"],
 };
 
 const CONTRACT_RE = /\b(sign|signed|signing|countersign|executed|contract|agreement|sow|booked|confirm(ed)?)\b/i;
 const DONE_RE = /\b(done|complete|completed|finished|closed|resolved|merged|shipped|wrapped)\b/i;
+const STARTED_RE = /\b(in[\s-]?progress|started|starting|kick(ed)?[\s-]?off|working on|underway|wip|in flight)\b/i;
+// Moving a task BACK / reopening / not-yet-started → Todo. Checked before DONE so "not done" wins.
+const TODO_RE = /\b(to[\s-]?do|todo|backlog|not done|reopen|re-?open|undo|revert|unfinish(ed)?|incomplete|not started|put back|move(d)? back|back to)\b/i;
+
+// Which status (if any) is this note asking for? Todo/In-Progress checked before Done.
+function detectStatus(text: string): "Todo" | "In Progress" | "Done" | null {
+  if (TODO_RE.test(text)) return "Todo";
+  if (STARTED_RE.test(text)) return "In Progress";
+  if (DONE_RE.test(text)) return "Done";
+  return null;
+}
 
 // Domain helpers — mirror of src/lib/url.ts (edge runtime can't import app code).
 const FREE_MAIL = new Set(["gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "icloud.com", "me.com", "aol.com", "proton.me", "protonmail.com"]);
@@ -60,23 +72,32 @@ function heuristic(text: string, source: string, from: string | null, engs: Eng[
   const byName = engs.find((e) => [e.category ?? "", ...e.names].some(has));
   const vendor = byDomain ?? byName;
 
-  if (CONTRACT_RE.test(text) && vendor) {
+  const target = detectStatus(text);
+
+  // A contract signing for a known vendor (only when it's not really a task status change).
+  if (CONTRACT_RE.test(text) && vendor && target !== "Todo" && target !== "In Progress") {
     const name = vendor.names[0] ?? vendor.category ?? "vendor";
-    return { kind: "contract", engagementId: vendor.id, deliverableId: "", matchedName: name, summary: `Signed contract detected via ${source} — ${vendor.category ?? name} → Contracted` };
+    return { kind: "contract", status: "", engagementId: vendor.id, deliverableId: "", matchedName: name, summary: `Signed contract detected via ${source} — ${vendor.category ?? name} → Contracted` };
   }
-  if (DONE_RE.test(text)) {
+
+  // A deliverable status change (Done / In Progress / Todo-reopen).
+  if (target) {
     const d = dels.find((d) => {
       const words = d.title.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
       return t.includes(d.title.toLowerCase()) || words.filter((w) => t.includes(w)).length >= Math.max(1, Math.ceil(words.length / 2));
     });
-    if (d) return { kind: "complete", engagementId: "", deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" moved to completed via ${source}` };
+    if (d) {
+      if (target === "Done") return { kind: "complete", status: "", engagementId: "", deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" moved to completed via ${source}` };
+      return { kind: "status", status: target, engagementId: "", deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" → ${target} via ${source}` };
+    }
   }
+
   // Otherwise: if it's from a known vendor domain, file it as correspondence on that decision.
   if (vendor) {
     const name = vendor.names[0] ?? vendor.category ?? "vendor";
-    return { kind: "note", engagementId: vendor.id, deliverableId: "", matchedName: name, summary: `${source[0].toUpperCase()}${source.slice(1)} from ${vendor.category ?? name}: ${text.slice(0, 70)}${text.length > 70 ? "…" : ""}` };
+    return { kind: "note", status: "", engagementId: vendor.id, deliverableId: "", matchedName: name, summary: `${source[0].toUpperCase()}${source.slice(1)} from ${vendor.category ?? name}: ${text.slice(0, 70)}${text.length > 70 ? "…" : ""}` };
   }
-  return { kind: "note", engagementId: "", deliverableId: "", matchedName: "", summary: `${source[0].toUpperCase()}${source.slice(1)} note: ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}` };
+  return { kind: "note", status: "", engagementId: "", deliverableId: "", matchedName: "", summary: `${source[0].toUpperCase()}${source.slice(1)} note: ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}` };
 }
 
 Deno.serve(async (req) => {
@@ -103,7 +124,12 @@ Deno.serve(async (req) => {
 
     const client = new Anthropic({ apiKey });
     const senderDomain = emailDomain(from);
-    const sys = `You triage an inbound ${source} note for an event-planning tool. Decide if it means a vendor contract was signed (kind="contract", set engagementId to the matching decision), an action item was completed (kind="complete", set deliverableId to the matching task), or it's just correspondence/none (kind="note"). Match the vendor primarily by SENDER DOMAIN against each engagement's "domains" (any address at that domain is the same vendor), then by name in the text. If it's a note but clearly from a known vendor's domain, still set engagementId so it files as that vendor's correspondence. Use empty strings when nothing matches. Write a concise one-line summary.`;
+    const sys = `You triage an inbound ${source} note for an event-planning tool. Pick one kind:
+- "contract": a vendor contract was signed — set engagementId to the matching decision.
+- "complete": an action item is finished/done — set deliverableId to the matching task, status="Done".
+- "status": an action item should move to a DIFFERENT status without being completed — set deliverableId and set status to "Todo" (reopen / move back / not started / undo) or "In Progress" (started / working on / kicked off).
+- "note": just correspondence / nothing actionable.
+Match the vendor primarily by SENDER DOMAIN against each engagement's "domains" (any address at that domain is the same vendor), then by name in the text. Match deliverables by title words appearing in the note. If it's a note but clearly from a known vendor's domain, still set engagementId so it files as that vendor's correspondence. Use empty strings when nothing matches; set status="" unless kind="status". Write a concise one-line summary.`;
     const payload = { note: text, senderDomain, engagements: engs, deliverables: dels };
     const resp = await (client.messages.create as any)({
       model: "claude-haiku-4-5", max_tokens: 1024, system: sys,
@@ -113,7 +139,7 @@ Deno.serve(async (req) => {
     const tb = (resp.content as any[]).find((b) => b.type === "text");
     if (!tb) return json(heuristic(text, source, from, engs, dels));
     const out = JSON.parse(tb.text);
-    return json({ ...out, engagementId: out.engagementId || null, deliverableId: out.deliverableId || null, matchedName: out.matchedName || null });
+    return json({ ...out, engagementId: out.engagementId || null, deliverableId: out.deliverableId || null, matchedName: out.matchedName || null, status: out.status || null });
   } catch (e) {
     return json({ error: String((e as Error)?.message ?? e) }, 500);
   }

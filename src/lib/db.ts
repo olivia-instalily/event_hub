@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
+import { matchFormat } from './formats';
 
 // The prototype's status tabs are future / in-process / past. Series carry richer
 // macro stages ("Wrapped", "Live", ...). Map them onto the three the UI has.
@@ -41,12 +42,15 @@ export interface EventListItem {
   lumaEventId: string | null;
   lumaUrl: string | null;
   lumaName: string | null;
+  gcalEventId: string | null;   // set ⇒ synced to Google Calendar
+  gcalHtmlLink: string | null;  // deep link to the Google Calendar event
   coverImageUrl: string | null; // active/displayed cover
   lumaCoverUrl: string | null;
   customCoverUrl: string | null;
   coverPosition: string | null;
   labelIds: string[];
   macroStage: string | null; // set ⇒ an event we're actively planning (routes to the planning view)
+  isTemplate: boolean; // a reusable Event Type (open slots), not a concrete instance
 }
 
 export interface Speaker {
@@ -102,6 +106,7 @@ export interface EventDetail extends EventListItem {
   checkedIn: number | null;
   waitlistAdmitted: number | null;
   notes: string[];
+  sourceMaterials: SourceMaterial[];
   speakers: Speaker[];
   attendees: AttendeeView[];
   reflections: Reflection[];
@@ -174,12 +179,15 @@ function toListItem(row: any): EventListItem {
     lumaEventId: row.luma_event_id ?? null,
     lumaUrl: row.luma_url ?? null,
     lumaName: row.luma_name ?? null,
+    gcalEventId: row.gcal_event_id ?? null,
+    gcalHtmlLink: row.gcal_html_link ?? null,
     coverImageUrl: row.cover_image_url ?? null,
     lumaCoverUrl: row.luma_cover_url ?? null,
     customCoverUrl: row.custom_cover_url ?? null,
     coverPosition: row.cover_position ?? null,
     labelIds: (row.event_label ?? []).map((l: any) => l.label_id),
     macroStage: row.macro_stage ?? null,
+    isTemplate: row.is_template ?? false,
   };
 }
 
@@ -218,12 +226,22 @@ const newId = (prefix: string) => `${prefix}-` + (globalThis.crypto?.randomUUID?
 export async function createPlanningEvent(input: {
   name: string; date: string | null; location: string | null; tags: string[]; template: GeneratedTemplate;
   format?: string | null; startTime?: string | null; endTime?: string | null;
+  phases?: { name: string; order: number }[]; planningLeadTime?: string | null;
   hosting?: 'solo' | 'cohost'; coHost?: string | null; modeledOnEventId?: string | null;
+  isTemplate?: boolean;
+  agenda?: { time: string; title: string }[]; staffRoles?: string[]; reflections?: string[];
+  walkthrough?: WalkStep[]; heuristics?: string[]; outreach?: OutreachTemplate[];
 }): Promise<string> {
   const eventId = newId('evt');
+  // Snap the format to the closest existing one before storing (no near-duplicate formats).
+  const format = await canonicalizeFormat(input.format ?? null);
   const { error: eErr } = await supabase.from('event').insert({
-    id: eventId, name: input.name, event_date: input.date, location: input.location, format: input.format ?? null,
+    id: eventId, name: input.name, event_date: input.date, location: input.location, format,
     start_time: input.startTime ?? null, end_time: input.endTime ?? null,
+    phases: input.phases ?? [], planning_lead_time: input.planningLeadTime ?? null,
+    agenda: input.agenda ?? [], staff_roles: input.staffRoles ?? [], reflections: input.reflections ?? [],
+    walkthrough: input.walkthrough ?? [], heuristics: input.heuristics ?? [], outreach: input.outreach ?? [],
+    is_template: input.isTemplate ?? false,
     tags: input.tags, macro_stage: 'Planning', modeled_on_event_id: input.modeledOnEventId ?? null,
     hosting: input.hosting ?? 'solo', co_host: input.hosting === 'cohost' ? (input.coHost?.trim() || null) : null,
   });
@@ -251,6 +269,13 @@ export async function createPlanningEvent(input: {
     return { id: newId('del'), event_id: eventId, title: p, phase: 'Planning', status: 'Todo', due_offset_days: offset, resolved_due_date: resolved };
   });
   if (delRows.length) { const { error } = await supabase.from('deliverable').insert(delRows); if (error) throw error; }
+
+  // Every event/template carries a non-deletable post-event post-mortem deliverable.
+  // Placed in the last phase (else "Wrap"), a couple days after the event (offset +2).
+  const lastPhase = (input.phases ?? []).slice().sort((a, b) => a.order - b.order).pop()?.name ?? 'Wrap';
+  const pmOffset = 2;
+  const pmDue = base ? (() => { const d = new Date(base); d.setDate(d.getDate() + pmOffset); return d.toISOString().slice(0, 10); })() : null;
+  { const { error } = await supabase.from('deliverable').insert({ id: newId('del'), event_id: eventId, title: 'Post-event reflections & insights', phase: lastPhase, status: 'Todo', offset_start: pmOffset, resolved_due_date: pmDue, locked: true }); if (error) throw error; }
 
   return eventId;
 }
@@ -387,17 +412,17 @@ export async function removeDeveloper(id: string): Promise<void> {
 }
 
 // ── Profiles (pre-auth "current user") ───────────────────────────────────────
-export interface Profile { id: string; name: string; email: string | null; color: string | null; createdAt: string; }
+export interface Profile { id: string; name: string; email: string | null; color: string | null; createdAt: string; isAdmin: boolean; }
 export async function listProfiles(): Promise<Profile[]> {
-  const { data, error } = await supabase.from('profile').select('id, name, email, color, created_at').order('created_at');
+  const { data, error } = await supabase.from('profile').select('id, name, email, color, created_at, is_admin').order('created_at');
   if (error) throw error;
-  return (data ?? []).map((p: any) => ({ id: p.id, name: p.name, email: p.email ?? null, color: p.color ?? null, createdAt: p.created_at }));
+  return (data ?? []).map((p: any) => ({ id: p.id, name: p.name, email: p.email ?? null, color: p.color ?? null, createdAt: p.created_at, isAdmin: p.is_admin ?? false }));
 }
 export async function createProfile(name: string, email: string | null, color: string): Promise<Profile> {
   const id = newId('prof');
   const { error } = await supabase.from('profile').insert({ id, name, email, color });
   if (error) throw error;
-  return { id, name, email, color, createdAt: new Date().toISOString() };
+  return { id, name, email, color, createdAt: new Date().toISOString(), isAdmin: false };
 }
 export async function updateProfile(id: string, fields: { name?: string; email?: string | null }): Promise<void> {
   const patch: Record<string, unknown> = {};
@@ -442,6 +467,27 @@ export async function addFormat(name: string): Promise<void> {
   if (!n) return;
   const { error } = await supabase.from('format_catalog').insert({ name: n });
   if (error && !String(error.message ?? '').toLowerCase().includes('duplicate')) throw error;
+}
+/** Snap a (possibly comma-joined) format to the existing vocabulary before it's stored, so
+ *  every created event/template reuses the closest existing format rather than minting a
+ *  near-duplicate ("Community run + coffee" → "Run"). Genuinely-new formats join the catalog. */
+export async function canonicalizeFormat(format: string | null | undefined): Promise<string | null> {
+  if (!format || !format.trim()) return null;
+  const tokens = format.split(',').map((s) => s.trim()).filter(Boolean);
+  const { data } = await supabase.from('format_catalog').select('name');
+  const catalog = (data ?? []).map((r: any) => r.name as string);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tok of tokens) {
+    const m = matchFormat(tok, catalog);
+    const key = m.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key); out.push(m);
+    if (!catalog.some((c) => c.toLowerCase() === key)) {
+      try { await supabase.from('format_catalog').insert({ name: m }); catalog.push(m); } catch { /* dup/non-fatal */ }
+    }
+  }
+  return out.join(', ') || null;
 }
 export async function removeFormat(name: string): Promise<void> {
   const { error } = await supabase.from('format_catalog').delete().eq('name', name);
@@ -588,6 +634,10 @@ export interface PersonView {
   labelIds: string[];
   eventsCount: number; // attendance frequency (all-people view)
   eventDates: string[]; // dates of events attended (all-people view)
+  eventCities: string[]; // distinct cities of events attended (all-people view) — drives the city tabs
+  // Greenhouse read-back (thin, admin-gated): cached application status flag, matched by email.
+  applicationStatus: string | null; // 'applied' | 'in_pipeline' | 'hired' | null
+  greenhouseLastSynced: string | null;
   // event-scoped (only populated in the per-event view):
   role?: string;
   registrationStatus?: string | null;
@@ -661,7 +711,7 @@ export async function getEventPeopleStats(eventId: string): Promise<PeopleStats>
 export async function listAllAttendees(): Promise<PersonView[]> {
   const { data, error } = await supabase
     .from('attendee')
-    .select('id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, attendee_label ( label_id ), attendee_event ( event:event ( event_date ) )')
+    .select('id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, application_status, greenhouse_last_synced, attendee_label ( label_id ), attendee_event ( event:event ( event_date, location ) )')
     .order('name', { nullsFirst: false });
   if (error) throw error;
   return (data ?? []).map((r: any) => {
@@ -684,6 +734,9 @@ export async function listAllAttendees(): Promise<PersonView[]> {
       labelIds: (r.attendee_label ?? []).map((l: any) => l.label_id),
       eventsCount: links.length,
       eventDates: links.map((l: any) => l.event?.event_date).filter(Boolean),
+      eventCities: Array.from(new Set(links.map((l: any) => l.event?.location).filter(Boolean))),
+      applicationStatus: r.application_status ?? null,
+      greenhouseLastSynced: r.greenhouse_last_synced ?? null,
     };
   });
 }
@@ -692,7 +745,7 @@ export async function listAllAttendees(): Promise<PersonView[]> {
 export async function listAttendeesForEvent(eventId: string): Promise<PersonView[]> {
   const { data, error } = await supabase
     .from('attendee_event')
-    .select('role_at_event, registration_status, checked_in, attendee:attendee ( id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, attendee_label ( label_id ), attendee_event ( count ) )')
+    .select('role_at_event, registration_status, checked_in, attendee:attendee ( id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, application_status, greenhouse_last_synced, attendee_label ( label_id ), attendee_event ( count ) )')
     .eq('event_id', eventId);
   if (error) throw error;
   return (data ?? []).map((l: any) => ({
@@ -713,6 +766,9 @@ export async function listAttendeesForEvent(eventId: string): Promise<PersonView
     labelIds: (l.attendee?.attendee_label ?? []).map((x: any) => x.label_id),
     eventsCount: l.attendee?.attendee_event?.[0]?.count ?? 0,
     eventDates: [],
+    eventCities: [],
+    applicationStatus: l.attendee?.application_status ?? null,
+    greenhouseLastSynced: l.attendee?.greenhouse_last_synced ?? null,
     role: l.role_at_event,
     registrationStatus: l.registration_status ?? null,
     checkedIn: l.checked_in ?? false,
@@ -752,6 +808,17 @@ export async function getPersonEvents(attendeeId: string): Promise<PersonEvent[]
     .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
 }
 
+// Auto-tag InstaLILY staff: any @instalily.ai email gets the "Internal" person label.
+async function labelInternalIfInstalily(attendeeId: string, email: string | null): Promise<string | null> {
+  if (!email || !email.trim().toLowerCase().endsWith('@instalily.ai')) return null;
+  let id: string | null = null;
+  const { data } = await supabase.from('label').select('id').eq('scope', 'person').ilike('name', 'internal').limit(1);
+  id = data?.[0]?.id ?? null;
+  if (!id) { id = 'lbl-internal'; await supabase.from('label').insert({ id, name: 'Internal', scope: 'person' }).then(() => {}, () => {}); }
+  await supabase.from('attendee_label').insert({ attendee_id: attendeeId, label_id: id }).then(() => {}, () => {});
+  return id;
+}
+
 // ── Attendees: manual add, headshots, per-event speaker tagging ──────────────
 export async function addAttendee(eventId: string, fields: { name: string; title?: string | null; org?: string | null; email?: string | null; isSpeaker?: boolean }): Promise<PersonView> {
   const id = newId('att');
@@ -763,10 +830,12 @@ export async function addAttendee(eventId: string, fields: { name: string; title
     id: newId('ae'), attendee_id: id, event_id: eventId, role_at_event: fields.isSpeaker ? 'speaker' : 'attendee',
   });
   if (lErr) throw lErr;
+  const internalId = await labelInternalIfInstalily(id, fields.email ?? null);
   return {
     id, name: fields.name, email: fields.email ?? null, title: fields.title ?? null, org: fields.org ?? null,
     type: 'Unknown', isAggregate: false, countEst: null, note: null, school: null, city: null, industry: null,
-    linkedinUrl: null, photoUrl: null, labelIds: [], eventsCount: 1, eventDates: [],
+    linkedinUrl: null, photoUrl: null, labelIds: internalId ? [internalId] : [], eventsCount: 1, eventDates: [], eventCities: [],
+    applicationStatus: null, greenhouseLastSynced: null,
     role: fields.isSpeaker ? 'speaker' : 'attendee', registrationStatus: null, checkedIn: false,
   };
 }
@@ -833,6 +902,39 @@ export async function removeEventOwner(eventId: string, profileId: string): Prom
   if (error) throw error;
 }
 
+// ── Owner todos (Home dashboard) ──────────────────────────────────────────────
+export interface OwnerTodo { id: string; title: string; eventId: string; eventName: string; dueDate: string | null; phase: string | null; phaseOrder: number }
+/** Upcoming (not-done) deliverables across the events this profile owns. Ordered by the
+ *  earliest unfinished PHASE first (e.g. "Plan it" before "Day-of"), then soonest due — so
+ *  the most urgent, earliest-phase work surfaces on top. Templates excluded. */
+export async function listOwnerTodos(profileId: string): Promise<OwnerTodo[]> {
+  const { data: owned, error: oErr } = await supabase
+    .from('event_owner')
+    .select('event:event ( id, name, is_template, phases )')
+    .eq('profile_id', profileId);
+  if (oErr) throw oErr;
+  const events = (owned ?? []).map((r: any) => r.event).filter((e: any) => e && !e.is_template);
+  const nameById = new Map<string, string>(events.map((e: any) => [e.id, e.name]));
+  const phasesById = new Map<string, { name: string; order: number }[]>(events.map((e: any) => [e.id, Array.isArray(e.phases) ? e.phases : []]));
+  const ids = [...nameById.keys()];
+  if (ids.length === 0) return [];
+  const { data: dels, error: dErr } = await supabase
+    .from('deliverable')
+    .select('id, title, phase, resolved_due_date, status, event_id')
+    .in('event_id', ids)
+    .neq('status', 'Done');
+  if (dErr) throw dErr;
+  return (dels ?? [])
+    .map((d: any) => {
+      const phs = phasesById.get(d.event_id) ?? [];
+      const idx = phs.findIndex((p) => p.name === (d.phase ?? ''));
+      const phaseOrder = idx >= 0 ? (phs[idx].order ?? idx) : 99; // unphased → last
+      return { id: d.id, title: d.title, eventId: d.event_id, eventName: nameById.get(d.event_id) ?? '', dueDate: d.resolved_due_date ?? null, phase: d.phase ?? null, phaseOrder };
+    })
+    // Earliest phase first; then soonest due (undated last).
+    .sort((a, b) => (a.phaseOrder - b.phaseOrder) || (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'));
+}
+
 // ── Threaded notes ──────────────────────────────────────────────────────────
 export interface Note {
   id: string;
@@ -872,13 +974,14 @@ export async function addNote(attendeeId: string, body: string, contributor: str
 /** Edit a person's free-text context (notes, manually-added LinkedIn). */
 export async function updateAttendee(
   id: string,
-  fields: { note?: string | null; linkedinUrl?: string | null; title?: string | null; org?: string | null },
+  fields: { note?: string | null; linkedinUrl?: string | null; title?: string | null; org?: string | null; type?: string | null },
 ): Promise<void> {
   const patch: Record<string, unknown> = {};
   if ('note' in fields) patch.note = fields.note;
   if ('linkedinUrl' in fields) patch.linkedin_url = fields.linkedinUrl;
   if ('title' in fields) patch.title = fields.title;   // speaker role
   if ('org' in fields) patch.org = fields.org;         // speaker company
+  if ('type' in fields) patch.type = fields.type;      // Client / Hire / Partner / … (post-event tagging)
   const { error } = await supabase.from('attendee').update(patch).eq('id', id);
   if (error) throw error;
 }
@@ -903,6 +1006,56 @@ export async function generateTemplate(description: string): Promise<GeneratedTe
   }
   if ((data as any)?.error) throw new Error((data as any).error);
   return data as GeneratedTemplate;
+}
+
+// One end-to-end contract with the extract-brief edge function. Strings come back as ""
+// (not null) when the brief doesn't state them; numbers come back as null.
+export interface SourceMaterial { name: string; url: string; type: string }
+export interface WalkStep { title: string; rationale: string; phase: string; linkedKind: "deliverable" | "role" | null; linkedLabel: string; isCallout: boolean }
+export interface OutreachTemplate { title: string; whenToUse: string; body: string }
+export interface ExtractedBrief {
+  title: string; owner: string; date: string; startTime: string; endTime: string; location: string;
+  headcount: number | null; audience: string; format: string; tag: string | null;
+  specificity: "event" | "template";
+  overview: string; guardrails: string[]; heuristics: string[]; phases: string[];
+  deliverables: { title: string; phase: string; offsetStart: number | null; offsetEnd: number | null }[];
+  vendors: string[]; staff: string[]; agenda: { time: string; title: string }[];
+  walkthrough: WalkStep[]; outreach: OutreachTemplate[]; budgetTotal: number | null;
+}
+/** Extract a dropped brief into structured fields via Claude (server-side). */
+export async function extractBrief(text: string): Promise<ExtractedBrief> {
+  const { data, error } = await supabase.functions.invoke('extract-brief', { body: { text } });
+  if (error) {
+    const msg = (data as any)?.error ?? error.message ?? String(error);
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as ExtractedBrief;
+}
+
+// ── Greenhouse read-back (thin, email-matched application status) ─────────────
+export interface GreenhouseMatch { email: string; candidateId: string; status: "applied" | "in_pipeline" | "hired" | "none" }
+/** Sync the cached Greenhouse application-status flag onto attendees by email (server-side,
+ *  read-scoped key). Writes only the thin flag + last_synced — never pipeline detail. */
+export async function syncGreenhouse(emails: string[]): Promise<{ configured: boolean; matched: number; synced: number; error?: string }> {
+  const clean = Array.from(new Set(emails.filter(Boolean).map((e) => e.trim().toLowerCase()))).filter(Boolean);
+  if (clean.length === 0) return { configured: true, matched: 0, synced: 0 };
+  const { data, error } = await supabase.functions.invoke('greenhouse-sync', { body: { emails: clean } });
+  if (error) return { configured: false, matched: 0, synced: 0, error: (data as any)?.error ?? error.message };
+  if ((data as any)?.error) return { configured: false, matched: 0, synced: 0, error: (data as any).error };
+  const matches: GreenhouseMatch[] = (data as any)?.matches ?? [];
+  const byEmail = new Map(matches.map((m) => [m.email.toLowerCase(), m]));
+  const now = new Date().toISOString();
+  // Persist the thin flag. Match attendees case-insensitively on email; no match → leave the
+  // status null (NOT "didn't apply" — they may have applied with a different address).
+  for (const email of clean) {
+    const m = byEmail.get(email);
+    const patch = m && m.status !== "none"
+      ? { greenhouse_candidate_id: m.candidateId, application_status: m.status, greenhouse_last_synced: now }
+      : { greenhouse_candidate_id: m?.candidateId ?? null, application_status: null, greenhouse_last_synced: now };
+    try { await supabase.from('attendee').update(patch).ilike('email', email); } catch { /* non-fatal */ }
+  }
+  return { configured: true, matched: matches.filter((m) => m.status !== "none").length, synced: clean.length };
 }
 
 /** Attach a Luma event from a pasted public link. Server-side resolution + write. */
@@ -937,11 +1090,70 @@ export async function createLumaEvent(
   return data as any;
 }
 
+/** Push this event onto the shared company Google Calendar (one toggleable secondary
+ *  calendar under calendar@instalily.ai). Idempotent — re-running patches the same entry.
+ *  Server-side holds the Google credentials. Requires the event to have a date. */
+export async function syncEventToGoogleCalendar(
+  eventId: string,
+): Promise<{ gcalEventId: string; calendarId: string; htmlLink: string | null }> {
+  const { data, error } = await supabase.functions.invoke('gcal-sync', { body: { eventId } });
+  if (error) {
+    let msg = (data as any)?.error ?? error.message ?? String(error);
+    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as any;
+}
+
+/** Mirror this event + all its deliverables into Linear: the event becomes a Project under the
+ *  single "EventHub" team, and each deliverable an Issue in that project. Idempotent — re-running
+ *  updates existing issues. Server-side holds the Linear API key. */
+export async function syncEventToLinear(
+  eventId: string,
+): Promise<{ teamId: string; projectId: string; projectUrl: string | null; synced: number; total: number }> {
+  const { data, error } = await supabase.functions.invoke('linear-sync', { body: { eventId } });
+  if (error) {
+    let msg = (data as any)?.error ?? error.message ?? String(error);
+    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as any;
+}
+
+/** Pull the current Linear issue states back onto this event's deliverables (Linear → EventHub).
+ *  Updates each linked deliverable's status to match its issue. Returns how many changed. */
+export async function pullEventFromLinear(
+  eventId: string,
+): Promise<{ pulled: number; total: number }> {
+  const { data, error } = await supabase.functions.invoke('linear-sync', { body: { eventId, direction: 'pull' } });
+  if (error) {
+    let msg = (data as any)?.error ?? error.message ?? String(error);
+    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as any;
+}
+
+/** Post a message to a Slack channel via the bot token (server-side). */
+export async function slackSend(channel: string, text: string): Promise<{ channel: string; ts: string }> {
+  const { data, error } = await supabase.functions.invoke('slack-send', { body: { channel, text } });
+  if (error) {
+    let msg = (data as any)?.error ?? error.message ?? String(error);
+    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as any;
+}
+
 export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
+      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, macro_stage, owning_team, status, is_template, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
     )
     .order('id');
   if (error) throw error;
@@ -995,6 +1207,7 @@ export async function getConsolidatedBudget(): Promise<ConsolidatedBudget> {
   monthAgo.setMonth(monthAgo.getMonth() - 1);
   const monthAgoStr = monthAgo.toISOString().slice(0, 10);
   const rows: EventBudgetRollup[] = events
+    .filter((e) => !e.isTemplate) // templates are reusable types, not budgeted events
     .map((e) => {
       const t = byEvent.get(e.id) ?? { estimate: 0, paid: 0 };
       return { eventId: e.id, name: e.title, status: e.status, date: e.date, tags: e.tags, format: e.format, estimate: t.estimate, paid: t.paid };
@@ -1019,7 +1232,7 @@ export async function getEventDetail(id: string): Promise<EventDetail | null> {
   const { data: row, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, description, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, waitlist_admitted, actual_attendance_note, audience, notes, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, cover_image_url, luma_cover_url, custom_cover_url, cover_position, ' +
+      'id, name, tag, tags, description, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, waitlist_admitted, actual_attendance_note, audience, notes, source_materials, macro_stage, owning_team, status, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, cover_image_url, luma_cover_url, custom_cover_url, cover_position, ' +
         'event_label ( label_id ), series:event_series ( id, name, type, status, owning_team, verdict )',
     )
     .eq('id', id)
@@ -1111,6 +1324,7 @@ export async function getEventDetail(id: string): Promise<EventDetail | null> {
     checkedIn: (row as any).checked_in ?? null,
     waitlistAdmitted: (row as any).waitlist_admitted ?? null,
     notes: (row as any).notes ?? [],
+    sourceMaterials: Array.isArray((row as any).source_materials) ? (row as any).source_materials as SourceMaterial[] : [],
     speakers,
     attendees,
     reflections,
@@ -1256,9 +1470,15 @@ export interface Deliverable {
   phase: string | null;
   ownerRole: string | null;
   dueDate: string | null;
+  offsetStart: number | null; // days from event date (negative = before)
+  offsetEnd: number | null;   // optional range end
   status: string | null;
   linearIssueId: string | null;
+  linearIssueUrl: string | null; // deep link to the Linear issue, once synced
+  locked: boolean;            // non-deletable (e.g. the mandatory post-mortem)
 }
+export interface EventPhase { name: string; order: number }
+export interface RunOfShowItem { time: string; title: string }
 export interface CarriedLesson {
   body: string;
   sourceEventName: string;
@@ -1270,9 +1490,20 @@ export interface EventPlanning {
   tags: string[];
   format: string | null;
   location: string | null;
+  description: string | null;
   date: string | null;
   startTime: string | null;
   endTime: string | null;
+  phases: EventPhase[];
+  planningLeadTime: string | null;
+  agenda: RunOfShowItem[];
+  staffRoles: string[];
+  reflections: string[];
+  walkthrough: WalkStep[];
+  heuristics: string[];
+  outreach: OutreachTemplate[];
+  sourceMaterials: SourceMaterial[];
+  isTemplate: boolean;
   capacity: number | null;
   rsvp: number | null;
   owner: string | null;
@@ -1282,6 +1513,10 @@ export interface EventPlanning {
   overviewSummary: string | null;
   lumaUrl: string | null;
   lumaEventId: string | null;
+  gcalEventId: string | null;
+  gcalHtmlLink: string | null;
+  linearProjectId: string | null;
+  linearProjectUrl: string | null;
   coverImageUrl: string | null;
   lumaCoverUrl: string | null;
   customCoverUrl: string | null;
@@ -1370,7 +1605,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, location, office, event_date, start_time, end_time, capacity, rsvp, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, is_template, capacity, rsvp, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -1388,7 +1623,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
       .eq('event_id', eventId),
     supabase
       .from('deliverable')
-      .select('id, title, phase, owner_role, resolved_due_date, status, linear_issue_id')
+      .select('id, title, phase, owner_role, resolved_due_date, offset_start, offset_end, status, linear_issue_id, linear_issue_url, locked')
       .eq('event_id', eventId)
       .order('resolved_due_date', { nullsFirst: true }),
   ]);
@@ -1430,8 +1665,12 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     phase: d.phase ?? null,
     ownerRole: d.owner_role ?? null,
     dueDate: d.resolved_due_date ?? null,
+    offsetStart: d.offset_start ?? null,
+    offsetEnd: d.offset_end ?? null,
     status: d.status ?? null,
     linearIssueId: d.linear_issue_id ?? null,
+    linearIssueUrl: d.linear_issue_url ?? null,
+    locked: d.locked ?? false,
   }));
 
   return {
@@ -1440,6 +1679,17 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     tags: (row as any).tags ?? [],
     format: (row as any).format ?? null,
     location: (row as any).location ?? (row as any).office ?? null,
+    description: (row as any).description ?? null,
+    phases: Array.isArray((row as any).phases) ? (row as any).phases as EventPhase[] : [],
+    planningLeadTime: (row as any).planning_lead_time ?? null,
+    agenda: Array.isArray((row as any).agenda) ? (row as any).agenda as RunOfShowItem[] : [],
+    staffRoles: Array.isArray((row as any).staff_roles) ? (row as any).staff_roles as string[] : [],
+    reflections: Array.isArray((row as any).reflections) ? (row as any).reflections as string[] : [],
+    walkthrough: Array.isArray((row as any).walkthrough) ? (row as any).walkthrough as WalkStep[] : [],
+    heuristics: Array.isArray((row as any).heuristics) ? (row as any).heuristics as string[] : [],
+    outreach: Array.isArray((row as any).outreach) ? (row as any).outreach as OutreachTemplate[] : [],
+    sourceMaterials: Array.isArray((row as any).source_materials) ? (row as any).source_materials as SourceMaterial[] : [],
+    isTemplate: (row as any).is_template ?? false,
     startTime: (row as any).start_time ?? null,
     endTime: (row as any).end_time ?? null,
     date: (row as any).event_date ?? null,
@@ -1451,6 +1701,10 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     overviewSummary: (row as any).overview_summary ?? null,
     lumaUrl: (row as any).luma_url ?? null,
     lumaEventId: (row as any).luma_event_id ?? null,
+    gcalEventId: (row as any).gcal_event_id ?? null,
+    gcalHtmlLink: (row as any).gcal_html_link ?? null,
+    linearProjectId: (row as any).linear_project_id ?? null,
+    linearProjectUrl: (row as any).linear_project_url ?? null,
     coverImageUrl: (row as any).cover_image_url ?? null,
     lumaCoverUrl: (row as any).luma_cover_url ?? null,
     customCoverUrl: (row as any).custom_cover_url ?? null,
@@ -1474,6 +1728,51 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
   };
 }
 
+// ── Templates → spin up a concrete event ─────────────────────────────────────
+export interface TemplateChild { id: string; name: string; date: string | null; turnout: number | null }
+/** Events spun up from a template (modeled_on_event_id === templateId). Read-only links;
+ *  their actuals refine the template's show-rate + budget ranges over time. */
+export async function eventsFromTemplate(templateId: string): Promise<TemplateChild[]> {
+  const { data, error } = await supabase
+    .from('event')
+    .select('id, name, event_date, checked_in, rsvp')
+    .eq('modeled_on_event_id', templateId)
+    .order('event_date', { nullsFirst: false });
+  if (error) throw error;
+  return (data ?? []).map((e: any) => ({ id: e.id, name: e.name, date: e.event_date ?? null, turnout: e.checked_in ?? e.rsvp ?? null }));
+}
+
+/** Spin up a live event from a template: COPIES everything (no back-reference that would
+ *  propagate future template edits), resolves every deliverable offset to a real date from
+ *  the chosen date, and records modeled_on_event_id for the "events from this template" list. */
+export async function spinUpFromTemplate(templateId: string, opts: { name: string; date: string | null; location: string | null; tags?: string[] }): Promise<string> {
+  const t = await getEventPlanning(templateId);
+  if (!t) throw new Error('Template not found');
+  const newId = await createPlanningEvent({
+    name: opts.name, date: opts.date, location: opts.location,
+    startTime: t.startTime, endTime: t.endTime, tags: opts.tags && opts.tags.length ? opts.tags : t.tags, format: t.format,
+    phases: t.phases, planningLeadTime: t.planningLeadTime,
+    agenda: t.agenda, staffRoles: t.staffRoles, reflections: t.reflections,
+    walkthrough: t.walkthrough, heuristics: t.heuristics, outreach: t.outreach,
+    template: { name: opts.name, vendorCategories: t.engagements.map((e) => e.category).filter((c): c is string => !!c), budgetLines: [], progressCategories: [] },
+    isTemplate: false, modeledOnEventId: templateId,
+  });
+  // Copy deliverables, resolving offsets → due dates against the chosen date. Skip the
+  // template's locked post-mortem — createPlanningEvent already added a fresh one.
+  const base = opts.date ? new Date(opts.date + 'T00:00:00') : null;
+  for (const d of t.deliverables) {
+    if (d.locked) continue;
+    let due: string | null = null;
+    if (base && d.offsetStart != null) { const dt = new Date(base); dt.setDate(dt.getDate() + d.offsetStart); due = dt.toISOString().slice(0, 10); }
+    try { await addDeliverable(newId, { title: d.title, phase: d.phase ?? 'Planning', ownerRole: d.ownerRole, dueDate: due, offsetStart: d.offsetStart, offsetEnd: d.offsetEnd }); } catch { /* non-fatal */ }
+  }
+  // Copy any budget lines the template carried.
+  if (t.budget?.lines.length) {
+    try { const np = await getEventPlanning(newId); if (np?.budget) await addBudgetLines(np.budget.id, t.budget.lines.filter((l) => l.label).map((l) => ({ label: l.label as string, amount: l.confirmedAmount ?? l.target }))); } catch { /* non-fatal */ }
+  }
+  return newId;
+}
+
 // ── Macro stage ─────────────────────────────────────────────────────────────
 export async function setMacroStage(eventId: string, stage: string): Promise<void> {
   const { error } = await supabase.from('event').update({ macro_stage: stage }).eq('id', eventId);
@@ -1481,10 +1780,15 @@ export async function setMacroStage(eventId: string, stage: string): Promise<voi
 }
 
 // ── Engagements (vendor decisions) ──────────────────────────────────────────
-export async function addEngagement(eventId: string, category: string): Promise<EngagementWithCandidates> {
+export async function addEngagement(eventId: string, category: string, estimate: number | null = null): Promise<EngagementWithCandidates> {
   const id = genId('eng');
   const { error } = await supabase.from('engagement').insert({ id, event_id: eventId, category, stage: 'Sourced' });
   if (error) throw error;
+  // A vendor decision is a cost → mirror it as a linked budget line so it shows on the Budget page.
+  try {
+    const { data: b } = await supabase.from('budget').select('id').eq('event_id', eventId).maybeSingle();
+    if (b) await supabase.from('budget_line').insert({ id: genId('bl'), budget_id: (b as any).id, label: category, confirmed_amount: estimate, linked_engagement: id });
+  } catch { /* non-fatal — the decision still exists */ }
   return { id, category, stage: 'Sourced', confirmedAmount: null, note: null, candidates: [], outreachStarted: false, watchInbox: false };
 }
 export async function deleteEngagement(id: string): Promise<void> {
@@ -1611,13 +1915,17 @@ export async function setEventDate(eventId: string, date: string | null): Promis
   const { error } = await supabase.from('event').update({ event_date: date }).eq('id', eventId);
   if (error) throw error;
   if (!date) return;
-  const { data: dels } = await supabase.from('deliverable').select('id, due_offset_days').eq('event_id', eventId);
+  // Resolve each deliverable's due date = event date + its day offset. Prefer the scaffold's
+  // due_offset_days; fall back to offset_start (the start of a drop-ingest/template range) so
+  // template-derived deliverables land on the timeline too.
+  const { data: dels } = await supabase.from('deliverable').select('id, due_offset_days, offset_start').eq('event_id', eventId);
   const base = new Date(date + 'T00:00:00');
   await Promise.all((dels ?? [])
-    .filter((d: any) => d.due_offset_days != null)
-    .map((d: any) => {
+    .map((d: any) => ({ id: d.id, offset: d.due_offset_days ?? d.offset_start }))
+    .filter((d) => d.offset != null)
+    .map((d) => {
       const due = new Date(base);
-      due.setDate(due.getDate() + d.due_offset_days);
+      due.setDate(due.getDate() + d.offset);
       return supabase.from('deliverable').update({ resolved_due_date: due.toISOString().slice(0, 10) }).eq('id', d.id);
     }));
 }
@@ -1706,21 +2014,36 @@ export async function getBudgetProjections(eventId: string, categories: string[]
 }
 
 // ── Deliverables ────────────────────────────────────────────────────────────
-export async function addDeliverable(eventId: string, fields: { title: string; phase: string; ownerRole: string | null; dueDate: string | null }): Promise<Deliverable> {
+export async function addDeliverable(eventId: string, fields: { title: string; phase: string; ownerRole: string | null; dueDate: string | null; offsetStart?: number | null; offsetEnd?: number | null; locked?: boolean }): Promise<Deliverable> {
   const id = genId('del');
   const { error } = await supabase.from('deliverable').insert({
     id, event_id: eventId, title: fields.title, phase: fields.phase, owner_role: fields.ownerRole, resolved_due_date: fields.dueDate, status: 'Todo',
+    offset_start: fields.offsetStart ?? null, offset_end: fields.offsetEnd ?? null, locked: fields.locked ?? false,
   });
   if (error) throw error;
-  return { id, title: fields.title, phase: fields.phase, ownerRole: fields.ownerRole, dueDate: fields.dueDate, status: 'Todo', linearIssueId: null };
+  return { id, title: fields.title, phase: fields.phase, ownerRole: fields.ownerRole, dueDate: fields.dueDate, offsetStart: fields.offsetStart ?? null, offsetEnd: fields.offsetEnd ?? null, status: 'Todo', linearIssueId: null, linearIssueUrl: null, locked: fields.locked ?? false };
 }
 export async function setDeliverableStatus(id: string, status: string): Promise<void> {
   const { error } = await supabase.from('deliverable').update({ status }).eq('id', id);
   if (error) throw error;
 }
+/** Fetch a deliverable's title + Linear linkage (for confirmation messages with a ticket link). */
+export async function getDeliverableLinear(id: string): Promise<{ title: string; linearIssueId: string | null; linearIssueUrl: string | null } | null> {
+  const { data } = await supabase.from('deliverable').select('title, linear_issue_id, linear_issue_url').eq('id', id).maybeSingle();
+  if (!data) return null;
+  return { title: (data as any).title, linearIssueId: (data as any).linear_issue_id ?? null, linearIssueUrl: (data as any).linear_issue_url ?? null };
+}
 /** Manually override a deliverable's due date (yyyy-mm-dd, or null to clear). */
 export async function setDeliverableDueDate(id: string, date: string | null): Promise<void> {
   const { error } = await supabase.from('deliverable').update({ resolved_due_date: date }).eq('id', id);
+  if (error) throw error;
+}
+/** Set a deliverable's timeline offset (days from event date) — used when drag-reordering the
+ *  run of show retimes a task to sit between its new neighbors. Optionally also resolves a date. */
+export async function setDeliverableOffset(id: string, offsetStart: number | null, offsetEnd: number | null, dueDate?: string | null): Promise<void> {
+  const patch: Record<string, unknown> = { offset_start: offsetStart, offset_end: offsetEnd };
+  if (dueDate !== undefined) patch.resolved_due_date = dueDate;
+  const { error } = await supabase.from('deliverable').update(patch).eq('id', id);
   if (error) throw error;
 }
 export async function deleteDeliverable(id: string): Promise<void> {
@@ -1788,7 +2111,8 @@ export async function syncGmail(eventId: string): Promise<{ matched: number; rec
 
 // What the detector proposes from a pasted email / Linear note.
 export interface DetectedUpdate {
-  kind: 'contract' | 'complete' | 'note';
+  kind: 'contract' | 'complete' | 'status' | 'note';
+  status?: string | null;     // target status when kind='status' (Todo | In Progress | Done)
   engagementId: string | null;
   deliverableId: string | null;
   matchedName: string | null; // vendor/category or deliverable matched
@@ -1843,6 +2167,29 @@ export async function saveOverviewSummary(eventId: string, summary: string): Pro
   if (error) throw error;
 }
 
+// Whole-array replace for the brief-sourced prose lists (run-of-show, staffing, guardrails).
+export async function setEventAgenda(eventId: string, agenda: RunOfShowItem[]): Promise<void> {
+  const { error } = await supabase.from('event').update({ agenda }).eq('id', eventId);
+  if (error) throw error;
+}
+export async function setEventStaffRoles(eventId: string, roles: string[]): Promise<void> {
+  const { error } = await supabase.from('event').update({ staff_roles: roles }).eq('id', eventId);
+  if (error) throw error;
+}
+export async function setEventReflections(eventId: string, reflections: string[]): Promise<void> {
+  const { error } = await supabase.from('event').update({ reflections }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Attach the original dropped files (already uploaded to storage) for reference. */
+export async function setEventMaterials(eventId: string, materials: SourceMaterial[]): Promise<void> {
+  const { error } = await supabase.from('event').update({ source_materials: materials }).eq('id', eventId);
+  if (error) throw error;
+}
+export async function setEventOutreach(eventId: string, outreach: OutreachTemplate[]): Promise<void> {
+  const { error } = await supabase.from('event').update({ outreach }).eq('id', eventId);
+  if (error) throw error;
+}
+
 export async function getPlanningSummary(facts: PlanningFacts): Promise<string> {
   try {
     const { data } = await supabase.functions.invoke('planning-summary', { body: { facts } });
@@ -1863,6 +2210,17 @@ export async function getCarriedLessons(eventId: string): Promise<CarriedLesson[
   }
 }
 
+// ── Post-event debrief ───────────────────────────────────────────────────────
+// V0 degrade path: book the 30-min debrief as an in-app locked deliverable (a reminder/task)
+// the day after the event. Idempotent — never creates a second debrief. Live Google Calendar
+// booking (free/busy + invites) is a confirm-first action that needs the calendar connector
+// wired server-side; until then this is the reminder/task fallback the spec calls for.
+export async function scheduleDebrief(eventId: string, dueDate: string, phase: string): Promise<Deliverable | null> {
+  const { data: existing } = await supabase.from('deliverable').select('id').eq('event_id', eventId).ilike('title', '%debrief%').limit(1);
+  if (existing?.length) return null; // already scheduled — don't double-book
+  return addDeliverable(eventId, { title: 'Event debrief (30 min)', phase, ownerRole: 'Event owner', dueDate, offsetStart: 1, locked: true });
+}
+
 /** Preview carried lessons for an event still being drafted (no row yet) — matched on the
  *  draft's description/format/tags and the past event it's modeled on. */
 export async function previewCarriedLessons(draft: {
@@ -1875,4 +2233,105 @@ export async function previewCarriedLessons(draft: {
   } catch {
     return [];
   }
+}
+
+// ── People tagging ("who mattered") ──────────────────────────────────────────
+// Event-scoped, provenance-carrying tags that roll up to the person. Multiple lenses per
+// person allowed (one row per attendee+event+lens). Feeders propose (status='proposed');
+// humans confirm. Manual in-app tags are confirmed on creation. Dedupe stays on the attendee
+// (email) layer — this just hangs tags off attendee_id.
+export type TagLens = 'candidate' | 'prospect' | 'partner';
+export type TagSource = 'debrief' | 'slack' | 'manual';
+export const TAG_LENSES: TagLens[] = ['candidate', 'prospect', 'partner'];
+export interface PersonTag {
+  id: string;
+  attendeeId: string;
+  eventId: string | null;
+  lens: TagLens;
+  priority: boolean;       // star
+  note: string | null;     // the "why"
+  followUp: boolean;
+  source: TagSource;
+  sourceRef: string | null; // link / quote / "@14:02"
+  status: 'proposed' | 'confirmed';
+  createdBy: string | null;
+  createdAt: string;
+}
+// An event's tag joined with the person + a cross-event roll-up (×N events this person is tagged).
+export interface EventPersonTag extends PersonTag {
+  name: string | null;
+  email: string | null;
+  rollupEvents: number;
+}
+
+function mapTag(r: any): PersonTag {
+  return {
+    id: r.id, attendeeId: r.attendee_id, eventId: r.event_id ?? null, lens: r.lens,
+    priority: !!r.priority, note: r.note ?? null, followUp: !!r.follow_up,
+    source: r.source, sourceRef: r.source_ref ?? null, status: r.status,
+    createdBy: r.created_by ?? null, createdAt: r.created_at,
+  };
+}
+
+/** All tags on an event, joined with the person + their cross-event tag-count (signal strength). */
+export async function listEventTags(eventId: string): Promise<EventPersonTag[]> {
+  const { data, error } = await supabase
+    .from('person_tag')
+    .select('id, attendee_id, event_id, lens, priority, note, follow_up, source, source_ref, status, created_by, created_at, attendee:attendee ( name, email )')
+    .eq('event_id', eventId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  const rows = data ?? [];
+  // Roll-up: distinct events each tagged person appears in, across all their tags.
+  const ids = Array.from(new Set(rows.map((r: any) => r.attendee_id)));
+  const rollup = new Map<string, number>();
+  if (ids.length) {
+    const { data: all } = await supabase.from('person_tag').select('attendee_id, event_id').in('attendee_id', ids);
+    const byPerson = new Map<string, Set<string>>();
+    for (const r of all ?? []) { const s = byPerson.get(r.attendee_id) ?? new Set<string>(); if (r.event_id) s.add(r.event_id); byPerson.set(r.attendee_id, s); }
+    for (const [k, v] of byPerson) rollup.set(k, v.size);
+  }
+  return rows.map((r: any) => ({ ...mapTag(r), name: r.attendee?.name ?? null, email: r.attendee?.email ?? null, rollupEvents: rollup.get(r.attendee_id) || 1 }));
+}
+
+/** Apply/refresh a lens tag. Manual tags confirm immediately; feeders pass status:'proposed'.
+ *  Idempotent on (attendee, event, lens). */
+export async function tagPerson(
+  attendeeId: string, eventId: string, lens: TagLens,
+  opts: { createdBy?: string | null; source?: TagSource; sourceRef?: string | null; status?: 'proposed' | 'confirmed'; note?: string | null; priority?: boolean; followUp?: boolean } = {},
+): Promise<PersonTag> {
+  const row = {
+    id: genId('ptag'), attendee_id: attendeeId, event_id: eventId, lens,
+    priority: opts.priority ?? false, note: opts.note ?? null, follow_up: opts.followUp ?? false,
+    source: opts.source ?? 'manual', source_ref: opts.sourceRef ?? null,
+    status: opts.status ?? 'confirmed', created_by: opts.createdBy ?? null,
+  };
+  const { data, error } = await supabase.from('person_tag').upsert(row, { onConflict: 'attendee_id,event_id,lens' }).select().single();
+  if (error) throw error;
+  return mapTag(data);
+}
+
+export async function untagLens(attendeeId: string, eventId: string, lens: TagLens): Promise<void> {
+  const { error } = await supabase.from('person_tag').delete().eq('attendee_id', attendeeId).eq('event_id', eventId).eq('lens', lens);
+  if (error) throw error;
+}
+
+/** Person↔event-level controls (star / note / follow-up) — applied across the person's lens rows. */
+export async function setPersonEventTagFields(attendeeId: string, eventId: string, fields: { priority?: boolean; note?: string | null; followUp?: boolean }): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if ('priority' in fields) patch.priority = fields.priority;
+  if ('note' in fields) patch.note = fields.note;
+  if ('followUp' in fields) patch.follow_up = fields.followUp;
+  if (Object.keys(patch).length === 0) return;
+  const { error } = await supabase.from('person_tag').update(patch).eq('attendee_id', attendeeId).eq('event_id', eventId);
+  if (error) throw error;
+}
+
+export async function confirmTag(tagId: string): Promise<void> {
+  const { error } = await supabase.from('person_tag').update({ status: 'confirmed' }).eq('id', tagId);
+  if (error) throw error;
+}
+export async function dismissTag(tagId: string): Promise<void> {
+  const { error } = await supabase.from('person_tag').delete().eq('id', tagId);
+  if (error) throw error;
 }

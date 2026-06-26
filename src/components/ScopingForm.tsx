@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy } from "lucide-react";
+import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy, MessageSquare } from "lucide-react";
 import { parseFormats } from "./FormatPicker";
 import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as ScopingData } from "../lib/scoping";
-import type { EventPlanning } from "../lib/db";
+import { slackSend, type EventPlanning } from "../lib/db";
+import { Button } from "@instalily/ui/button";
 
 const money = (n: number | null | undefined) =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+
+// Default Slack budget channel the scoping summary posts to (overridable per-send).
+const DEFAULT_SLACK_CHANNEL = "C0ASQSS0CQP";
 
 // ── Justification drafting (local; only generated prose in V0) ─────────────────
 const JUSTIFICATION_TEMPLATES = [
@@ -51,7 +55,12 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
 }) {
   const [variant, setVariant] = useState(0);
   const [assignInput, setAssignInput] = useState("");
+  const [commentInput, setCommentInput] = useState("");
   const [copied, setCopied] = useState(false);
+  const [slackChannel, setSlackChannel] = useState(() => { try { return localStorage.getItem("slack_budget_channel") || DEFAULT_SLACK_CHANNEL; } catch { return DEFAULT_SLACK_CHANNEL; } });
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [submitBusy, setSubmitBusy] = useState(false);
+  const [submitErr, setSubmitErr] = useState<string | null>(null);
 
   // Generate on first open — compose facts + draft, don't persist a blank.
   useEffect(() => {
@@ -71,23 +80,35 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
 
   const required = scoping.type.trim() && scoping.audience.trim() && scoping.headcount.trim() && scoping.strategicJustification.trim();
 
-  const submit = () => set({ status: "submitted", submittedSummary: buildScopingSummary({ title: plan.title, date: plan.date, tags: plan.tags, scoping, roughTotal }) });
+  // Submit = post the summary to Slack for approval; only mark submitted once it actually sends.
+  const doSubmit = async () => {
+    setSubmitBusy(true); setSubmitErr(null);
+    const summary = buildScopingSummary({ title: plan.title, date: plan.date, tags: plan.tags, scoping, roughTotal });
+    try {
+      await slackSend(slackChannel.trim(), summary);
+      try { localStorage.setItem("slack_budget_channel", slackChannel.trim()); } catch { /* ignore */ }
+      set({ status: "submitted", submittedAt: new Date().toISOString().slice(0, 10), submittedChannel: slackChannel.trim(), submittedSummary: summary });
+      setConfirmOpen(false);
+    } catch (e: any) { setSubmitErr(e?.message ?? String(e)); }
+    finally { setSubmitBusy(false); }
+  };
   const reopen = () => set({ status: "draft" });
-  const assign = () => { const n = Number(assignInput); if (!Number.isFinite(n) || assignInput.trim() === "") return; set({ status: "assigned", assignedBudget: n }); };
+  // Return the budget (+ optional comment) → locks as the target.
+  const assign = () => { const n = Number(assignInput); if (!Number.isFinite(n) || assignInput.trim() === "") return; set({ status: "assigned", assignedBudget: n, approvalComment: commentInput.trim() || null }); };
   const copySummary = () => { if (scoping.submittedSummary) { void navigator.clipboard?.writeText(scoping.submittedSummary); setCopied(true); setTimeout(() => setCopied(false), 1500); } };
 
   const field = "w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl border border-black max-w-2xl w-full max-h-[88vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="relative bg-white rounded-2xl border border-border max-w-2xl w-full max-h-[88vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 pb-3 shrink-0">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xl">Scoping form</h2>
             <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
           </div>
           <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs ${scoping.status === "assigned" ? "bg-green-100 text-green-700" : scoping.status === "submitted" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
+            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] ${scoping.status === "assigned" ? "bg-green-100 text-green-700" : scoping.status === "submitted" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
               {scoping.status === "assigned" ? <Lock className="w-3.5 h-3.5" /> : null}
               {scoping.status === "draft" ? "Draft" : scoping.status === "submitted" ? "Submitted · awaiting budget" : "Budget assigned"}
             </span>
@@ -153,34 +174,40 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
         <div className="mt-4">
           <div className="flex items-center justify-between mb-1">
             <span className="text-sm text-gray-600 inline-flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-gray-400" /> Strategic justification <span className="text-gray-400">(drafted)</span></span>
-            {!submitted && <button onClick={regenerate} className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><RefreshCw className="w-3.5 h-3.5" /> Regenerate</button>}
+            {!submitted && <button onClick={regenerate} className="text-[15px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><RefreshCw className="w-3.5 h-3.5" /> Regenerate</button>}
           </div>
           <textarea rows={4} value={scoping.strategicJustification} disabled={submitted} onChange={(e) => set({ strategicJustification: e.target.value })} className={`${field} resize-none ${submitted ? "bg-gray-50 text-gray-600" : "border-gray-300"}`} />
         </div>
 
-        {/* Submitted summary (manual — Slack send is v1) */}
+        {/* Posted summary */}
         {submitted && scoping.submittedSummary && (
           <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
             <div className="flex items-center justify-between mb-1.5">
-              <p className="text-sm font-medium">Summary for the budget channel</p>
-              <button onClick={copySummary} className="text-xs text-gray-500 hover:text-gray-900 inline-flex items-center gap-1">{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</button>
+              <p className="text-sm font-medium inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-green-600" /> Posted to {scoping.submittedChannel ?? "Slack"} for approval</p>
+              <button onClick={copySummary} className="text-[15px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1">{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</button>
             </div>
-            <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans">{scoping.submittedSummary}</pre>
-            <p className="text-[11px] text-gray-400 mt-2">Manual for now — paste into the budget channel. (Auto-send ships in v1.)</p>
+            <pre className="text-[15px] text-gray-700 whitespace-pre-wrap font-sans">{scoping.submittedSummary}</pre>
           </div>
         )}
 
-        {/* Assigned budget — Karim/admin only; locks once set */}
+        {/* Returned budget + comment — locks as the target once set */}
         {submitted && (
-          <div className="mt-4 rounded-lg border border-gray-300 p-3">
-            <p className="text-sm font-medium mb-1 inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-gray-400" /> Assigned budget <span className="text-gray-400 font-normal">· Karim / admin only</span></p>
+          <div id="scoping-budget-return" className="mt-4 rounded-lg border border-gray-300 p-3">
+            <p className="text-sm font-medium mb-1 inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-gray-400" /> Returned budget <span className="text-gray-400 font-normal">· Karim / admin</span></p>
             {locked ? (
-              <p className="text-lg">{money(scoping.assignedBudget)} <span className="text-xs text-gray-400">— locked target, owner can't edit</span></p>
+              <>
+                <p className="text-lg">{money(scoping.assignedBudget)} <span className="text-[15px] text-gray-400">— locked target, owner can't edit</span></p>
+                {scoping.approvalComment && <p className="mt-2 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 inline-flex items-start gap-1.5"><MessageSquare className="w-3.5 h-3.5 mt-0.5 text-gray-400 shrink-0" /> {scoping.approvalComment}</p>}
+              </>
             ) : (
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-gray-400">$</span>
-                <input type="number" value={assignInput} onChange={(e) => setAssignInput(e.target.value)} placeholder="Returned total" className="w-40 px-2 py-1 border border-black rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                <button onClick={assign} disabled={assignInput.trim() === ""} className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-50">Assign & lock</button>
+              <div className="space-y-2 mt-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-400">$</span>
+                  <input type="number" value={assignInput} onChange={(e) => setAssignInput(e.target.value)} placeholder="Returned total" className="w-40 px-2 py-1 border border-border rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                  <Button size="sm" onClick={assign} disabled={assignInput.trim() === ""}>Assign &amp; lock</Button>
+                </div>
+                <textarea value={commentInput} onChange={(e) => setCommentInput(e.target.value)} rows={2} placeholder="Comment (optional) — e.g. approved at $8k, trim A/V…" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <p className="text-[15px] text-gray-400">The returned amount becomes the locked budget target; the comment shows on this form.</p>
               </div>
             )}
           </div>
@@ -190,17 +217,33 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
 
         {/* Footer actions (fixed; edits autosave, so Save & exit just closes) */}
         <div className="p-6 pt-4 border-t border-gray-100 shrink-0 flex items-center justify-between gap-3">
-          <span className="text-xs text-gray-400 min-w-0 truncate">
+          <span className="text-[15px] text-gray-400 min-w-0 truncate">
             {scoping.status === "draft" ? (required ? "Ready to submit." : "Fill type, audience, headcount & justification to submit.")
-              : scoping.status === "submitted" ? "Submitted — awaiting budget assignment."
+              : scoping.status === "submitted" ? `Submitted to ${scoping.submittedChannel ?? "Slack"} — awaiting budget.`
               : "Budget assigned & locked."}
           </span>
           <div className="flex items-center gap-2 shrink-0">
-            {scoping.status === "draft" && <button onClick={submit} disabled={!required} className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40">Submit for approval <Send className="w-4 h-4" /></button>}
+            {scoping.status === "draft" && <Button onClick={() => setConfirmOpen(true)} disabled={!required}>Submit for approval <Send className="w-4 h-4" /></Button>}
             {scoping.status === "submitted" && <button onClick={reopen} className="text-sm text-gray-600 hover:text-gray-900">Reopen draft</button>}
-            <button onClick={onClose} className="px-4 py-2 bg-gray-200 text-black rounded-lg text-sm hover:bg-gray-300">Save &amp; exit</button>
+            <Button variant="secondary" onClick={onClose}>Save &amp; exit</Button>
           </div>
         </div>
+
+        {/* Submit confirmation — posts to Slack for approval */}
+        {confirmOpen && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 rounded-2xl p-4" onClick={() => !submitBusy && setConfirmOpen(false)}>
+            <div className="bg-white rounded-2xl border border-border max-w-sm w-full p-5" onClick={(e) => e.stopPropagation()}>
+              <p className="font-medium mb-1">Submit for approval?</p>
+              <p className="text-sm text-gray-600">This posts the scoping summary to <span className="font-medium">{slackChannel}</span> for approval.</p>
+              <label className="block mt-3"><span className="text-[15px] text-gray-500 mb-1 block">Channel</span><input value={slackChannel} onChange={(e) => setSlackChannel(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" /></label>
+              {submitErr && <p className="text-red-600 text-[15px] mt-2">{submitErr}</p>}
+              <div className="flex justify-end gap-2 mt-4">
+                <button onClick={() => setConfirmOpen(false)} disabled={submitBusy} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+                <Button size="sm" onClick={doSubmit} disabled={submitBusy || !slackChannel.trim()}>{submitBusy ? "Sending…" : <>Send for approval <Send className="w-4 h-4" /></>}</Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronRight, AlertCircle, X } from "lucide-react";
 import { getConsolidatedBudget, type ConsolidatedBudget, type EventBudgetRollup, type EventStatus } from "../lib/db";
 import { TAG_CATEGORIES } from "../lib/tags";
+import { StatCard } from "./StatCard";
 
 function money(n: number | null | undefined, currency = "USD"): string {
   return n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -107,13 +108,13 @@ export function BudgetPage({ onOpenEvent }: { onOpenEvent?: (eventId: string) =>
               onBlur={(e) => saveTarget(e.target.value)}
               placeholder="—"
               style={{ width: `${Math.max(9, targetInput.length + 4)}ch` }}
-              className="px-2 py-1 text-lg text-right border border-black rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
+              className="px-2 py-1 text-lg text-right border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
             />
           </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-black p-6">
+      <div className="bg-white rounded-2xl border border-border p-6">
         {error ? (
           <p className="text-sm text-red-600">{error}</p>
         ) : !data ? (
@@ -122,10 +123,7 @@ export function BudgetPage({ onOpenEvent }: { onOpenEvent?: (eventId: string) =>
           <>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
               {tiles.map((t) => (
-                <div key={t.label} className={`rounded-2xl ring-2 ring-inset ${t.ring} p-4`}>
-                  <p className="text-gray-500 text-sm mb-1">{t.label}</p>
-                  <p className="text-2xl">{money(t.value, cur)}</p>
-                </div>
+                <StatCard key={t.label} label={t.label} value={money(t.value, cur)} />
               ))}
             </div>
 
@@ -165,7 +163,7 @@ export function BudgetPage({ onOpenEvent }: { onOpenEvent?: (eventId: string) =>
             <div className="flex items-center gap-2 mb-2">
               <p className="text-sm font-medium">By event</p>
               {activeBucket && (
-                <button onClick={() => setBucketFilter(null)} className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 bg-gray-100 rounded-full px-2 py-0.5">
+                <button onClick={() => setBucketFilter(null)} className="inline-flex items-center gap-1 text-[15px] text-gray-500 hover:text-gray-900 bg-gray-100 rounded-full px-2 py-0.5">
                   {activeBucket.name} <X className="w-3 h-3" />
                 </button>
               )}
@@ -219,7 +217,7 @@ export function BudgetPage({ onOpenEvent }: { onOpenEvent?: (eventId: string) =>
               </table>
             </div>
 
-            <p className="text-xs text-gray-400 mt-4 flex items-start gap-1">
+            <p className="text-[15px] text-gray-400 mt-4 flex items-start gap-1">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               Estimate is the sum of every budget line; paid counts only lines marked Paid. Edit amounts on each event's Budget tab.
             </p>

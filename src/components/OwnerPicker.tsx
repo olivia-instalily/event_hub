@@ -67,7 +67,7 @@ export function OwnerPicker({ eventId, owners, onChange }: {
         <span className="group/own inline-flex items-center">
           {owners.map((o, i) => (
             <span key={o.id} className={`inline-flex transition-[margin] duration-200 ${i ? "-ml-2 group-hover/own:ml-0.5" : ""}`}>
-              <span title={o.name} className={`w-7 h-7 rounded-full ring-2 ring-white text-white text-[10px] font-medium flex items-center justify-center ${o.color ?? "bg-gray-400"}`}>{initials(o.name)}</span>
+              <span title={o.name} className={`w-7 h-7 rounded-full ring-2 ring-white text-white text-[13px] font-medium flex items-center justify-center ${o.color ?? "bg-gray-400"}`}>{initials(o.name)}</span>
             </span>
           ))}
         </span>
@@ -79,7 +79,7 @@ export function OwnerPicker({ eventId, owners, onChange }: {
           ref={menuRef}
           onClick={(e) => e.stopPropagation()}
           style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
-          className="z-50 bg-white border border-black rounded-lg shadow-lg overflow-hidden flex flex-col"
+          className="z-50 bg-white border border-border rounded-lg shadow-lg overflow-hidden flex flex-col"
         >
           <div className="p-1 border-b border-gray-100 relative shrink-0">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -89,12 +89,12 @@ export function OwnerPicker({ eventId, owners, onChange }: {
             {profiles.length === 0 && <p className="px-2 py-2 text-sm text-gray-400 inline-flex items-center gap-1"><Users className="w-4 h-4" /> No profiles — create one in the header.</p>}
             {filtered.map((p) => (
               <button key={p.id} onClick={() => toggle(p)} className="flex items-center gap-2 w-full text-left px-2 py-1 rounded hover:bg-gray-50 text-sm">
-                <span className={`w-5 h-5 rounded-full text-white text-[10px] font-medium flex items-center justify-center ${p.color ?? "bg-gray-400"}`}>{initials(p.name)}</span>
+                <span className={`w-5 h-5 rounded-full text-white text-[13px] font-medium flex items-center justify-center ${p.color ?? "bg-gray-400"}`}>{initials(p.name)}</span>
                 <span className="flex-1 truncate">{p.name}</span>
                 {has(p.id) && <Check className="w-4 h-4 text-gray-700" />}
               </button>
             ))}
-            {filtered.length === 0 && profiles.length > 0 && <p className="px-2 py-2 text-xs text-gray-400">No match.</p>}
+            {filtered.length === 0 && profiles.length > 0 && <p className="px-2 py-2 text-[15px] text-gray-400">No match.</p>}
           </div>
         </div>,
         document.body,

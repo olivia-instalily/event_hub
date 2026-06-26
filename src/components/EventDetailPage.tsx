@@ -1,5 +1,6 @@
 import { Calendar, Users, ChevronLeft, AlertCircle, Pencil, Mic } from "lucide-react";
 import { LocationEdit, LocationInput } from "./LocationEdit";
+import { SourceMaterials } from "./SourceMaterials";
 import { useEffect, useState } from "react";
 import {
   getEventDetail,
@@ -18,10 +19,12 @@ import {
   type BudgetView,
 } from "../lib/db";
 import { TagStack } from "./TagStack";
+import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { StatusControl } from "./StatusControl";
 import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
 import { Trash2, Plus } from "lucide-react";
+import { StatCard } from "./StatCard";
 
 interface EventDetailPageProps {
   eventId: string;
@@ -64,17 +67,17 @@ function ReflectionsSection({ seriesId, initial }: { seriesId: string | null; in
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-black divide-y divide-gray-100">
+    <div className="bg-white rounded-2xl border border-border divide-y divide-gray-100">
       {items.length === 0 && <p className="px-6 py-4 text-sm text-gray-400">None yet.</p>}
       {items.map((r, i) => (
         <div key={r.id} className="px-6 py-4 text-sm text-gray-700 flex gap-3 group">
           <span className="text-gray-400">{i + 1}.</span>
           {editId === r.id ? (
             <div className="flex-1">
-              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} className="w-full px-2 py-1 border border-black rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
               <div className="flex gap-2 mt-1">
-                <button onClick={saveEdit} className="px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300">Save</button>
-                <button onClick={() => setEditId(null)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-900">Cancel</button>
+                <button onClick={saveEdit} className="px-2 py-1 text-[15px] bg-gray-200 rounded hover:bg-gray-300">Save</button>
+                <button onClick={() => setEditId(null)} className="px-2 py-1 text-[15px] text-gray-500 hover:text-gray-900">Cancel</button>
               </div>
             </div>
           ) : (
@@ -90,7 +93,7 @@ function ReflectionsSection({ seriesId, initial }: { seriesId: string | null; in
       ))}
       {seriesId && (
         <div className="px-6 py-3 flex gap-2">
-          <input value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add a reflection…" className="flex-1 px-2 py-1 border border-black rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+          <input value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add a reflection…" className="flex-1 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
           <button onClick={add} disabled={!adding.trim()} className="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50">Add</button>
         </div>
       )}
@@ -119,17 +122,17 @@ function BudgetSection({ budget, seriesName }: { budget: BudgetView; seriesName:
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-black p-6">
+    <div className="bg-white rounded-2xl border border-border p-6">
       <p className="text-sm text-gray-500 mb-4">
         Series-level budget for {seriesName ?? "this series"} — total spend is the sum of the lines below.
       </p>
-      <div className="mb-6 pb-6 border-b border-black">
+      <div className="mb-6 pb-6 border-b border-border">
         <p className="text-gray-600 text-sm mb-1">Total spend</p>
         <p className="text-2xl">{money(total, budget.currency)}</p>
       </div>
-      <div className="overflow-hidden rounded-lg border border-black">
+      <div className="overflow-hidden rounded-lg border border-border">
         <table className="w-full">
-          <thead className="bg-gray-50 border-b border-black">
+          <thead className="bg-gray-50 border-b border-border">
             <tr>
               <th className="text-left px-4 py-3 text-sm text-gray-600">Line</th>
               <th className="text-right px-4 py-3 text-sm text-gray-600">Amount</th>
@@ -144,7 +147,7 @@ function BudgetSection({ budget, seriesName }: { budget: BudgetView; seriesName:
                     value={line.label ?? ""}
                     onChange={(e) => setLocal(line.id, { label: e.target.value })}
                     onBlur={() => persist(line.id)}
-                    className="w-full px-2 py-1 rounded border border-transparent hover:border-gray-200 focus:border-black focus:outline-none text-sm"
+                    className="w-full px-2 py-1 rounded border border-transparent hover:border-gray-200 focus:border-border focus:outline-none text-sm"
                   />
                 </td>
                 <td className="px-4 py-2 text-right">
@@ -153,7 +156,7 @@ function BudgetSection({ budget, seriesName }: { budget: BudgetView; seriesName:
                     value={line.confirmedAmount ?? ""}
                     onChange={(e) => setLocal(line.id, { confirmedAmount: e.target.value === "" ? null : Number(e.target.value) })}
                     onBlur={() => persist(line.id)}
-                    className="w-32 px-2 py-1 text-right rounded border border-transparent hover:border-gray-200 focus:border-black focus:outline-none text-sm"
+                    className="w-32 px-2 py-1 text-right rounded border border-transparent hover:border-gray-200 focus:border-border focus:outline-none text-sm"
                   />
                 </td>
                 <td className="px-4 py-2 text-center">
@@ -196,6 +199,12 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
     setEvent((e) => (e ? { ...e, tags } : e));
     if (event) void updateEventTags(event.id, tags);
   };
+  // Format is a separate spec (the multi-select format list), not the tag. Persists immediately.
+  const saveFormat = (arr: string[]) => {
+    const format = joinFormats(arr);
+    setEvent((e) => (e ? { ...e, format } : e));
+    if (event) void updateEvent(event.id, { format });
+  };
 
   const startEdit = (e: EventDetail) => {
     setNameInput(e.title);
@@ -232,10 +241,12 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
     return () => { cancelled = true; };
   }, [eventId]);
 
+  // Sized/styled to match the Events status pills (Future/In-Process/Past) so the top-left
+  // control stays in the same place and size when switching between the list and an event.
   const back = (
     <button
       onClick={onBack}
-      className="inline-flex items-center gap-1 mb-6 px-3 py-1.5 bg-white border border-black rounded-lg text-black hover:bg-gray-50 transition-colors"
+      className="inline-flex items-center gap-1 mb-6 px-2 py-1 rounded-lg bg-white border border-border text-gray-700 hover:bg-gray-50 transition-colors"
     >
       <ChevronLeft className="w-4 h-4" />
       Previous
@@ -252,8 +263,10 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
     <div>
       {back}
 
+      <SourceMaterials items={event.sourceMaterials} className="mb-6" />
+
       {/* Event Header */}
-      <div className="bg-white rounded-2xl border border-black p-8 mb-6">
+      <div className="bg-white rounded-2xl border border-border p-8 mb-6">
         <div className="header-row flex gap-10">
         <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between mb-4">
@@ -265,19 +278,19 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
               <input
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                className="block w-full text-3xl mb-2 px-2 py-1 border border-black rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
+                className="block w-full text-3xl mb-2 px-2 py-1 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
               />
               <textarea
                 value={descInput}
                 onChange={(e) => setDescInput(e.target.value)}
                 rows={3}
                 placeholder="Description…"
-                className="block w-full text-gray-700 px-2 py-1 border border-black rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
+                className="block w-full text-gray-700 px-2 py-1 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
               />
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2">
-                <input value={formatInput} onChange={(e) => setFormatInput(e.target.value)} placeholder="Format" className="px-2 py-1 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                <input value={audienceInput} onChange={(e) => setAudienceInput(e.target.value)} placeholder="Audience" className="px-2 py-1 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                <LocationInput value={locationInput} onChange={setLocationInput} className="px-2 py-1 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+              <div className="mt-2"><FormatPicker value={parseFormats(formatInput)} onChange={(arr) => setFormatInput(joinFormats(arr) ?? "")} /></div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                <input value={audienceInput} onChange={(e) => setAudienceInput(e.target.value)} placeholder="Audience" className="px-2 py-1 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <LocationInput value={locationInput} onChange={setLocationInput} className="px-2 py-1 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
               </div>
               <div className="flex items-center gap-2 mt-2">
                 <button onClick={saveEdit} disabled={savingEdit} className="px-4 py-1.5 bg-gray-200 text-black rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50">
@@ -294,7 +307,7 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
               <h1 className="text-3xl mb-1">{event.title}</h1>
               {event.seriesName && <p className="text-gray-500 mb-2">part of {event.seriesName}</p>}
               {event.description && <p className="text-gray-700 mb-2 whitespace-pre-wrap">{event.description}</p>}
-              {event.format && <p className="text-gray-600 mb-2">{event.format}</p>}
+              <div className="mb-2"><FormatPicker value={parseFormats(event.format)} onChange={saveFormat} /></div>
               {event.audience && <p className="text-gray-600 mb-4">{event.audience}</p>}
             </div>
           )}
@@ -363,7 +376,7 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
       <div className="flex gap-6 mb-6 items-start">
         <div className="flex-1">
           <h2 className="text-2xl mb-4">Project Phases</h2>
-          <div className="bg-white rounded-2xl border border-black p-6 text-gray-500 flex items-start gap-2">
+          <div className="bg-white rounded-2xl border border-border p-6 text-gray-500 flex items-start gap-2">
             <AlertCircle className="w-4 h-4 mt-0.5" />
             <span>Pre-event deliverables weren’t itemized — TTW 2026 is a post-hoc recap, so no phase/checkpoint data was captured.</span>
           </div>
@@ -386,14 +399,12 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
               { label: "Waitlisted", value: stats ? stats.waitlisted : event.waitlistAdmitted, ring: "ring-amber-400", status: 'waitlisted' as const },
               { label: "Total guests", value: stats ? stats.total : null, ring: "ring-gray-300", status: 'all' as const },
             ].map((tile) => (
-              <button
+              <StatCard
                 key={tile.label}
+                label={tile.label}
+                value={tile.value != null ? tile.value.toLocaleString() : "—"}
                 onClick={() => onViewPeople({ id: event.id, name: event.title, tag: event.tags[0] ?? null, status: tile.status })}
-                className={`bg-white rounded-2xl ring-2 ring-inset ${tile.ring} p-5 text-left hover:shadow-md transition-shadow`}
-              >
-                <p className="text-gray-500 text-sm mb-1">{tile.label}</p>
-                <p className="text-2xl">{tile.value != null ? tile.value.toLocaleString() : "—"}</p>
-              </button>
+              />
             ))}
           </div>
           {event.actualAttendanceNote && (

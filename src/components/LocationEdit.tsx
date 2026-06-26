@@ -1,10 +1,12 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { MapPin } from "lucide-react";
 import { CITIES, canonicalCity } from "../lib/cities";
 
 /**
- * Plain text input that locks to a canonical city on commit (Enter / blur). Use anywhere
- * a location is typed into a form so every location snaps to the same city scale.
+ * Text input with a city autocomplete that locks to a canonical city on commit (Enter / blur).
+ * The suggestion list is rendered in a portal positioned from the input's rect, so it stays
+ * glued to the field even inside modals/overflow containers (a native <datalist> mis-anchored).
  */
 export function LocationInput({
   value,
@@ -19,20 +21,70 @@ export function LocationInput({
   className?: string;
   style?: CSSProperties;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+
   const lock = () => { const v = value.trim() ? canonicalCity(value) : ""; if (v !== value) onChange(v); };
+  const q = value.trim().toLowerCase();
+  const matches = (q ? CITIES.filter((c) => c.toLowerCase().includes(q)) : CITIES).slice(0, 8);
+
+  const place = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ left: r.left, top: r.bottom + 4, width: r.width });
+  };
+  useLayoutEffect(() => { if (open) place(); }, [open, value]);
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => place();
+    const onDown = (e: MouseEvent) => {
+      if (inputRef.current?.contains(e.target as Node) || menuRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [open]);
+
+  const pick = (c: string) => { onChange(c); setOpen(false); };
+
   return (
     <>
       <input
-        list="city-options"
+        ref={inputRef}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
         onBlur={lock}
-        onKeyDown={(e) => { if (e.key === "Enter") lock(); }}
+        onKeyDown={(e) => { if (e.key === "Enter") { lock(); setOpen(false); } else if (e.key === "Escape") setOpen(false); }}
         placeholder={placeholder}
         className={className}
         style={style}
+        autoComplete="off"
       />
-      <datalist id="city-options">{CITIES.map((c) => <option key={c} value={c} />)}</datalist>
+      {open && pos && matches.length > 0 && createPortal(
+        <div
+          ref={menuRef}
+          onMouseDown={(e) => e.preventDefault()}
+          style={{ position: "fixed", left: pos.left, top: pos.top, width: Math.max(pos.width, 176) }}
+          className="z-[60] max-h-56 overflow-y-auto bg-white border border-border rounded-lg shadow-lg p-1"
+        >
+          {matches.map((c) => (
+            <button key={c} type="button" onClick={() => pick(c)} className="flex w-full items-center gap-2 text-left px-2 py-1.5 rounded text-sm hover:bg-gray-50">
+              <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0" /> {c}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
     </>
   );
 }
@@ -63,7 +115,7 @@ export function LocationEdit({ value, onChange }: { value: string | null; onChan
           onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") setEditing(false); }}
           placeholder="City"
-          className="px-2 py-0.5 border border-black rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+          className="px-2 py-0.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
         />
         <datalist id="city-options">{CITIES.map((c) => <option key={c} value={c} />)}</datalist>
       </span>

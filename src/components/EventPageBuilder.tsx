@@ -16,6 +16,7 @@ import {
   type EventPlanning, type PageDraft, type PageTheme, type AgendaItem, type AgendaLayout, type Speaker2, type PageFont,
 } from "../lib/db";
 import { FileDrop } from "./FileDrop";
+import { Button } from "@instalily/ui/button";
 
 // dnd-kit sortable wrapper: blocks scoot out of the way, the grabbed block follows the cursor
 // (rendered in a DragOverlay), and the slot it left becomes a highlighted dashed placeholder.
@@ -147,7 +148,7 @@ function EventPagePreview({ plan, draft, speakers, full, animate }: { plan: Even
                 {draft.agenda.items.map((it, i) => (
                   <li key={i} className="relative pl-6 pb-6 last:pb-0">
                     <span className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full ring-4 ring-white" style={{ backgroundColor: accent }} />
-                    {it.time && <div className={`text-xs font-semibold tracking-wider ${FONT_CLASS.grotesk}`} style={{ color: accent }}>{it.time}</div>}
+                    {it.time && <div className={`text-[15px] font-semibold tracking-wider ${FONT_CLASS.grotesk}`} style={{ color: accent }}>{it.time}</div>}
                     <p className="font-medium mt-0.5">{it.title}</p>
                     {it.desc && <p className="text-sm opacity-70 mt-0.5">{it.desc}</p>}
                   </li>
@@ -157,7 +158,7 @@ function EventPagePreview({ plan, draft, speakers, full, animate }: { plan: Even
               <div className="space-y-3">
                 {draft.agenda.items.map((it, i) => (
                   <div key={i} className="rounded-xl border border-gray-200 p-4 flex gap-4 items-start">
-                    {it.time && <span className="shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold text-white" style={{ backgroundColor: accent }}>{it.time}</span>}
+                    {it.time && <span className="shrink-0 px-2.5 py-1 rounded-md text-[15px] font-semibold text-white" style={{ backgroundColor: accent }}>{it.time}</span>}
                     <div><p className="font-medium">{it.title}</p>{it.desc && <p className="text-sm opacity-70 mt-0.5">{it.desc}</p>}</div>
                   </div>
                 ))}
@@ -195,8 +196,8 @@ function EventPagePreview({ plan, draft, speakers, full, animate }: { plan: Even
                       </div>
                       <div className="p-3">
                         <p className="font-medium leading-tight">{s.name}</p>
-                        {s.org && <p className="text-[11px] font-semibold tracking-wide uppercase text-gray-700 mt-1">{s.org}</p>}
-                        {s.title && <p className="text-[11px] tracking-wide uppercase text-gray-400 mt-0.5">{s.title}</p>}
+                        {s.org && <p className="text-[15px] font-semibold tracking-wide uppercase text-gray-700 mt-1">{s.org}</p>}
+                        {s.title && <p className="text-[15px] tracking-wide uppercase text-gray-400 mt-0.5">{s.title}</p>}
                       </div>
                     </>,
                     "group block rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow")
@@ -204,7 +205,7 @@ function EventPagePreview({ plan, draft, speakers, full, animate }: { plan: Even
                     <>
                       {s.photoUrl ? <img src={s.photoUrl} alt="" className="w-24 h-24 rounded-full object-cover mx-auto" /> : <div className="w-24 h-24 rounded-full bg-gray-100 mx-auto" />}
                       <p className="font-medium mt-2 leading-tight">{s.name}</p>
-                      {(s.title || s.org) && <p className="text-xs text-gray-500">{[s.title, s.org].filter(Boolean).join(" · ")}</p>}
+                      {(s.title || s.org) && <p className="text-[15px] text-gray-500">{[s.title, s.org].filter(Boolean).join(" · ")}</p>}
                     </>,
                     "block text-center")
               )}
@@ -275,7 +276,7 @@ function EventPagePreview({ plan, draft, speakers, full, animate }: { plan: Even
           return node ? <Reveal key={key} animate={animate}>{node}</Reveal> : null;
         })}
       </div>
-      <footer className="border-t border-gray-100 py-6 text-center text-xs text-gray-400">© {new Date().getFullYear()} {plan.title}</footer>
+      <footer className="border-t border-gray-100 py-6 text-center text-[15px] text-gray-400">© {new Date().getFullYear()} {plan.title}</footer>
     </div>
   );
 }
@@ -379,7 +380,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
   const sectionLabel = (key: string) => (key.startsWith("divider") ? "Page break" : SECTION_LABELS[key] ?? key);
   const fontRow = (current: PageFont, onPick: (f: PageFont) => void) =>
     FONTS.map((f) => (
-      <button key={f} onClick={() => onPick(f)} className={`px-2.5 py-1 rounded-full text-xs border ${current === f ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{FONT_LABEL[f]}</button>
+      <button key={f} onClick={() => onPick(f)} className={`px-2.5 py-1 rounded-full text-[15px] border ${current === f ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{FONT_LABEL[f]}</button>
     ));
   const onSectionDragStart = (e: DragStartEvent) => setActiveSection(String(e.active.id));
   const onSectionDragCancel = () => setActiveSection(null);
@@ -396,11 +397,11 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
 
   if (!draft) {
     return (
-      <div className="bg-white rounded-2xl border border-black p-8 text-center">
+      <div className="bg-white rounded-2xl border border-border p-8 text-center">
         <p className="text-gray-600 mb-4">No page yet. Generate a draft from this event's info — then edit copy, add sections, drop in images. No code needed.</p>
-        <button onClick={generate} disabled={generating} className="inline-flex items-center gap-1 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-50">
+        <Button onClick={generate} disabled={generating}>
           <Sparkles className="w-4 h-4" /> {generating ? "Generating…" : "Generate draft from event info"}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -422,7 +423,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-500">Layout</span>
               {(["list", "timeline", "cards"] as AgendaLayout[]).map((l) => (
-                <button key={l} onClick={() => set((d) => ({ ...d, agenda: { ...d.agenda, layout: l } }))} className={`px-2.5 py-1 rounded-full text-xs border capitalize ${draft.agenda.layout === l ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{l}</button>
+                <button key={l} onClick={() => set((d) => ({ ...d, agenda: { ...d.agenda, layout: l } }))} className={`px-2.5 py-1 rounded-full text-[15px] border capitalize ${draft.agenda.layout === l ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{l}</button>
               ))}
             </div>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onAgendaDragEnd}>
@@ -454,10 +455,10 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-500">Card style</span>
               {(["circle", "card"] as const).map((s) => (
-                <button key={s} onClick={() => set((d) => ({ ...d, speakers: { ...d.speakers, cardStyle: s } }))} className={`px-2.5 py-1 rounded-full text-xs border capitalize ${draft.speakers.cardStyle === s ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{s}</button>
+                <button key={s} onClick={() => set((d) => ({ ...d, speakers: { ...d.speakers, cardStyle: s } }))} className={`px-2.5 py-1 rounded-full text-[15px] border capitalize ${draft.speakers.cardStyle === s ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{s}</button>
               ))}
             </div>
-            <p className="text-xs text-gray-400">Speakers are people tagged “Speaker” for this event (People tab → a person → Mark as speaker). Drag to reorder; headshots set there.</p>
+            <p className="text-[15px] text-gray-400">Speakers are people tagged “Speaker” for this event (People tab → a person → Mark as speaker). Drag to reorder; headshots set there.</p>
             {speakers.length === 0 ? <p className="text-sm text-gray-400">No speakers tagged yet.</p> : (
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onSpeakerDragEnd}>
                 <SortableContext items={speakers.map((s) => s.attendeeId)} strategy={verticalListSortingStrategy}>
@@ -471,8 +472,8 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
                             <div className="flex-1 min-w-0">
                               <p className="truncate font-medium">{s.name}</p>
                               <div className="flex gap-1.5 mt-1">
-                                <input value={s.title ?? ""} onChange={(e) => editSpeaker(s.attendeeId, { title: e.target.value })} onBlur={(e) => persistSpeaker(s.attendeeId, "title", e.target.value)} placeholder="Role" className="w-1/2 px-2 py-0.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                                <input value={s.org ?? ""} onChange={(e) => editSpeaker(s.attendeeId, { org: e.target.value })} onBlur={(e) => persistSpeaker(s.attendeeId, "org", e.target.value)} placeholder="Company" className="w-1/2 px-2 py-0.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                                <input value={s.title ?? ""} onChange={(e) => editSpeaker(s.attendeeId, { title: e.target.value })} onBlur={(e) => persistSpeaker(s.attendeeId, "title", e.target.value)} placeholder="Role" className="w-1/2 px-2 py-0.5 border border-gray-200 rounded text-[15px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                                <input value={s.org ?? ""} onChange={(e) => editSpeaker(s.attendeeId, { org: e.target.value })} onBlur={(e) => persistSpeaker(s.attendeeId, "org", e.target.value)} placeholder="Company" className="w-1/2 px-2 py-0.5 border border-gray-200 rounded text-[15px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
                               </div>
                             </div>
                           </div>
@@ -490,7 +491,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
           <>
             <input value={draft.details.title} onChange={(e) => set((d) => ({ ...d, details: { ...d.details, title: e.target.value } }))} placeholder="Section title (shown on page)" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
             <input value={draft.details.rsvpLabel} onChange={(e) => set((d) => ({ ...d, details: { ...d.details, rsvpLabel: e.target.value } }))} placeholder="RSVP button label" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-            <p className="text-xs text-gray-400">Date &amp; location pull live from the event{plan.lumaUrl ? "; RSVP links to the attached Luma." : ". Attach a Luma link to enable RSVP."}</p>
+            <p className="text-[15px] text-gray-400">Date &amp; location pull live from the event{plan.lumaUrl ? "; RSVP links to the attached Luma." : ". Attach a Luma link to enable RSVP."}</p>
           </>
         );
       case "gallery":
@@ -546,7 +547,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
         <div className="flex items-center gap-2">
           <button onClick={generate} disabled={generating} className="inline-flex items-center gap-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"><Sparkles className="w-3.5 h-3.5" /> {generating ? "Generating…" : "Regenerate copy"}</button>
           <button onClick={save} disabled={saving} className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-200 rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
-          {savedAt && !saving && <span className="text-xs text-gray-400">Saved</span>}
+          {savedAt && !saving && <span className="text-[15px] text-gray-400">Saved</span>}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setFullscreen(true)} className="inline-flex items-center gap-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"><Maximize2 className="w-3.5 h-3.5" /> Preview</button>
@@ -561,14 +562,14 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
         {/* Editor */}
         <div className="space-y-4">
           {/* Theme */}
-          <div className="bg-white rounded-2xl border border-black p-4 space-y-3">
+          <div className="bg-white rounded-2xl border border-border p-4 space-y-3">
             <p className="text-sm font-medium">Theme</p>
 
             {/* Presets — a starting look you can then fine-tune below. */}
             <div className="flex items-center gap-2 text-sm flex-wrap">
               <span className="text-gray-500 w-20 shrink-0">Preset</span>
               {PRESETS.map((p) => (
-                <button key={p.name} onClick={() => set((d) => applyPreset(d, p))} className="px-2.5 py-1 rounded-full text-xs border border-gray-200 hover:bg-gray-50">{p.name}</button>
+                <button key={p.name} onClick={() => set((d) => applyPreset(d, p))} className="px-2.5 py-1 rounded-full text-[15px] border border-gray-200 hover:bg-gray-50">{p.name}</button>
               ))}
             </div>
 
@@ -581,7 +582,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
                   onDragOver={(e) => { e.preventDefault(); if (!styleDragOver) setStyleDragOver(true); }}
                   onDragLeave={() => setStyleDragOver(false)}
                   onDrop={(e) => { e.preventDefault(); setStyleDragOver(false); void addStyleFiles(e.dataTransfer.files); }}
-                  className={`border border-dashed rounded text-xs cursor-pointer text-center transition-all duration-150 ${styleDragOver ? "border-gray-900 bg-gray-50 shadow-md py-6 text-gray-700" : "border-gray-300 text-gray-500 hover:bg-gray-50 py-3"}`}
+                  className={`border border-dashed rounded text-[15px] cursor-pointer text-center transition-all duration-150 ${styleDragOver ? "border-gray-900 bg-gray-50 shadow-md py-6 text-gray-700" : "border-gray-300 text-gray-500 hover:bg-gray-50 py-3"}`}
                 >
                   {styleDragOver ? "Drop to add" : "drop or click — screenshots / mocks (add several)"}
                 </div>
@@ -596,17 +597,17 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
                       ))}
                     </div>
                     <div className="flex items-center gap-3 mt-2">
-                      <button onClick={() => void applyStyle()} disabled={styling} className="px-3 py-1 bg-gray-900 text-white rounded text-xs hover:bg-gray-800 disabled:opacity-50">
+                      <Button size="sm" onClick={() => void applyStyle()} disabled={styling}>
                         {styling ? "Analyzing…" : `Apply style from ${styleImages.length} image${styleImages.length > 1 ? "s" : ""}`}
-                      </button>
-                      <button onClick={() => setStyleImages([])} className="text-xs text-gray-400 hover:text-gray-700">clear</button>
+                      </Button>
+                      <button onClick={() => setStyleImages([])} className="text-[15px] text-gray-400 hover:text-gray-700">clear</button>
                     </div>
                   </>
                 )}
               </div>
               <input ref={styleInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => { void addStyleFiles(e.target.files); e.target.value = ""; }} />
             </div>
-            <p className="text-xs text-gray-400">Copies the look (fonts, color, layout), not the content.{styleErr ? <span className="text-red-600"> · {styleErr}</span> : null}</p>
+            <p className="text-[15px] text-gray-400">Copies the look (fonts, color, layout), not the content.{styleErr ? <span className="text-red-600"> · {styleErr}</span> : null}</p>
 
             {/* Type — heading vs body font groups. */}
             <div className="flex items-center gap-2 text-sm flex-wrap">
@@ -622,7 +623,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
             <div className="flex items-center gap-2 text-sm flex-wrap">
               <span className="text-gray-500 w-20 shrink-0">Heading</span>
               {([["plain", "Plain"], ["marker", "Square + label"]] as const).map(([v, label]) => (
-                <button key={v} onClick={() => set((d) => ({ ...d, theme: { ...d.theme, headingStyle: v } }))} className={`px-2.5 py-1 rounded-full text-xs border ${draft.theme.headingStyle === v ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{label}</button>
+                <button key={v} onClick={() => set((d) => ({ ...d, theme: { ...d.theme, headingStyle: v } }))} className={`px-2.5 py-1 rounded-full text-[15px] border ${draft.theme.headingStyle === v ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{label}</button>
               ))}
             </div>
 
@@ -632,7 +633,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
               <input type="color" value={draft.theme.accent} onChange={(e) => set((d) => ({ ...d, theme: { ...d.theme, accent: e.target.value } }))} className="w-7 h-7 rounded border border-gray-200 p-0" />
               <span className="text-gray-400">on</span>
               {([["marker", "Marker"], ["title", "Title"]] as const).map(([v, label]) => (
-                <button key={v} onClick={() => set((d) => ({ ...d, theme: { ...d.theme, accentOn: v } }))} className={`px-2.5 py-1 rounded-full text-xs border ${draft.theme.accentOn === v ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{label}</button>
+                <button key={v} onClick={() => set((d) => ({ ...d, theme: { ...d.theme, accentOn: v } }))} className={`px-2.5 py-1 rounded-full text-[15px] border ${draft.theme.accentOn === v ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 hover:bg-gray-50"}`}>{label}</button>
               ))}
             </div>
 
@@ -640,10 +641,10 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
             <div className="flex items-center gap-2 text-sm flex-wrap">
               <span className="text-gray-500 w-20 shrink-0">Background</span>
               <input type="color" value={draft.theme.bgColor ?? "#ffffff"} onChange={(e) => set((d) => ({ ...d, theme: { ...d.theme, bgColor: e.target.value } }))} className="w-7 h-7 rounded border border-gray-200 p-0" />
-              {draft.theme.bgColor && <button onClick={() => set((d) => ({ ...d, theme: { ...d.theme, bgColor: null } }))} className="text-xs text-gray-400 hover:text-red-600">reset</button>}
+              {draft.theme.bgColor && <button onClick={() => set((d) => ({ ...d, theme: { ...d.theme, bgColor: null } }))} className="text-[15px] text-gray-400 hover:text-red-600">reset</button>}
               <span className="text-gray-500 ml-2">Text</span>
               <input type="color" value={draft.theme.textColor ?? "#111827"} onChange={(e) => set((d) => ({ ...d, theme: { ...d.theme, textColor: e.target.value } }))} className="w-7 h-7 rounded border border-gray-200 p-0" />
-              {draft.theme.textColor && <button onClick={() => set((d) => ({ ...d, theme: { ...d.theme, textColor: null } }))} className="text-xs text-gray-400 hover:text-red-600">reset</button>}
+              {draft.theme.textColor && <button onClick={() => set((d) => ({ ...d, theme: { ...d.theme, textColor: null } }))} className="text-[15px] text-gray-400 hover:text-red-600">reset</button>}
             </div>
 
             <label className="inline-flex items-center gap-1 text-sm text-gray-500"><input type="checkbox" checked={draft.theme.scrollAnim} onChange={(e) => set((d) => ({ ...d, theme: { ...d.theme, scrollAnim: e.target.checked } }))} /> Scroll animations</label>
@@ -652,15 +653,15 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
               <span className="text-gray-500 w-20 shrink-0">Hero image</span>
               {draft.theme.bgImageUrl && <img src={draft.theme.bgImageUrl} alt="" className="w-8 h-8 rounded object-cover" />}
               <FileDrop compact label="drop full-bleed image" onUploaded={(url) => set((d) => ({ ...d, theme: { ...d.theme, bgImageUrl: url } }))} />
-              {draft.theme.bgImageUrl && <button onClick={() => set((d) => ({ ...d, theme: { ...d.theme, bgImageUrl: null } }))} className="text-xs text-gray-400 hover:text-red-600">reset</button>}
+              {draft.theme.bgImageUrl && <button onClick={() => set((d) => ({ ...d, theme: { ...d.theme, bgImageUrl: null } }))} className="text-[15px] text-gray-400 hover:text-red-600">reset</button>}
             </div>
           </div>
 
           {/* Sections — drag to reorder, show/hide; page-break lines split the site. */}
-          <div className="bg-white rounded-2xl border border-black p-4">
+          <div className="bg-white rounded-2xl border border-border p-4">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium">Sections <span className="text-gray-400 font-normal">(drag to reorder)</span></p>
-              <button onClick={() => set((d) => ({ ...d, order: [...d.order, `divider-${Math.random().toString(36).slice(2, 8)}`] }))} className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-gray-900"><Minus className="w-3.5 h-3.5" /> Add page-break line</button>
+              <button onClick={() => set((d) => ({ ...d, order: [...d.order, `divider-${Math.random().toString(36).slice(2, 8)}`] }))} className="inline-flex items-center gap-1 text-[15px] text-gray-600 hover:text-gray-900"><Minus className="w-3.5 h-3.5" /> Add page-break line</button>
             </div>
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={onSectionDragStart} onDragEnd={onSectionDragEnd} onDragCancel={onSectionDragCancel}>
               <div className="space-y-1">
@@ -699,7 +700,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
           </div>
 
           {/* Hero */}
-          <div className="bg-white rounded-2xl border border-black p-4 space-y-2">
+          <div className="bg-white rounded-2xl border border-border p-4 space-y-2">
             <p className="text-sm font-medium">Hero</p>
             <input value={draft.hero.headline} onChange={(e) => set((d) => ({ ...d, hero: { ...d.hero, headline: e.target.value } }))} placeholder="Headline" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
             <input value={draft.hero.subhead} onChange={(e) => set((d) => ({ ...d, hero: { ...d.hero, subhead: e.target.value } }))} placeholder="Subhead" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
@@ -716,7 +717,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
                   return (
                     <SortableSection key={key} id={key}>
                       {({ setActivatorNodeRef, attributes, listeners, isDragging }) => (
-                        <div className={`rounded-2xl border p-4 space-y-2 ${isDragging ? "border-2 border-dashed border-gray-900/40 bg-gray-50" : "bg-white border-black"}`}>
+                        <div className={`rounded-2xl border p-4 space-y-2 ${isDragging ? "border-2 border-dashed border-gray-900/40 bg-gray-50" : "bg-white border-border"}`}>
                           <div className={`flex items-center gap-2 ${isDragging ? "opacity-40" : ""}`}>
                             <button ref={setActivatorNodeRef} {...attributes} {...listeners} className="flex flex-1 items-center gap-2 -m-1 p-1 rounded cursor-grab active:cursor-grabbing touch-none text-left hover:bg-gray-50" title="Drag to reorder">
                               <GripVertical className="w-4 h-4 text-gray-400 shrink-0" />
@@ -728,7 +729,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
                               <select
                                 value={draft.headingFonts?.[key] ?? ""}
                                 onChange={(e) => set((d) => { const hf = { ...d.headingFonts }; if (e.target.value) hf[key] = e.target.value as PageFont; else delete hf[key]; return { ...d, headingFonts: hf }; })}
-                                className="text-xs border border-gray-200 rounded px-1 py-0.5 text-gray-500 bg-white"
+                                className="text-[15px] border border-gray-200 rounded px-1 py-0.5 text-gray-500 bg-white"
                                 title="Heading font for this section"
                               >
                                 <option value="">Aa</option>
@@ -759,7 +760,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
 
         {/* Side preview */}
         <div className="lg:sticky lg:top-4">
-          <p className="text-xs text-gray-400 mb-2">Live preview · <button onClick={() => setFullscreen(true)} className="underline hover:text-gray-700">open full screen</button></p>
+          <p className="text-[15px] text-gray-400 mb-2">Live preview · <button onClick={() => setFullscreen(true)} className="underline hover:text-gray-700">open full screen</button></p>
           <div className="bg-gray-50 border border-gray-200 rounded-2xl overflow-hidden">
             <div className={`mx-auto ${mobile ? "max-w-[24rem]" : "max-w-full"} transition-[max-width] duration-200`}>
               <EventPagePreview plan={plan} draft={draft} speakers={speakers} full={false} animate={false} />

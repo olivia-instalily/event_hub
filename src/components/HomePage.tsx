@@ -1,11 +1,13 @@
 import { Calendar, MapPin, CheckSquare, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { listEvents, deleteEvent, type EventListItem } from "../lib/db";
+import { listEvents, deleteEvent, listOwnerTodos, type EventListItem, type OwnerTodo } from "../lib/db";
 import { useProfile, initials } from "../lib/profile";
 import { TagStack } from "./TagStack";
 import { ConfirmModal } from "./Modal";
 
 const NOT_CAPTURED = "Not captured";
+// Phase color dots — same palette/order as the phase tracker (by phase order).
+const PHASE_DOT = ["bg-blue-500", "bg-violet-500", "bg-amber-500", "bg-emerald-500", "bg-rose-500", "bg-teal-500"];
 
 /** Profile-dependent landing page: events assigned to the current profile + a (future) todos rail. */
 export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId: string) => void; onCreateEvent: () => void }) {
@@ -22,6 +24,8 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
     try { await deleteEvent(id); } catch (e: any) { setError(e.message ?? String(e)); }
   };
 
+  const [todos, setTodos] = useState<OwnerTodo[]>([]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -32,10 +36,19 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
     return () => { cancelled = true; };
   }, []);
 
+  // Todos = upcoming deliverables across the events this profile owns.
+  useEffect(() => {
+    if (!current) { setTodos([]); return; }
+    let cancelled = false;
+    listOwnerTodos(current.id).then((t) => { if (!cancelled) setTodos(t); }).catch(() => { if (!cancelled) setTodos([]); });
+    return () => { cancelled = true; };
+  }, [current?.id]);
+
   // Events the current profile owns. Future/in-process first (soonest), then past (most recent), undated last.
   const myEvents = !current
     ? []
     : events
+        .filter((e) => !e.isTemplate) // templates aren't events — hidden from Home
         .filter((e) => e.owners.some((o) => o.id === current.id))
         .sort((a, b) => {
           const ad = a.date ?? "", bd = b.date ?? "";
@@ -46,6 +59,18 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
           if (!bd) return -1;
           return aPast ? bd.localeCompare(ad) : ad.localeCompare(bd);
         });
+
+  // Todos grouped by event (the active events you own), showing at most 5 per event.
+  const todoGroups = (() => {
+    const m = new Map<string, { eventId: string; name: string; items: OwnerTodo[]; total: number }>();
+    for (const td of todos) {
+      let g = m.get(td.eventId);
+      if (!g) { g = { eventId: td.eventId, name: td.eventName, items: [], total: 0 }; m.set(td.eventId, g); }
+      g.total++;
+      if (g.items.length < 5) g.items.push(td);
+    }
+    return [...m.values()].map((g) => ({ ...g, more: g.total - g.items.length }));
+  })();
 
   return (
     <div>
@@ -58,7 +83,7 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
           )}
           <div>
             <h1 className="text-2xl">{current ? `Hi, ${current.name.split(/\s+/)[0]}` : "Home"}</h1>
-            <p className="text-gray-500 text-sm">{current ? "Here's what's assigned to you." : "Pick a profile to see your events."}</p>
+            {!current && <p className="text-gray-500 text-sm">Pick a profile to see your events.</p>}
           </div>
         </div>
         <button
@@ -90,7 +115,7 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
                 <div
                   key={event.id}
                   onClick={() => onOpenEvent(event.id)}
-                  className="group relative text-left bg-white rounded-2xl border border-black p-6 hover:shadow-md transition-shadow overflow-hidden flex flex-col cursor-pointer"
+                  className="group relative text-left bg-white rounded-2xl border border-border p-6 hover:shadow-md transition-shadow overflow-hidden flex flex-col cursor-pointer"
                 >
                   <button
                     onClick={(e) => { e.stopPropagation(); setDeleteTarget(event); }}
@@ -109,9 +134,9 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
                   )}
 
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    {event.format && <span className="px-2.5 py-1 bg-gray-100 rounded-md text-xs">{event.format}</span>}
+                    {event.format && <span className="px-2.5 py-1 bg-gray-100 rounded-md text-[15px]">{event.format}</span>}
                     {event.attendeeCount != null && (
-                      <span className="text-gray-500 text-xs whitespace-nowrap">{event.attendeeCount} checked in</span>
+                      <span className="text-gray-500 text-[15px] whitespace-nowrap">{event.attendeeCount} checked in</span>
                     )}
                   </div>
 
@@ -135,13 +160,45 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
           )}
         </section>
 
-        {/* Todos — placeholder, to be wired up later */}
+        {/* Todos — grouped by event (the active events you own), capped at 5 each. */}
         <section>
           <h2 className="text-lg mb-4">Todos</h2>
-          <div className="border border-dashed border-gray-300 rounded-2xl p-8 text-center text-gray-500">
-            <CheckSquare className="w-6 h-6 mx-auto mb-2 text-gray-400" />
-            <p className="text-sm">Todos coming soon.</p>
-          </div>
+          {todos.length === 0 ? (
+            <div className="border border-dashed border-gray-300 rounded-2xl p-8 text-center text-gray-500">
+              <CheckSquare className="w-6 h-6 mx-auto mb-2 text-gray-400" />
+              <p className="text-sm">{current ? "No open deliverables on your events." : "Pick a profile to see your todos."}</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {todoGroups.map((g) => (
+                <div key={g.eventId} className="bg-white rounded-2xl border border-border overflow-hidden">
+                  <button onClick={() => onOpenEvent(g.eventId)} className="w-full flex items-center justify-between gap-2 px-4 py-2.5 bg-muted/50 hover:bg-muted text-left">
+                    <span className="font-medium text-sm truncate">{g.name}</span>
+                    <span className="text-[13px] text-gray-400 shrink-0">{g.total} open</span>
+                  </button>
+                  <div className="divide-y divide-gray-100">
+                    {g.items.map((td) => {
+                      const overdue = td.dueDate && td.dueDate < new Date().toISOString().slice(0, 10);
+                      const urgent = td.phaseOrder === g.items[0].phaseOrder; // earliest phase in this event
+                      return (
+                        <button key={td.id} onClick={() => onOpenEvent(td.eventId)} className={`w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-gray-50 transition-colors ${urgent ? "bg-gray-50/60" : ""}`}>
+                          <span className={`w-2.5 h-2.5 rounded-full mt-1 shrink-0 ${PHASE_DOT[td.phaseOrder % PHASE_DOT.length] ?? "bg-gray-300"}`} title={td.phase ?? "Unphased"} />
+                          <span className="flex-1 min-w-0">
+                            <span className={`block text-sm truncate ${urgent ? "text-gray-900 font-medium" : "text-gray-900"}`}>{td.title}</span>
+                            {td.phase && <span className="block text-[15px] text-gray-400 truncate">{td.phase}</span>}
+                          </span>
+                          <span className={`text-[15px] shrink-0 ${overdue ? "text-red-600 font-medium" : "text-gray-400"}`}>{overdue ? "overdue" : td.dueDate ?? "—"}</span>
+                        </button>
+                      );
+                    })}
+                    {g.more > 0 && (
+                      <button onClick={() => onOpenEvent(g.eventId)} className="w-full text-left px-4 py-2 text-[13px] text-gray-500 hover:bg-gray-50">+{g.more} more on this event</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       </div>
 

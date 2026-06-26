@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Home, Calendar, Users, Briefcase, DollarSign } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Home, Calendar, Users, Briefcase, DollarSign, Plus } from 'lucide-react';
+import { filesFromDrop } from './lib/drop';
 import { EventsPage } from './components/EventsPage';
 import { HomePage } from './components/HomePage';
 import { PeoplePage } from './components/PeoplePage';
@@ -7,6 +8,7 @@ import { VendorsPage } from './components/VendorsPage';
 import { BudgetPage } from './components/BudgetPage';
 import { ProfileProvider } from './lib/profile';
 import { ProfileSwitcher } from './components/ProfileSwitcher';
+import { Tabs, TabsList, TabsTrigger } from '@instalily/ui/tabs';
 
 export type PeopleStatusFilter = 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers';
 export type EventFilter = { id: string; name: string; tag?: string | null; status?: PeopleStatusFilter };
@@ -23,6 +25,19 @@ export default function Component() {
   const [createOnEvents, setCreateOnEvents] = useState(false);
   // Which tab an open event was launched from, so its Back button returns there.
   const [eventOrigin, setEventOrigin] = useState<'events' | 'budget'>('events');
+  // Files dropped anywhere on the page → jump to Events, open Create, ingest straight to review.
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+  const onAppDrop = (files: File[]) => {
+    if (!files.length) return;
+    setDroppedFiles(files);
+    setSelectedEventId(null);
+    setPeopleEventFilter(null);
+    setCreateOnEvents(true);
+    setEventsNonce((n) => n + 1);
+    setActivePage('events');
+  };
 
   // Event detail → People filtered to that event.
   const viewPeopleForEvent = (filter: EventFilter) => {
@@ -75,33 +90,38 @@ export default function Component() {
     setActivePage('events');
   };
 
-  const tab = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget', icon: React.ReactNode, label: string) => (
-    <button
-      onClick={() => navTo(page)}
-      className={`flex items-center gap-2 px-2 py-1 rounded-lg transition-colors ${
-        activePage === page ? 'bg-gray-200 text-black' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
   return (
     <ProfileProvider>
-    <div className="min-h-screen bg-white">
-      <nav className="bg-white border-b border-black">
+    <div
+      className="min-h-screen bg-white"
+      onDragEnter={(e) => { if (hasFiles(e)) { e.preventDefault(); dragDepth.current++; setDragOver(true); } }}
+      onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
+      onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragOver(false); }}
+      onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current = 0; setDragOver(false); void filesFromDrop(e.dataTransfer).then(onAppDrop); }}
+    >
+      {dragOver && (
+        <div className="fixed inset-0 z-[100] bg-gray-200/70 border-4 border-dashed border-gray-400 flex items-center justify-center pointer-events-none">
+          <span className="text-lg text-gray-700 bg-white/90 px-4 py-2 rounded-full inline-flex items-center gap-2"><Plus className="w-5 h-5" /> Drop a brief, budget, cover, or folder to create an event</span>
+        </div>
+      )}
+      <nav className="bg-white border-b border-border">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-8">
+            <div className="flex items-center">
               <button onClick={() => navTo('home')} className="text-xl mr-8 hover:opacity-70 transition-opacity" title="Home">EventHub</button>
-              <div className="flex gap-2">
-                {tab('home', <Home className="w-4 h-4" />, 'Home')}
-                {tab('events', <Calendar className="w-4 h-4" />, 'Events')}
-                {tab('people', <Users className="w-4 h-4" />, 'People')}
-                {tab('vendors', <Briefcase className="w-4 h-4" />, 'Vendors')}
-                {tab('budget', <DollarSign className="w-4 h-4" />, 'Budget')}
-              </div>
+              {/* mr-8 mirrors EventHub's left gap, so an equal buffer is always kept to the
+                  right of the menu — even when the window narrows it won't crowd the profile. */}
+              <Tabs className="mr-8" value={activePage} onValueChange={(v) => navTo(v as typeof activePage)}>
+                {/* Bigger triggers + a thin white divider between each to separate the buttons. */}
+                <TabsList className="group-data-horizontal/tabs:h-10 [&_[data-slot=tabs-trigger]]:px-4 [&_[data-slot=tabs-trigger]]:text-base [&_[data-slot=tabs-trigger]:not(:last-child)]:border-r [&_[data-slot=tabs-trigger]:not(:last-child)]:border-r-white">
+                  <TabsTrigger value="home"><Home className="w-4 h-4" /> Home</TabsTrigger>
+                  <TabsTrigger value="events"><Calendar className="w-4 h-4" /> Events</TabsTrigger>
+                  <TabsTrigger value="people"><Users className="w-4 h-4" /> People</TabsTrigger>
+                  <TabsTrigger value="vendors"><Briefcase className="w-4 h-4" /> Vendors</TabsTrigger>
+                  <TabsTrigger value="budget"><DollarSign className="w-4 h-4" /> Budget</TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
             <ProfileSwitcher />
           </div>
@@ -117,6 +137,8 @@ export default function Component() {
             setSelectedEventId={setSelectedFromEvents}
             onViewPeople={viewPeopleForEvent}
             openCreate={createOnEvents}
+            initialFiles={droppedFiles}
+            onFilesConsumed={() => setDroppedFiles(null)}
           />
         )}
         {activePage === 'people' && (

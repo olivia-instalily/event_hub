@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, Search, ChevronDown, Users, LayoutGrid, List, X, ExternalLink, Download, User, Mic, Plus } from "lucide-react";
+import { ChevronLeft, Search, Users, LayoutGrid, List, X, ExternalLink, Download, User, Mic, Plus } from "lucide-react";
 import {
   listAllAttendees,
   listAttendeesForEvent,
+  syncGreenhouse,
   getPersonEvents,
   updateAttendee,
   addAttendee,
@@ -20,12 +21,20 @@ import {
   type Note,
   type Label,
 } from "../lib/db";
-import { tagColor } from "../lib/tags";
+import { tagBadgeVariant } from "../lib/tags";
+import { Badge } from "@instalily/ui/badge";
+import { Button } from "@instalily/ui/button";
+import { Input } from "@instalily/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
+import { DataTable } from "@instalily/ui/data-table";
+import type { ColumnDef } from "@tanstack/react-table";
+import { StatCard } from "./StatCard";
 import { downloadCsv } from "../lib/csv";
 import { LabelPicker } from "./LabelPicker";
 import { FileDrop } from "./FileDrop";
 import { Modal, PromptModal, ConfirmModal } from "./Modal";
 import { useProfile } from "../lib/profile";
+import { TaggingWorkspace } from "./PeopleTagging";
 
 type TileFilter = 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers';
 
@@ -35,6 +44,28 @@ interface PeoplePageProps {
 }
 
 const PERSON_TYPES = ["Hire", "Partner", "ICP", "Unknown", "Client", "Investor"] as const;
+
+// City tabs on the all-people view — `match` is the canonical event location to filter on.
+const CITY_TABS: { label: string; match: string | null }[] = [
+  { label: "All", match: null },
+  { label: "New York", match: "New York" },
+  { label: "SF", match: "San Francisco" },
+  { label: "London", match: "London" },
+  { label: "Toronto", match: "Toronto" },
+];
+
+// Greenhouse application-status pill (admin-gated at the call site). "Matched by email" —
+// absence is NOT "didn't apply" (they may have applied with a different address).
+const GH_META: Record<string, { label: string; cls: string }> = {
+  applied: { label: "Applied", cls: "bg-amber-100 text-amber-700" },
+  in_pipeline: { label: "In pipeline", cls: "bg-blue-100 text-blue-700" },
+  hired: { label: "Hired", cls: "bg-green-100 text-green-700" },
+};
+function GreenhouseBadge({ status }: { status: string | null }) {
+  if (!status || !GH_META[status]) return null;
+  const m = GH_META[status];
+  return <span className={`inline-flex items-center text-xs rounded-full px-2 py-0.5 ${m.cls}`} title="Matched by email in Greenhouse — may miss people who applied with a different address">{m.label}</span>;
+}
 
 function typeColor(type: string | null): string {
   switch (type) {
@@ -48,15 +79,15 @@ function typeColor(type: string | null): string {
 }
 
 function statusBadge(status: string | null | undefined, checkedIn: boolean | undefined) {
-  if (checkedIn) return <span className="inline-block px-2 py-1 rounded text-xs bg-green-100 text-green-700">Checked in</span>;
+  if (checkedIn) return <span className="inline-block px-2 py-1 rounded text-[15px] bg-green-100 text-green-700">Checked in</span>;
   switch ((status ?? "").toLowerCase()) {
-    case "approved": return <span className="inline-block px-2 py-1 rounded text-xs bg-blue-100 text-blue-700">Registered</span>;
-    case "waitlist": return <span className="inline-block px-2 py-1 rounded text-xs bg-amber-100 text-amber-700">Waitlisted</span>;
+    case "approved": return <span className="inline-block px-2 py-1 rounded text-[15px] bg-blue-100 text-blue-700">Registered</span>;
+    case "waitlist": return <span className="inline-block px-2 py-1 rounded text-[15px] bg-amber-100 text-amber-700">Waitlisted</span>;
     case "pending":
-    case "pending_approval": return <span className="inline-block px-2 py-1 rounded text-xs bg-gray-100 text-gray-600">Pending</span>;
-    case "invited": return <span className="inline-block px-2 py-1 rounded text-xs bg-gray-100 text-gray-600">Invited</span>;
-    case "declined": return <span className="inline-block px-2 py-1 rounded text-xs bg-red-100 text-red-700">Declined</span>;
-    default: return <span className="inline-block px-2 py-1 rounded text-xs bg-gray-100 text-gray-500">—</span>;
+    case "pending_approval": return <span className="inline-block px-2 py-1 rounded text-[15px] bg-gray-100 text-gray-600">Pending</span>;
+    case "invited": return <span className="inline-block px-2 py-1 rounded text-[15px] bg-gray-100 text-gray-600">Invited</span>;
+    case "declined": return <span className="inline-block px-2 py-1 rounded text-[15px] bg-red-100 text-red-700">Declined</span>;
+    default: return <span className="inline-block px-2 py-1 rounded text-[15px] bg-gray-100 text-gray-500">—</span>;
   }
 }
 
@@ -68,7 +99,7 @@ function displayName(p: PersonView): string {
 /** Repeat-attendee badge — same everywhere (global + event-filtered lists). */
 function MultiEventBadge({ count }: { count: number }) {
   if (count < 2) return null;
-  return <span className="px-1.5 py-0.5 rounded-full text-xs bg-gray-900 text-white" title={`Attended ${count} events`}>{count}×</span>;
+  return <span className="px-1.5 py-0.5 rounded-full text-[15px] bg-gray-900 text-white" title={`Attended ${count} events`}>{count}×</span>;
 }
 
 function relTime(iso: string): string {
@@ -85,7 +116,7 @@ function Field({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
   return (
     <div>
-      <dt className="text-xs text-gray-500">{label}</dt>
+      <dt className="text-[15px] text-gray-500">{label}</dt>
       <dd className="text-sm text-gray-800">{value}</dd>
     </div>
   );
@@ -189,7 +220,7 @@ function PersonDetail({
                 <div className="mt-2 flex items-center gap-2 flex-wrap">
                   <FileDrop compact label="photo" onUploaded={(url) => uploadPhoto(url)} />
                   {eventId && (
-                    <button onClick={toggleSpeaker} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border transition-colors ${isSpeaker ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"}`}>
+                    <button onClick={toggleSpeaker} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border transition-colors ${isSpeaker ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"}`}>
                       <Mic className="w-3 h-3" /> {isSpeaker ? "Speaker for this event" : "Mark as speaker"}
                     </button>
                   )}
@@ -216,7 +247,7 @@ function PersonDetail({
 
           {/* LinkedIn */}
           <div className="mb-6">
-            <label className="text-xs text-gray-500 block mb-1">LinkedIn</label>
+            <label className="text-[15px] text-gray-500 block mb-1">LinkedIn</label>
             {linkedin && (
               <a href={linkedin} target="_blank" rel="noreferrer" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1 mb-1">
                 {linkedin} <ExternalLink className="w-3 h-3" />
@@ -228,7 +259,7 @@ function PersonDetail({
                 placeholder="https://linkedin.com/in/…"
                 value={linkedin}
                 onChange={(e) => setLinkedin(e.target.value)}
-                className="flex-1 min-w-0 px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                className="flex-1 min-w-0 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
               />
               <button
                 onClick={save}
@@ -238,7 +269,7 @@ function PersonDetail({
                 {saving ? "…" : "Save"}
               </button>
             </div>
-            {savedAt && <span className="text-xs text-green-600">Saved</span>}
+            {savedAt && <span className="text-[15px] text-green-600">Saved</span>}
           </div>
 
           {/* Labels */}
@@ -257,12 +288,12 @@ function PersonDetail({
             ) : (
               <div className="space-y-2">
                 {events.map((e) => (
-                  <div key={e.eventId} className="border border-black rounded-lg p-3">
+                  <div key={e.eventId} className="border border-border rounded-lg p-3">
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-sm">{e.eventName}</span>
-                      {e.tag && <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(e.tag)}`}>{e.tag}</span>}
+                      {e.tag && <Badge variant={tagBadgeVariant(e.tag)}>{e.tag}</Badge>}
                     </div>
-                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                    <div className="flex items-center gap-2 mt-1 text-[15px] text-gray-500">
                       {e.role !== "attendee" && <span className="capitalize">{e.role}</span>}
                       {statusBadge(e.registrationStatus, e.checkedIn)}
                       {e.date && <span>{e.date}</span>}
@@ -289,12 +320,12 @@ function PersonDetail({
                     )}
                     <span
                       title={n.contributor ?? "Unknown contributor"}
-                      className="relative z-10 shrink-0 w-6 h-6 rounded-full bg-gray-200 text-gray-600 text-[10px] font-medium flex items-center justify-center"
+                      className="relative z-10 shrink-0 w-6 h-6 rounded-full bg-gray-200 text-gray-600 text-[13px] font-medium flex items-center justify-center"
                     >
                       {n.contributor ? n.contributor.slice(0, 1).toUpperCase() : <User className="w-3 h-3" />}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs text-gray-500">
+                      <div className="text-[15px] text-gray-500">
                         <span className="font-medium text-gray-700">{n.contributor ?? "Unknown"}</span> · {relTime(n.createdAt)}
                       </div>
                       <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{n.body}</p>
@@ -308,7 +339,7 @@ function PersonDetail({
               placeholder="Add a note…"
               value={newNote}
               onChange={(e) => setNewNote(e.target.value)}
-              className="w-full px-3 py-2 border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
             />
             <div className="flex justify-end mt-2">
               <button
@@ -380,24 +411,30 @@ function AddPersonModal({ eventFilter, onClose, onAdded }: {
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={field} />
       </div>
       <div className="flex justify-end gap-2 mt-5">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
-        <button onClick={() => void submit()} disabled={busy || !name.trim()} className="px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50">{busy ? "Adding…" : "Add person"}</button>
+        <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+        <Button size="sm" onClick={() => void submit()} disabled={busy || !name.trim()}>{busy ? "Adding…" : "Add person"}</Button>
       </div>
     </Modal>
   );
 }
 
 export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
+  const { current } = useProfile();
+  const isAdmin = !!current?.isAdmin; // gate: the cross-context applicant flag is admin-only
   const [people, setPeople] = useState<PersonView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [ghSyncing, setGhSyncing] = useState(false);
+  const [ghMsg, setGhMsg] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [multiOnly, setMultiOnly] = useState(false);
+  const [minEvents, setMinEvents] = useState(1); // ≥ N events filter (1 = everyone)
   const [dateRange, setDateRange] = useState<'all' | 'week' | 'month' | '3months' | 'year'>('all');
   const [viewMode, setViewMode] = useState<'cards' | 'lines'>('cards');
   const [tileFilter, setTileFilter] = useState<TileFilter>(eventFilter?.status ?? 'all');
+  const [cityTab, setCityTab] = useState<string | null>(null); // null = All; else the canonical city to match
 
   // Re-apply the incoming status when navigating in from a different event/tile.
   useEffect(() => { setTileFilter(eventFilter?.status ?? 'all'); }, [eventFilter?.id, eventFilter?.status]);
@@ -440,10 +477,24 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
     work.catch((e) => { if (!cancelled) setError(e.message ?? String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [eventFilter?.id]);
+  }, [eventFilter?.id, reloadKey]);
 
   // Aggregate placeholder records never show in the people list.
   const visiblePeople = people.filter((p) => !p.isAggregate);
+
+  // Greenhouse sync (admin only) — match the visible people by email, refresh the flags.
+  const syncGh = async () => {
+    setGhSyncing(true); setGhMsg(null);
+    try {
+      const emails = visiblePeople.map((p) => p.email).filter(Boolean) as string[];
+      const r = await syncGreenhouse(emails);
+      setGhMsg(!r.configured ? (r.error === "not configured" ? "Greenhouse not configured." : `Sync failed: ${r.error ?? "error"}`) : `Synced ${r.synced} · ${r.matched} matched`);
+      setReloadKey((k) => k + 1);
+    } finally { setGhSyncing(false); }
+  };
+  // Applicant rollup (admin, event view): "N of M attendees have applied."
+  const applied = visiblePeople.filter((p) => p.applicationStatus).length;
+  const lastSynced = visiblePeople.map((p) => p.greenhouseLastSynced).filter(Boolean).sort().pop() ?? null;
 
   // Date-range cutoff (all-people view only).
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -464,8 +515,10 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
     if (!matches) return false;
     if (typeFilter !== "all" && p.type !== typeFilter) return false;
     if (labelFilter !== "all" && !p.labelIds.includes(labelFilter)) return false;
-    if (multiOnly && p.eventsCount < 2) return false;
+    if (p.eventsCount < minEvents) return false;
     if (cutoffStr && !p.eventDates.some((d) => d >= cutoffStr && d <= todayStr)) return false;
+    // City tab (all-people view) — shown if they attended an event in that city.
+    if (!eventFilter && cityTab && !p.eventCities.some((c) => c.toLowerCase() === cityTab.toLowerCase())) return false;
     // Status tile filter (event-scoped only).
     if (eventFilter && tileFilter !== "all") {
       const s = (p.registrationStatus ?? "").toLowerCase();
@@ -486,6 +539,47 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
     { label: "Total guests", value: stats.total, filter: "all", ring: "ring-gray-300" },
   ];
 
+  // Columns for the brand DataTable (lines view). Page search/type/label/date filters stay
+  // above and feed `filtered`, so DataTable's own search/export are off; row-click opens the
+  // person slide-over, same as the cards.
+  const personColumns: ColumnDef<PersonView>[] = [
+    {
+      accessorKey: "name", header: "Name",
+      cell: ({ row }) => {
+        const p = row.original;
+        return (
+          <div>
+            <p className="font-medium">{displayName(p)}</p>
+            {p.role && p.role !== "attendee" && <p className="text-[15px] text-gray-500 capitalize">{p.role}</p>}
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "type", header: "Type",
+      cell: ({ row }) => row.original.type && row.original.type !== "Unknown"
+        ? <span className={`inline-block px-2 py-0.5 rounded-full text-[15px] ${typeColor(row.original.type)}`}>{row.original.type}</span>
+        : null,
+    },
+    {
+      id: "status", accessorKey: "eventsCount", header: eventFilter ? "Status" : "Events",
+      cell: ({ row }) => {
+        const p = row.original;
+        return (
+          <span className="inline-flex items-center gap-1.5 flex-wrap">
+            {eventFilter && statusBadge(p.registrationStatus, p.checkedIn)}
+            {isAdmin && <GreenhouseBadge status={p.applicationStatus} />}
+            <MultiEventBadge count={p.eventsCount} />
+            {!eventFilter && p.eventsCount < 2 && <span className="text-gray-600">{p.eventsCount}</span>}
+            {p.labelIds.map((id) => { const nm = labels.find((l) => l.id === id)?.name; return nm ? <span key={id} className="text-[11px] rounded-full px-2 py-0.5 bg-gray-100 text-gray-700">{nm}</span> : null; })}
+          </span>
+        );
+      },
+    },
+    { accessorKey: "title", header: "Title", cell: ({ row }) => row.original.title ?? "—" },
+    { accessorKey: "org", header: "Org", cell: ({ row }) => row.original.org ?? "—" },
+  ];
+
   return (
     <div>
       {/* Header */}
@@ -494,7 +588,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           {onBack && (
             <button
               onClick={onBack}
-              className="inline-flex items-center gap-1 mb-4 px-3 py-1.5 bg-white border border-black rounded-lg text-black hover:bg-gray-50 transition-colors"
+              className="inline-flex items-center gap-1 mb-6 px-2 py-1 rounded-lg bg-white border border-border text-gray-700 hover:bg-gray-50 transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
               Previous
@@ -509,9 +603,38 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-2 mb-6">
-          <Users className="w-6 h-6 text-gray-500" />
-          <h2 className="text-2xl">People</h2>
+        /* No page header (matches Events/Vendors). City "place" tabs are the top row, styled
+           like the Events status tabs. */
+        <div className="flex flex-wrap gap-2 mb-6">
+          {CITY_TABS.map((c) => (
+            <button
+              key={c.label}
+              onClick={() => setCityTab(c.match)}
+              className={`px-2 py-0.5 rounded-lg text-[13px] transition-colors ${cityTab === c.match ? "bg-gray-200 text-black" : "bg-white border border-border text-gray-700 hover:bg-gray-50"}`}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Tagging workspace — capture "who mattered" (confirm-inbox + inline quick-tag). Event-scoped. */}
+      {eventFilter && <TaggingWorkspace eventId={eventFilter.id} tag={eventFilter.tag ?? null} isAdmin={isAdmin} currentProfileId={current?.id ?? null} />}
+
+      {/* Greenhouse read-back — admin-gated (joins "came to an event" with "is an applicant"). */}
+      {isAdmin && (
+        <div className="mb-6 rounded-2xl border border-border bg-white px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <span className="text-gray-700">
+            {eventFilter
+              ? <><span className="font-medium">{applied}</span> of {visiblePeople.length} attendees have applied</>
+              : <><span className="font-medium">{applied}</span> of {visiblePeople.length} people are applicants</>}
+          </span>
+          <span className="text-xs text-gray-400">Matched by email — may miss people who applied with a different address.</span>
+          <span className="ml-auto flex items-center gap-3">
+            {lastSynced && <span className="text-xs text-gray-400">Synced {new Date(lastSynced).toLocaleDateString()}</span>}
+            {ghMsg && <span className="text-xs text-gray-500">{ghMsg}</span>}
+            <button onClick={syncGh} disabled={ghSyncing} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded-lg text-xs hover:bg-gray-50 disabled:opacity-50">{ghSyncing ? "Syncing…" : "Sync Greenhouse"}</button>
+          </span>
         </div>
       )}
 
@@ -522,14 +645,13 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           {tiles.map((t) => {
             const active = tileFilter === t.filter;
             return (
-              <button
+              <StatCard
                 key={t.label}
+                label={t.label}
+                active={active}
+                value={t.value != null ? t.value.toLocaleString() : "—"}
                 onClick={() => setTileFilter(active && t.filter !== "all" ? "all" : t.filter)}
-                className={`bg-white rounded-2xl p-5 text-left transition-shadow ring-2 ring-inset ${t.ring} ${active ? "shadow-md bg-gray-50" : "hover:shadow-md"}`}
-              >
-                <p className="text-gray-500 text-sm mb-1">{t.label}</p>
-                <p className="text-2xl">{t.value != null ? t.value.toLocaleString() : "—"}</p>
-              </button>
+              />
             );
           })}
         </div>
@@ -539,63 +661,59 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
       <div className="flex items-center justify-between gap-3 mb-6">
         <div className="flex flex-wrap gap-3">
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 z-10" />
+            <Input
               type="text"
               placeholder="Search people…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4 py-2 bg-white border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              className="h-10 w-64 pl-10"
             />
           </div>
-          <div className="relative">
-            <select
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-            >
-              <option value="all">All Types</option>
-              {PERSON_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
-          <div className="relative">
-            <select
-              value={labelFilter}
-              onChange={(e) => {
-                if (e.target.value === '__create__') { setNewLabelOpen(true); return; }
-                setLabelFilter(e.target.value);
-              }}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-            >
-              <option value="all">All Labels</option>
-              {labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              <option value="__create__">+ Create label…</option>
-            </select>
-            <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
-          <button
-            onClick={() => setMultiOnly((v) => !v)}
-            title="Only people who attended 2+ events"
-            className={`px-3 py-2 rounded-lg text-sm border border-black transition-colors ${multiOnly ? 'bg-gray-200 text-black' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+          <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as string)} items={[{ value: "all", label: "All Types" }, ...PERSON_TYPES.map((t) => ({ value: t, label: t }))]}>
+            <SelectTrigger className="h-10 w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              {PERSON_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select
+            value={labelFilter}
+            onValueChange={(v) => { if (v === "__create__") { setNewLabelOpen(true); return; } setLabelFilter(v as string); }}
+            items={[{ value: "all", label: "All Labels" }, ...labels.map((l) => ({ value: l.id, label: l.name })), { value: "__create__", label: "+ Create label…" }]}
           >
-            Multiple events
-          </button>
+            <SelectTrigger className="h-10 w-44"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Labels</SelectItem>
+              {labels.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
+              <SelectItem value="__create__">+ Create label…</SelectItem>
+            </SelectContent>
+          </Select>
+          {/* ≥ N events: 1 = everyone; raise it to show only people connected to that many+ events. */}
+          <div className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-sm" title="Show people connected to at least this many events">
+            <span className="text-gray-500">≥</span>
+            <input
+              type="number"
+              min={1}
+              value={minEvents}
+              onChange={(e) => setMinEvents(Math.max(1, Number(e.target.value) || 1))}
+              className="w-10 bg-transparent text-center focus:outline-none"
+            />
+            <span className="text-gray-500">events</span>
+          </div>
           {!eventFilter && (
-            <div className="relative">
-              <select
-                value={dateRange}
-                onChange={(e) => setDateRange(e.target.value as typeof dateRange)}
-                className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-              >
-                <option value="all">Any time</option>
-                <option value="week">Past week</option>
-                <option value="month">Past month</option>
-                <option value="3months">Past 3 months</option>
-                <option value="year">Past year</option>
-              </select>
-              <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
+            <Select value={dateRange} onValueChange={(v) => setDateRange(v as typeof dateRange)} items={[
+              { value: "all", label: "Any time" }, { value: "week", label: "Past week" }, { value: "month", label: "Past month" }, { value: "3months", label: "Past 3 months" }, { value: "year", label: "Past year" },
+            ]}>
+              <SelectTrigger className="h-10 w-40"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Any time</SelectItem>
+                <SelectItem value="week">Past week</SelectItem>
+                <SelectItem value="month">Past month</SelectItem>
+                <SelectItem value="3months">Past 3 months</SelectItem>
+                <SelectItem value="year">Past year</SelectItem>
+              </SelectContent>
+            </Select>
           )}
         </div>
 
@@ -603,12 +721,12 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           {labelFilter !== "all" && (
             <button
               onClick={exportLabel}
-              className="flex items-center gap-2 px-3 py-2 bg-white border border-black rounded-lg text-sm hover:bg-gray-50"
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-border rounded-lg text-sm hover:bg-gray-50"
             >
               <Download className="w-4 h-4" /> Export
             </button>
           )}
-        <div className="flex gap-2 bg-white border border-black rounded-lg p-1">
+        <div className="flex gap-2 bg-white border border-border rounded-lg p-1">
           <button
             onClick={() => setViewMode('cards')}
             className={`p-2 rounded transition-colors ${viewMode === 'cards' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
@@ -648,67 +766,50 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
             <div
               key={p.id}
               onClick={() => setSelectedPerson(p)}
-              className="bg-white rounded-xl border border-black p-4 flex flex-col cursor-pointer hover:shadow-md transition-shadow"
+              className="bg-white rounded-xl border border-border p-4 flex flex-col cursor-pointer hover:shadow-md transition-shadow"
             >
               <div className="flex items-center justify-between mb-2">
                 {p.type && p.type !== "Unknown"
-                  ? <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${typeColor(p.type)}`}>{p.type}</span>
+                  ? <span className={`inline-block px-2 py-0.5 rounded-full text-[15px] ${typeColor(p.type)}`}>{p.type}</span>
                   : <span />}
                 <div className="flex items-center gap-1">
                   <MultiEventBadge count={p.eventsCount} />
                   {eventFilter && statusBadge(p.registrationStatus, p.checkedIn)}
+                  {isAdmin && <GreenhouseBadge status={p.applicationStatus} />}
                 </div>
               </div>
 
               <h3 className="text-base font-medium leading-tight">{displayName(p)}</h3>
               {p.role && p.role !== "attendee" && (
-                <p className="text-xs text-gray-500 capitalize">{p.role}</p>
+                <p className="text-[15px] text-gray-500 capitalize">{p.role}</p>
               )}
               {p.title && <p className="text-sm text-gray-600 mt-1 truncate">{p.title}</p>}
               {p.org && <p className="text-sm text-gray-500 truncate">{p.org}</p>}
-              {p.email && <p className="text-xs text-gray-400 mt-1 truncate">{p.email}</p>}
-              {p.note && <p className="text-xs text-gray-500 mt-2 line-clamp-3">{p.note}</p>}
+              {p.email && <p className="text-[15px] text-gray-400 mt-1 truncate">{p.email}</p>}
+              {p.note && <p className="text-[15px] text-gray-500 mt-2 line-clamp-3">{p.note}</p>}
+              {p.labelIds.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {p.labelIds.map((id) => { const nm = labels.find((l) => l.id === id)?.name; return nm ? <span key={id} className="text-[11px] rounded-full px-2 py-0.5 bg-gray-100 text-gray-700">{nm}</span> : null; })}
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
 
-      {/* Lines / table view */}
+      {/* Lines view — brand DataTable (sortable + paginated); row click opens the slide-over. */}
       {!loading && !error && filtered.length > 0 && viewMode === 'lines' && (
-        <div className="bg-white rounded-2xl border border-black overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-black">
-              <tr>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Name</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Type</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">{eventFilter ? "Status" : "Events"}</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Title</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Org</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p) => (
-                <tr key={p.id} onClick={() => setSelectedPerson(p)} className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer">
-                  <td className="px-6 py-3">
-                    <p className="font-medium">{displayName(p)}</p>
-                    {p.role && p.role !== "attendee" && <p className="text-xs text-gray-500 capitalize">{p.role}</p>}
-                  </td>
-                  <td className="px-6 py-3">
-                    {p.type && p.type !== "Unknown" && <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${typeColor(p.type)}`}>{p.type}</span>}
-                  </td>
-                  <td className="px-6 py-3 text-sm">
-                    <span className="inline-flex items-center gap-1.5">
-                      {eventFilter && statusBadge(p.registrationStatus, p.checkedIn)}
-                      <MultiEventBadge count={p.eventsCount} />
-                      {!eventFilter && p.eventsCount < 2 && <span className="text-gray-600">{p.eventsCount}</span>}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-sm text-gray-600">{p.title ?? "—"}</td>
-                  <td className="px-6 py-3 text-sm text-gray-600">{p.org ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="bg-white rounded-2xl border border-border overflow-hidden">
+          <DataTable
+            data={filtered}
+            columns={personColumns}
+            getRowId={(p) => p.id}
+            onRowClick={(p) => setSelectedPerson(p)}
+            enableSearch={false}
+            enableExport={false}
+            enableColumnHiding={false}
+            enableRowSelection={false}
+          />
         </div>
       )}
 

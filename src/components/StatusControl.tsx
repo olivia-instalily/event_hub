@@ -32,7 +32,7 @@ export function StatusControl({ eventId, status, eventDate, onChange }: {
 
   return (
     <div className="relative inline-block">
-      <span className="text-xs text-gray-500 mr-2">Marked as</span>
+      <span className="text-[15px] text-gray-500 mr-2">Marked as</span>
       <button
         onClick={() => setOpen((o) => !o)}
         className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-gray-300 text-sm hover:bg-gray-50"
@@ -44,7 +44,7 @@ export function StatusControl({ eventId, status, eventDate, onChange }: {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 left-0 mt-1 w-40 bg-white border border-black rounded-lg shadow-lg p-1">
+          <div className="absolute z-20 left-0 mt-1 w-40 bg-white border border-border rounded-lg shadow-lg p-1">
             {ORDER.map((s) => {
               const disabled = s === "past" && prematurePast;
               return (
@@ -63,7 +63,7 @@ export function StatusControl({ eventId, status, eventDate, onChange }: {
                 </button>
               );
             })}
-            {prematurePast && <p className="px-2 py-1 text-[11px] text-gray-400">Past unlocks after {eventDate}.</p>}
+            {prematurePast && <p className="px-2 py-1 text-[15px] text-gray-400">Past unlocks after {eventDate}.</p>}
           </div>
         </>
       )}

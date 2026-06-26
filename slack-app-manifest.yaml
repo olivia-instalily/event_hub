@@ -1,0 +1,47 @@
+# EventHub — Slack app manifest
+# Create the app at https://api.slack.com/apps → "Create New App" → "From a manifest",
+# paste this, then Install to Workspace and copy the Bot User OAuth Token (xoxb-…).
+#
+# After installing: invite the bot to your budget channel ( /invite @EventHub ), then put
+# the token in supabase/functions/.env as  SLACK_BOT_TOKEN=xoxb-…  and restart Supabase.
+#
+# NOTE: interactivity.request_url must be a public HTTPS endpoint. Replace the placeholder
+# with your deployed Slack interactivity edge function URL before enabling buttons/actions.
+display_information:
+  name: EventHub
+  description: Create, sync, and post event budget & scoping updates from EventHub.
+  background_color: "#111111"
+
+features:
+  bot_user:
+    display_name: EventHub
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      # write / send
+      - chat:write
+      - chat:write.public        # post to public channels without joining
+      # read / sync
+      - channels:read
+      - channels:history
+      - groups:read              # private channels
+      - groups:history
+      - im:read
+      - im:history
+      - mpim:read
+      - mpim:history
+      - users:read               # resolve people to add to DMs
+      # create DMs / group DMs
+      - im:write
+      - mpim:write
+
+settings:
+  interactivity:
+    is_enabled: true
+    # Replace with your deployed interactivity endpoint (e.g. a slack-interactivity edge function).
+    request_url: https://YOUR-PROJECT.functions.supabase.co/slack-interactivity
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

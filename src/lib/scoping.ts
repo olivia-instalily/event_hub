@@ -18,15 +18,18 @@ export interface ScopingForm {
   execSponsor: string;     // optional
   // Workflow.
   status: ScopingStatus;
-  assignedBudget: number | null;   // Karim/admin-set; locks on assignment (the budget target)
-  submittedSummary: string | null; // formatted summary generated on submit (Slack send = v1)
+  assignedBudget: number | null;   // returned budget; locks on assignment (becomes the target)
+  approvalComment: string | null;  // optional note returned with the budget
+  submittedSummary: string | null; // formatted summary posted to Slack on submit
+  submittedAt: string | null;      // ISO date the form was submitted for approval
+  submittedChannel: string | null; // Slack channel it was posted to
   generated: boolean;              // composed at least once (don't store a blank record)
 }
 
 export const emptyScoping = (): ScopingForm => ({
   type: "", audience: "", headcount: "", venue: "", components: [],
   strategicJustification: "", execSponsor: "",
-  status: "draft", assignedBudget: null, submittedSummary: null, generated: false,
+  status: "draft", assignedBudget: null, approvalComment: null, submittedSummary: null, submittedAt: null, submittedChannel: null, generated: false,
 });
 
 const keyFor = (eventId: string) => `scoping:${eventId}`;
@@ -85,17 +88,23 @@ export function buildScopingSummary(opts: { title: string; date: string | null; 
   const lead = leadTimeCheck(date);
   const headNum = Number(scoping.headcount) || null;
   const perPerson = headNum && roughTotal ? roughTotal / headNum : null;
+  const leadStr = lead.days != null ? ` _(${lead.days}d lead${lead.ok ? "" : " — under 30d"})_` : "";
+  // Slack mrkdwn — bold labels, blank lines between groups; requested budget at the bottom.
   return [
-    `Scoping — ${title}`,
-    `Date: ${date ?? "TBD"}${lead.days != null ? ` (${lead.days}d lead${lead.ok ? "" : " — under 30d ⚠"})` : ""}`,
-    `Funding line: ${funding.fundingLine} · ${funding.tier}`,
-    `Type: ${scoping.type || "—"}`,
-    `Audience: ${scoping.audience || "—"} · ~${scoping.headcount || "—"} people`,
-    `Venue: ${scoping.venue || "—"}`,
-    `Components: ${scoping.components.join(", ") || "—"}`,
-    `Rough cost: ${fmtMoney(roughTotal)}${perPerson != null ? ` (${fmtMoney(perPerson)}/person)` : ""}`,
-    scoping.execSponsor ? `Exec sponsor: ${scoping.execSponsor}` : "",
-    "",
-    `Justification: ${scoping.strategicJustification}`,
-  ].filter(Boolean).join("\n");
+    `*Scoping request — ${title}*`,
+    ``,
+    `*Date:*  ${date ?? "TBD"}${leadStr}`,
+    `*Funding line:*  ${funding.fundingLine} · ${funding.tier}`,
+    `*Type:*  ${scoping.type || "—"}`,
+    `*Audience:*  ${scoping.audience || "—"}  ·  ~${scoping.headcount || "—"} people`,
+    `*Venue:*  ${scoping.venue || "—"}`,
+    `*Components:*  ${scoping.components.join(", ") || "—"}`,
+    scoping.execSponsor ? `*Exec sponsor:*  ${scoping.execSponsor}` : null,
+    ``,
+    `*Why it matters*`,
+    scoping.strategicJustification || "—",
+    ``,
+    `*Requested budget:*  ${fmtMoney(roughTotal)}${perPerson != null ? `  (≈ ${fmtMoney(perPerson)}/person)` : ""}`,
+    `_Reply in thread with the approved budget + any notes; the owner enters it in EventHub to lock the target._`,
+  ].filter((l) => l !== null).join("\n");
 }

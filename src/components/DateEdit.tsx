@@ -48,7 +48,7 @@ export function DateEdit({
     <span className="relative inline-block" ref={ref}>
       <button
         onClick={() => setOpen((o) => !o)}
-        className={`inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 hover:bg-gray-100 transition-colors ${
+        className={`inline-flex items-center gap-1 text-[15px] rounded px-1.5 py-0.5 hover:bg-gray-100 transition-colors ${
           value ? (emphasize ? "text-red-600 font-medium" : "text-gray-600") : "text-gray-400"
         }`}
       >
@@ -57,14 +57,14 @@ export function DateEdit({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 left-0 w-56 bg-white border border-black rounded-lg shadow-lg p-2">
+        <div className="absolute z-50 mt-1 left-0 w-56 bg-white border border-border rounded-lg shadow-lg p-2">
           <div className="flex items-center justify-between mb-2">
             <button onClick={() => setView(new Date(y, m - 1, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronLeft className="w-4 h-4" /></button>
             <span className="text-sm font-medium">{MONTHS[m]} {y}</span>
             <button onClick={() => setView(new Date(y, m + 1, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronRight className="w-4 h-4" /></button>
           </div>
           <div className="grid grid-cols-7 gap-0.5 text-center">
-            {DOW.map((d, i) => <span key={i} className="text-[10px] text-gray-400 py-1">{d}</span>)}
+            {DOW.map((d, i) => <span key={i} className="text-[13px] text-gray-400 py-1">{d}</span>)}
             {cells.map((day, i) => {
               if (day == null) return <span key={i} />;
               const d = new Date(y, m, day);
@@ -75,7 +75,7 @@ export function DateEdit({
                 <button
                   key={i}
                   onClick={() => pick(d)}
-                  className={`text-xs h-7 rounded-full hover:bg-gray-100 transition-colors ${
+                  className={`text-[15px] h-7 rounded-full hover:bg-gray-100 transition-colors ${
                     isSel ? "bg-gray-900 text-white hover:bg-gray-900" : isToday ? "ring-1 ring-gray-300" : ""
                   }`}
                 >
@@ -85,8 +85,8 @@ export function DateEdit({
             })}
           </div>
           <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
-            <button onClick={() => pick(new Date())} className="text-xs text-gray-600 hover:text-gray-900">Today</button>
-            {value && <button onClick={() => { onChange(null); setOpen(false); }} className="text-xs text-gray-400 hover:text-red-600">Clear</button>}
+            <button onClick={() => pick(new Date())} className="text-[15px] text-gray-600 hover:text-gray-900">Today</button>
+            {value && <button onClick={() => { onChange(null); setOpen(false); }} className="text-[15px] text-gray-400 hover:text-red-600">Clear</button>}
           </div>
         </div>
       )}

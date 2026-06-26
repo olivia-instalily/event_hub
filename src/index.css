@@ -1,1 +1,7 @@
-@import "tailwindcss";
+/* @instalily/ui globals: pulls in Tailwind, tw-animate-css, the color palette,
+   semantic tokens, and the shadcn variable remapping the components rely on. */
+@import "@instalily/ui/globals.css";
+
+/* Tailwind v4 ignores node_modules by default — point it at the library source
+   so the utility classes used inside @instalily/ui components get generated. */
+@source "../node_modules/@instalily/ui/src";

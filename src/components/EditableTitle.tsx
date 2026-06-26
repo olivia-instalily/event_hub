@@ -23,7 +23,7 @@ export function EditableTitle({ value, onChange, className = "" }: {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
-        className={`${className} w-full px-1 -mx-1 border border-black rounded focus:outline-none focus:ring-2 focus:ring-gray-300`}
+        className={`${className} w-full px-1 -mx-1 border border-border rounded focus:outline-none focus:ring-2 focus:ring-gray-300`}
       />
     );
   }

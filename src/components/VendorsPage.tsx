@@ -1,7 +1,12 @@
-import { Bookmark, LayoutGrid, List, ChevronDown, Search, Star } from "lucide-react";
+import { Bookmark, LayoutGrid, List, Search, Star } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import { useEffect, useState } from "react";
 import { listVendors, type VendorRow } from "../lib/db";
-import { tagColor } from "../lib/tags";
+import { tagBadgeVariant } from "../lib/tags";
+import { Badge } from "@instalily/ui/badge";
+import { Input } from "@instalily/ui/input";
+import { DataTable } from "@instalily/ui/data-table";
+import type { ColumnDef } from "@tanstack/react-table";
 
 export function VendorsPage() {
   const [vendors, setVendors] = useState<VendorRow[]>([]);
@@ -43,41 +48,54 @@ export function VendorsPage() {
     return true;
   });
 
+  // Columns for the brand DataTable (lines view). Search/category/bookmark stay as the
+  // page's own controls above, so DataTable's built-in search/export are turned off.
+  const vendorColumns: ColumnDef<VendorRow>[] = [
+    { accessorKey: "name", header: "Vendor", cell: ({ row }) => row.original.name ?? <span className="text-gray-400">Unnamed</span> },
+    { accessorKey: "category", header: "Category", cell: ({ row }) => <Badge variant={tagBadgeVariant(row.original.category)}>{row.original.category ?? "—"}</Badge> },
+    { accessorKey: "preferredList", header: "Preferred", cell: ({ row }) => row.original.preferredList ?? <span className="text-gray-300">—</span> },
+    { accessorKey: "notes", header: "Notes", enableSorting: false, cell: ({ row }) => row.original.notes ?? <span className="text-gray-300">—</span> },
+    {
+      id: "actions", header: "", enableSorting: false,
+      cell: ({ row }) => (
+        <button onClick={() => toggleBookmark(row.original.id)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors" aria-label="Bookmark vendor">
+          <Bookmark className={`w-4 h-4 ${bookmarked.has(row.original.id) ? "fill-current text-gray-900" : "text-gray-400"}`} />
+        </button>
+      ),
+    },
+  ];
+
   return (
     <div>
       {/* Filters and View Toggle */}
       <div className="flex items-center justify-between gap-3 mb-6">
         <div className="flex flex-wrap gap-3">
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 z-10" />
+            <Input
               type="text"
               placeholder="Search vendors…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4 py-2 bg-white border border-black rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              className="h-10 w-64 pl-10"
             />
           </div>
-          <div className="relative">
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="appearance-none px-4 py-2 pr-10 bg-white border border-black rounded-lg text-sm hover:bg-gray-50 cursor-pointer"
-            >
-              <option value="all">All Categories</option>
-              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
+          <Select value={categoryFilter} onValueChange={(v) => setCategoryFilter(v as string)} items={[{ value: "all", label: "All Categories" }, ...categories.map((c) => ({ value: c, label: c }))]}>
+            <SelectTrigger className="h-10 w-44"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Categories</SelectItem>
+              {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <button
             onClick={() => setShowBookmarkedOnly((v) => !v)}
-            className={`px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${showBookmarkedOnly ? 'bg-gray-100' : 'bg-white border border-black hover:bg-gray-50'}`}
+            className={`px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${showBookmarkedOnly ? 'bg-gray-100' : 'bg-white border border-border hover:bg-gray-50'}`}
           >
             <Bookmark className={`w-4 h-4 ${showBookmarkedOnly ? 'fill-current text-gray-900' : 'text-gray-600'}`} />
           </button>
         </div>
 
-        <div className="flex gap-2 bg-white border border-black rounded-lg p-1">
+        <div className="flex gap-2 bg-white border border-border rounded-lg p-1">
           <button onClick={() => setViewMode('cards')} className={`p-2 rounded transition-colors ${viewMode === 'cards' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}><LayoutGrid className="w-4 h-4" /></button>
           <button onClick={() => setViewMode('lines')} className={`p-2 rounded transition-colors ${viewMode === 'lines' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}><List className="w-4 h-4" /></button>
         </div>
@@ -93,16 +111,16 @@ export function VendorsPage() {
       {!loading && !error && viewMode === 'cards' && filtered.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {filtered.map((v) => (
-            <div key={v.id} className="bg-white rounded-2xl border border-black p-6 hover:shadow-md transition-shadow">
+            <div key={v.id} className="bg-white rounded-2xl border border-border p-6 hover:shadow-md transition-shadow">
               <div className="flex items-start justify-between mb-3">
-                <span className={`inline-block px-3 py-1 rounded-full text-sm ${tagColor(v.category)}`}>{v.category ?? 'Uncategorized'}</span>
+                <Badge variant={tagBadgeVariant(v.category)}>{v.category ?? 'Uncategorized'}</Badge>
                 <button onClick={() => toggleBookmark(v.id)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Bookmark vendor">
                   <Bookmark className={`w-5 h-5 ${bookmarked.has(v.id) ? 'fill-current text-gray-900' : 'text-gray-400'}`} />
                 </button>
               </div>
               <h2 className="text-xl mb-1">{v.name ?? <span className="text-gray-400">Unnamed vendor</span>}</h2>
               {v.preferredList && (
-                <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 mb-2">
+                <span className="inline-flex items-center gap-1 text-[15px] text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 mb-2">
                   <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> Preferred · {v.preferredList}
                 </span>
               )}
@@ -112,35 +130,18 @@ export function VendorsPage() {
         </div>
       )}
 
-      {/* Lines View */}
+      {/* Lines View — brand DataTable (sortable + paginated); fed the already-filtered rows. */}
       {!loading && !error && viewMode === 'lines' && filtered.length > 0 && (
-        <div className="bg-white rounded-2xl border border-black overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-black">
-              <tr>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Vendor</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Category</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Preferred</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600">Notes</th>
-                <th className="text-left px-6 py-3 text-sm text-gray-600 w-10"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((v) => (
-                <tr key={v.id} className="border-b border-gray-100 hover:bg-gray-50">
-                  <td className="px-6 py-4 font-medium">{v.name ?? <span className="text-gray-400">Unnamed</span>}</td>
-                  <td className="px-6 py-4"><span className={`inline-block px-3 py-1 rounded-full text-sm ${tagColor(v.category)}`}>{v.category ?? '—'}</span></td>
-                  <td className="px-6 py-4 text-sm">{v.preferredList ?? <span className="text-gray-300">—</span>}</td>
-                  <td className="px-6 py-4 text-sm text-gray-600 max-w-md">{v.notes ?? <span className="text-gray-300">—</span>}</td>
-                  <td className="px-6 py-4">
-                    <button onClick={() => toggleBookmark(v.id)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors" aria-label="Bookmark vendor">
-                      <Bookmark className={`w-4 h-4 ${bookmarked.has(v.id) ? 'fill-current text-gray-900' : 'text-gray-400'}`} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="bg-white rounded-2xl border border-border overflow-hidden">
+          <DataTable
+            data={filtered}
+            columns={vendorColumns}
+            getRowId={(v) => v.id}
+            enableSearch={false}
+            enableExport={false}
+            enableColumnHiding={false}
+            enableRowSelection={false}
+          />
         </div>
       )}
     </div>

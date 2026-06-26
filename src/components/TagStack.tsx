@@ -1,7 +1,8 @@
 import { useState, useRef, useLayoutEffect, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Check, X, Search } from "lucide-react";
-import { EVENT_TAGS, TAG_CATEGORIES, tagColor } from "../lib/tags";
+import { TAG_CATEGORIES, tagBadgeVariant } from "../lib/tags";
+import { Badge } from "@instalily/ui/badge";
 
 type Pos = { left: number; top?: number; bottom?: number; maxHeight: number; width: number };
 
@@ -18,21 +19,18 @@ function computePos(el: HTMLElement | null, width: number, desiredHeight: number
 }
 
 /**
- * Event tags as an overlapping stack. With `expandOnHover` (default) the stack fans
- * open on hover; without it the stack stays static (used in the chart/lines view).
- * The editor (＋) opens a searchable list in a portal.
+ * An event's taxonomy tag. Single-select (an event carries one tag), so it renders as a
+ * plain full-color badge — no stacking. The editor (＋) opens a searchable list in a portal.
  */
 export function TagStack({
   tags,
   editable,
   onChange,
-  expandOnHover = true,
   onTagClick,
 }: {
   tags: string[];
   editable?: boolean;
   onChange?: (tags: string[]) => void;
-  expandOnHover?: boolean;
   onTagClick?: (tag: string) => void; // click a pill to filter by that tag
 }) {
   const [open, setOpen] = useState(false);
@@ -41,16 +39,16 @@ export function TagStack({
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<Pos | null>(null);
 
+  // Single-select: an event carries one taxonomy tag. Picking one replaces the rest;
+  // clicking the selected one clears it. (Formats stay multi-select via FormatPicker.)
   const select = (t: string) => {
-    onChange?.(tags.includes(t) ? tags.filter((x) => x !== t) : [...tags, t]);
+    onChange?.(tags.includes(t) ? [] : [t]);
     setOpen(false);
     setQuery("");
   };
 
   const q = query.trim().toLowerCase();
   const match = (t: string) => t.toLowerCase().includes(q);
-  // Applied tags outside the taxonomy (legacy) — still listed so they can be removed.
-  const otherTags = tags.filter((t) => !EVENT_TAGS.includes(t)).filter(match);
 
   useLayoutEffect(() => {
     if (open) setPos(computePos(btnRef.current, 224, 320));
@@ -77,42 +75,32 @@ export function TagStack({
     };
   }, [open]);
 
-  // Crisp white separator + soft highlight on each pill's left edge so the stack
-  // reads as distinct layers even when clipped to slivers.
-  const highlight = "shadow-[inset_2px_0_0_0_rgba(255,255,255,0.95),inset_7px_0_6px_-4px_rgba(255,255,255,0.85)]";
+  // Override Badge's compact defaults (h-5/px-2/text-[15px]/rounded-4xl) back to the larger
+  // pill shape. No highlight inset, so the color fills the whole pill to its edge.
+  const pillCls = "h-auto px-3 py-1 rounded-full text-sm whitespace-nowrap";
 
   return (
-    <span className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-      {tags.length > 0 && (
-        <span className={`inline-flex items-center ${expandOnHover ? "group/stack" : ""}`}>
-          {tags.map((t, i) => {
-            const isLast = i === tags.length - 1;
-            const first = i === 0;
-            const marginCls = first ? "" : expandOnHover ? "-ml-9 group-hover/stack:ml-1.5" : "-ml-9";
-            const widthCls = isLast
-              ? "max-w-[16rem] overflow-visible"
-              : expandOnHover
-                ? "max-w-[2.5rem] overflow-hidden group-hover/stack:max-w-[16rem] group-hover/stack:overflow-visible"
-                : "max-w-[2.5rem] overflow-hidden";
-            const pillCls = `inline-block px-3 py-1 rounded-full text-sm whitespace-nowrap ${tagColor(t)} ${highlight}`;
-            return (
-              <span key={t} className={`inline-flex ${expandOnHover ? "transition-[max-width,margin] duration-200" : ""} ${marginCls} ${widthCls}`}>
-                {onTagClick ? (
-                  <button type="button" onClick={() => onTagClick(t)} title={`Filter by ${t}`} className={`${pillCls} cursor-pointer hover:brightness-95`}>{t}</button>
-                ) : (
-                  <span className={pillCls}>{t}</span>
-                )}
-              </span>
-            );
-          })}
+    <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      {tags.map((t) => (
+        <span key={t} className="inline-flex items-center gap-0.5">
+          {onTagClick ? (
+            <Badge render={<button type="button" onClick={() => onTagClick(t)} title={`Filter by ${t}`} />} variant={tagBadgeVariant(t)} className={`${pillCls} cursor-pointer hover:opacity-90`}>{t}</Badge>
+          ) : (
+            <Badge variant={tagBadgeVariant(t)} className={pillCls}>{t}</Badge>
+          )}
+          {editable && (
+            <button type="button" onClick={() => onChange?.([])} title="Remove tag" aria-label="Remove tag" className="p-0.5 text-gray-400 hover:text-red-600">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </span>
-      )}
+      ))}
 
       {editable && (
         <button
           ref={btnRef}
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[15px] border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50"
         >
           <Plus className="w-3 h-3" />{tags.length === 0 && "Tag"}
         </button>
@@ -124,7 +112,7 @@ export function TagStack({
           ref={menuRef}
           onClick={(e) => e.stopPropagation()}
           style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
-          className="z-50 bg-white border border-black rounded-lg shadow-lg overflow-hidden flex flex-col"
+          className="z-50 bg-white border border-border rounded-lg shadow-lg overflow-hidden flex flex-col"
         >
           <div className="bg-white p-1 border-b border-gray-100 flex items-center gap-1">
             <div className="relative flex-1">
@@ -147,27 +135,16 @@ export function TagStack({
               if (!opts.length) return null;
               return (
                 <div key={cat.name} className="mb-1 last:mb-0">
-                  <p className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wide uppercase text-gray-400">{cat.name}</p>
+                  <p className="px-2 pt-1.5 pb-0.5 text-[13px] font-semibold tracking-wide uppercase text-gray-400">{cat.name}</p>
                   {opts.map((t) => (
                     <button key={t} onClick={() => select(t)} className="flex items-center justify-between w-full text-left px-2 py-1 rounded hover:bg-gray-50">
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(t)}`}>{t}</span>
+                      <Badge variant={tagBadgeVariant(t)}>{t}</Badge>
                       {tags.includes(t) && <Check className="w-4 h-4 text-gray-700" />}
                     </button>
                   ))}
                 </div>
               );
             })}
-            {otherTags.length > 0 && (
-              <div className="mb-1 border-t border-gray-100 pt-1">
-                <p className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wide uppercase text-gray-400">Other</p>
-                {otherTags.map((t) => (
-                  <button key={t} onClick={() => select(t)} className="flex items-center justify-between w-full text-left px-2 py-1 rounded hover:bg-gray-50">
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${tagColor(t)}`}>{t}</span>
-                    <Check className="w-4 h-4 text-gray-700" />
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>,
         document.body,

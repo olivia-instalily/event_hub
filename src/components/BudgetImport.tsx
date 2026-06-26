@@ -6,6 +6,7 @@ import {
   type PlanningBudget, type BudgetLineTracker,
 } from "../lib/db";
 import { categoryKey } from "../lib/budgetCategories";
+import { Button } from "@instalily/ui/button";
 
 const money = (n: number | null, currency = "USD") =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
@@ -112,7 +113,7 @@ export function BudgetPasteButton({ onFile, className }: { onFile: (f: File) => 
       </button>
       {open && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setOpen(false)}>
-          <div className="bg-white rounded-2xl border border-black max-w-lg w-full p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl border border-border max-w-lg w-full p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xl">Paste a budget breakdown</h2>
               <button onClick={() => setOpen(false)} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
@@ -124,11 +125,11 @@ export function BudgetPasteButton({ onFile, className }: { onFile: (f: File) => 
               onChange={(e) => setText(e.target.value)}
               rows={8}
               placeholder={"Venue, 5000\nCatering, 3200\nA/V, 1500"}
-              className="w-full px-3 py-2 border border-black rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-300"
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-300"
             />
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setOpen(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
-              <button onClick={submit} disabled={!text.trim()} className="inline-flex items-center gap-1 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-50">Process <ArrowRight className="w-4 h-4" /></button>
+              <Button onClick={submit} disabled={!text.trim()}>Process <ArrowRight className="w-4 h-4" /></Button>
             </div>
           </div>
         </div>,
@@ -298,7 +299,7 @@ export function BudgetImportModal({ budget, file, currency = "USD", onClose, onA
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl border border-black max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl border border-border max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-xl">Import budget breakdown</h2>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
@@ -328,13 +329,13 @@ export function BudgetImportModal({ budget, file, currency = "USD", onClose, onA
             <div className="flex flex-wrap items-center gap-4 mb-3 text-sm">
               <label className="inline-flex items-center gap-2">
                 <span className="text-gray-600">Category column</span>
-                <select value={labelCol} onChange={(e) => setLabelCol(Number(e.target.value))} className="px-2 py-1 border border-black rounded">
+                <select value={labelCol} onChange={(e) => setLabelCol(Number(e.target.value))} className="px-2 py-1 border border-border rounded">
                   {Array.from({ length: colCount }, (_, c) => <option key={c} value={c}>Column {c + 1}</option>)}
                 </select>
               </label>
               <label className="inline-flex items-center gap-2">
                 <span className="text-gray-600">Amount column</span>
-                <select value={amountCol} onChange={(e) => setAmountCol(Number(e.target.value))} className="px-2 py-1 border border-black rounded">
+                <select value={amountCol} onChange={(e) => setAmountCol(Number(e.target.value))} className="px-2 py-1 border border-border rounded">
                   {Array.from({ length: colCount }, (_, c) => <option key={c} value={c}>Column {c + 1}</option>)}
                 </select>
               </label>
@@ -404,11 +405,11 @@ export function BudgetImportModal({ budget, file, currency = "USD", onClose, onA
               <div className="mb-4">
                 <p className="text-sm text-gray-600 mb-2">You've already entered budget data. How should the dropped lines be applied?</p>
                 <div className="space-y-2">
-                  <label className={`flex items-start gap-2 rounded-lg border p-3 cursor-pointer ${mergeMode === "append" ? "border-black ring-1 ring-black" : "border-gray-200"}`}>
+                  <label className={`flex items-start gap-2 rounded-lg border p-3 cursor-pointer ${mergeMode === "append" ? "border-border ring-1 ring-black" : "border-gray-200"}`}>
                     <input type="radio" checked={mergeMode === "append"} onChange={() => setMergeMode("append")} className="mt-0.5" />
                     <span className="text-sm"><span className="font-medium">Append</span> — add the dropped lines alongside what's there{conflicts.length ? `, merging ${conflicts.length} matching categor${conflicts.length === 1 ? "y" : "ies"}.` : "."}</span>
                   </label>
-                  <label className={`flex items-start gap-2 rounded-lg border p-3 cursor-pointer ${mergeMode === "replace" ? "border-black ring-1 ring-black" : "border-gray-200"}`}>
+                  <label className={`flex items-start gap-2 rounded-lg border p-3 cursor-pointer ${mergeMode === "replace" ? "border-border ring-1 ring-black" : "border-gray-200"}`}>
                     <input type="radio" checked={mergeMode === "replace"} onChange={() => setMergeMode("replace")} className="mt-0.5" />
                     <span className="text-sm"><span className="font-medium">Replace</span> — clear the existing budget and use the dropped file.</span>
                   </label>
@@ -421,8 +422,8 @@ export function BudgetImportModal({ budget, file, currency = "USD", onClose, onA
                       <div key={c.i} className="px-3 py-2 text-sm flex items-center justify-between gap-3">
                         <span className="min-w-0 truncate">{c.line.label}</span>
                         <span className="flex items-center gap-1 shrink-0">
-                          <button onClick={() => setWinners((w) => ({ ...w, [c.i]: "existing" }))} className={`px-2 py-0.5 rounded-full text-xs border ${winnerFor(c.i) === "existing" ? "bg-gray-900 text-white border-gray-900" : "border-gray-300 text-gray-600"}`}>keep {money(c.existing!.confirmedAmount, currency)}</button>
-                          <button onClick={() => setWinners((w) => ({ ...w, [c.i]: "dropped" }))} className={`px-2 py-0.5 rounded-full text-xs border ${winnerFor(c.i) === "dropped" ? "bg-gray-900 text-white border-gray-900" : "border-gray-300 text-gray-600"}`}>use {money(c.line.amount, currency)}</button>
+                          <button onClick={() => setWinners((w) => ({ ...w, [c.i]: "existing" }))} className={`px-2 py-0.5 rounded-full text-[15px] border ${winnerFor(c.i) === "existing" ? "bg-gray-900 text-white border-gray-900" : "border-gray-300 text-gray-600"}`}>keep {money(c.existing!.confirmedAmount, currency)}</button>
+                          <button onClick={() => setWinners((w) => ({ ...w, [c.i]: "dropped" }))} className={`px-2 py-0.5 rounded-full text-[15px] border ${winnerFor(c.i) === "dropped" ? "bg-gray-900 text-white border-gray-900" : "border-gray-300 text-gray-600"}`}>use {money(c.line.amount, currency)}</button>
                         </span>
                       </div>
                     ))}
@@ -441,14 +442,13 @@ export function BudgetImportModal({ budget, file, currency = "USD", onClose, onA
 
             <div className="flex justify-between mt-2">
               <button onClick={() => setStage("review")} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
-              <button
+              <Button
                 onClick={apply}
                 disabled={busy || (!onConfirm && kind === "real" && mergeMode === "replace" && !confirmReplace)}
-                className="inline-flex items-center gap-1 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-50"
               >
                 {busy && <Loader2 className="w-4 h-4 animate-spin" />}
                 {onConfirm ? "Fill budget" : kind === "real" && mergeMode === "replace" ? "Overwrite budget" : kind === "real" ? "Append lines" : "Populate budget"}
-              </button>
+              </Button>
             </div>
           </div>
         )}

@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Plus, Check, X, Trash2 } from "lucide-react";
+import { Plus, Check, X, Trash2 } from "lucide-react";
 import { listFormats, addFormat, removeFormat } from "../lib/db";
+import { Badge } from "@instalily/ui/badge";
 
 // Formats are stored in the single `format` text column as a comma-joined list, so an event
 // can carry several at once without a schema change. These convert to/from that storage.
@@ -76,21 +77,37 @@ export function FormatPicker({ value, onChange, className }: {
     };
   }, [open]);
 
+  // An outer white ring separates overlapping formats into distinct layers without covering
+  // the fill, so the color still reaches the pill's edge. Only shows where pills overlap.
+  const pillCls = "h-auto px-3 py-1 rounded-full text-sm whitespace-nowrap ring-2 ring-white";
+
   return (
-    <span className={`inline-flex ${className ?? ""}`} onClick={(e) => e.stopPropagation()}>
+    <span className={`inline-flex items-center gap-1.5 ${className ?? ""}`} onClick={(e) => e.stopPropagation()}>
+      {/* Selected formats as an overlapping stack — fans open on hover when there are several. */}
+      {value.length > 0 && (
+        <span className="inline-flex items-center group/fmt">
+          {value.map((f, i) => {
+            const isLast = i === value.length - 1;
+            const marginCls = i === 0 ? "" : "-ml-9 group-hover/fmt:ml-1.5";
+            const widthCls = isLast
+              ? "max-w-[16rem] overflow-visible"
+              : "max-w-[2.5rem] overflow-hidden group-hover/fmt:max-w-[16rem] group-hover/fmt:overflow-visible";
+            return (
+              <span key={f} className={`inline-flex transition-[max-width,margin] duration-200 ${marginCls} ${widthCls}`}>
+                <Badge variant="gray" className={pillCls}>{f}</Badge>
+              </span>
+            );
+          })}
+        </span>
+      )}
+
+      {/* ＋ add button, mirroring the tag editor. */}
       <button
         ref={btnRef}
         onClick={() => setOpen((o) => !o)}
-        className={`inline-flex items-center gap-1 rounded-full text-sm border ${value.length ? "px-2.5 py-1 bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200" : "px-2 py-1 text-xs border-dashed border-gray-300 text-gray-500 hover:bg-gray-50"}`}
+        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[15px] border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50 shrink-0"
       >
-        {value.length === 0 ? (
-          <>Format</>
-        ) : (
-          <span className="inline-flex items-center gap-1 flex-wrap">
-            {value.map((f) => <span key={f} className="px-2 py-0.5 rounded-full text-xs bg-white border border-gray-200">{f}</span>)}
-          </span>
-        )}
-        <ChevronDown className="w-3 h-3 opacity-70 shrink-0" />
+        <Plus className="w-3 h-3" />{value.length === 0 && "Format"}
       </button>
 
       {open && pos && createPortal(
@@ -98,7 +115,7 @@ export function FormatPicker({ value, onChange, className }: {
           ref={menuRef}
           onClick={(e) => e.stopPropagation()}
           style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
-          className="z-50 bg-white border border-black rounded-lg shadow-lg overflow-hidden flex flex-col"
+          className="z-50 bg-white border border-border rounded-lg shadow-lg overflow-hidden flex flex-col"
         >
           <div className="bg-white p-1 border-b border-gray-100 flex items-center gap-1 shrink-0">
             <input
@@ -126,7 +143,7 @@ export function FormatPicker({ value, onChange, className }: {
                 <button onClick={() => void del(f)} aria-label={`Delete ${f}`} className="px-1.5 text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>
               </div>
             ))}
-            {filtered.length === 0 && !canAdd && <p className="px-2 py-2 text-xs text-gray-400">No formats yet — type to add one.</p>}
+            {filtered.length === 0 && !canAdd && <p className="px-2 py-2 text-[15px] text-gray-400">No formats yet — type to add one.</p>}
           </div>
         </div>,
         document.body,

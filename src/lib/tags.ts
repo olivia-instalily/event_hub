@@ -6,7 +6,7 @@
 // The fixed event-tag taxonomy: a few categories, one color per category (pinned in PRESET below).
 export interface TagCategory { name: string; tags: string[] }
 export const TAG_CATEGORIES: TagCategory[] = [
-  { name: 'Hosted', tags: ['Client summit', 'Brand & community event', 'Co-hosted partner event', 'Hackathon'] },
+  { name: 'Hosted', tags: ['Client summit', 'Brand & community event', 'Co-hosted partner event', 'Hackathon', 'Campus'] },
   { name: 'Sponsorship', tags: ['Sponsorship'] },
   { name: 'Internal', tags: ['Internal team social', 'Company milestone'] },
 ];
@@ -37,7 +37,7 @@ const PALETTE: Hue[] = [
 // shares one color. Non-taxonomy strings (vendor categories, people tags) still hash below.
 const PRESET: Record<string, number> = {
   // Hosted → green
-  'Client summit': 2, 'Brand & community event': 2, 'Co-hosted partner event': 2, Hackathon: 2,
+  'Client summit': 2, 'Brand & community event': 2, 'Co-hosted partner event': 2, Hackathon: 2, Campus: 2,
   // Sponsorship → amber
   Sponsorship: 7,
   // Internal → purple
@@ -62,4 +62,23 @@ export function tagRing(tag: string | null | undefined): string {
 // On hover, a tag's outline takes its letter color (the -700 shade).
 export function tagHoverRing(tag: string | null | undefined): string {
   return hueFor(tag).hover;
+}
+
+// ── Brand Badge variants (@instalily/ui) ────────────────────────────────────
+// The Badge primitive takes a named color variant, not Tailwind classes. Map the
+// taxonomy to brand colors (Hosted → green, Sponsorship → yellow, Internal → purple)
+// and hash everything else to a stable color so custom tags stay first-class.
+export type BadgeVariant = 'gray' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'purple';
+const BADGE_POOL: BadgeVariant[] = ['orange', 'purple', 'green', 'blue', 'cyan', 'red', 'yellow'];
+const BADGE_PRESET: Record<string, BadgeVariant> = {
+  'Client summit': 'green', 'Brand & community event': 'green', 'Co-hosted partner event': 'green', Hackathon: 'green', Campus: 'green',
+  Sponsorship: 'yellow',
+  'Internal team social': 'purple', 'Company milestone': 'purple',
+};
+export function tagBadgeVariant(tag: string | null | undefined): BadgeVariant {
+  if (!tag) return 'gray';
+  if (tag in BADGE_PRESET) return BADGE_PRESET[tag];
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
+  return BADGE_POOL[h % BADGE_POOL.length];
 }

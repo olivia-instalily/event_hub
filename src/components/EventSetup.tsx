@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Calendar, Users, Link2, Check, ChevronDown, AlertCircle,
   DollarSign, ClipboardList, ArrowRight, Plus,
@@ -10,7 +10,9 @@ import {
   type EventPlanning, type BudgetProjection, type Deliverable,
 } from "../lib/db";
 import { dueOffsetForTitle } from "../lib/schedule";
+import { Button } from "@instalily/ui/button";
 import { OwnerPicker } from "./OwnerPicker";
+import { GCalSync } from "./GCalSync";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal } from "./BudgetImport";
 import { canonicalCategory, categoryKey } from "../lib/budgetCategories";
@@ -133,13 +135,13 @@ export function EventSetup({ plan, eventId, onApplied }: { plan: EventPlanning; 
 }
 
 // ── Step footer ───────────────────────────────────────────────────────────────
-function StepFooter({ onDone, label = "Confirm & continue", disabled, hint }: { onDone: () => void; label?: string; disabled?: boolean; hint?: string }) {
+function StepFooter({ onDone, label = "Confirm & continue", disabled, hint }: { onDone: () => void; label?: string; disabled?: boolean; hint?: ReactNode }) {
   return (
     <div className="flex items-center justify-end gap-3 mt-5 pt-4 border-t border-gray-100">
-      {hint && <span className="text-xs text-amber-600 mr-auto">{hint}</span>}
-      <button onClick={onDone} disabled={disabled} className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40">
+      {hint && <span className="text-[15px] text-amber-600 mr-auto">{hint}</span>}
+      <Button onClick={onDone} disabled={disabled}>
         {label} <Check className="w-4 h-4" />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -171,7 +173,12 @@ function EssentialsStep({ plan, eventId, date, setDate, onDone }: {
         <label className="block">
           <span className="text-sm text-gray-600 flex items-center gap-1.5 mb-1"><Calendar className="w-4 h-4" /> Event date</span>
           <input type="date" value={date} onChange={(e) => saveDate(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          <span className="text-xs text-gray-400 mt-1 block">Sets your deliverables’ due dates.</span>
+          <span className="text-[15px] text-gray-400 mt-1 block">Sets your deliverables’ due dates.</span>
+          {date && (
+            <div className="mt-2">
+              <GCalSync eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} variant="inline" />
+            </div>
+          )}
         </label>
         <label className="block">
           <span className="text-sm text-gray-600 flex items-center gap-1.5 mb-1"><Users className="w-4 h-4" /> Expected headcount</span>
@@ -193,9 +200,11 @@ function EssentialsStep({ plan, eventId, date, setDate, onDone }: {
           )}
         </div>
       </div>
-      {lumaErr && <p className="text-xs text-red-600 mt-1">{lumaErr}</p>}
+      {lumaErr && <p className="text-[15px] text-red-600 mt-1">{lumaErr}</p>}
 
-      <StepFooter onDone={onDone} disabled={!date} hint={!date ? "Set a date to continue (or Skip for now)." : undefined} />
+      <StepFooter onDone={onDone} disabled={!date} hint={!date ? (
+        <>Set a date to continue, or <button type="button" onClick={onDone} className="underline decoration-dotted underline-offset-2 hover:text-amber-700">skip for now</button>.</>
+      ) : undefined} />
     </div>
   );
 }
@@ -280,7 +289,7 @@ function BudgetStep({ plan, eventId, onDone }: { plan: EventPlanning; eventId: s
         <p className="text-sm text-gray-500">Projected from comparable past events. Drop a breakdown to fill these in — matching categories drop into their field; everything stays editable.</p>
         {plan.budget && <BudgetDropZone label="or drop a breakdown" onFile={setDropFile} className="shrink-0" />}
       </div>
-      {importNote && <p className="text-xs text-gray-500 mb-3 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5 text-green-600" /> {importNote}</p>}
+      {importNote && <p className="text-[15px] text-gray-500 mb-3 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5 text-green-600" /> {importNote}</p>}
 
       {projections === null ? (
         <p className="text-sm text-gray-400">Looking at past events…</p>
@@ -396,7 +405,7 @@ function TimelineStep({ plan, eventId, hasDate, onNeedsDate, onDone }: { plan: E
             <div key={d.id} className="px-3 py-2 flex items-center justify-between gap-3 text-sm">
               <div className="min-w-0">
                 <p className="truncate">{d.title}</p>
-                {d.phase && <p className="text-xs text-gray-400">{d.phase}</p>}
+                {d.phase && <p className="text-[15px] text-gray-400">{d.phase}</p>}
               </div>
               <DateEdit value={dues[d.id]} onChange={(iso) => setDue(d.id, iso)} placeholder="needs date" />
             </div>
@@ -406,15 +415,15 @@ function TimelineStep({ plan, eventId, hasDate, onNeedsDate, onDone }: { plan: E
 
       {suggestions.length > 0 && (
         <div className="mt-3">
-          <p className="text-xs font-medium text-gray-500 mb-1.5">{sorted.length === 0 ? "Suggested deliverables — add the ones you need" : "Add more"}</p>
+          <p className="text-[15px] font-medium text-gray-500 mb-1.5">{sorted.length === 0 ? "Suggested deliverables — add the ones you need" : "Add more"}</p>
           <div className="rounded-lg border border-dashed border-gray-200 divide-y divide-gray-100">
             {suggestions.map((s) => (
               <div key={s.title} className="px-3 py-2 flex items-center justify-between gap-3 text-sm">
                 <div className="min-w-0">
                   <p className="truncate text-gray-500">{s.title}</p>
-                  <p className="text-xs text-gray-400">{s.phase}{plan.date ? ` · ~${guessDue(s.title)}` : ""}</p>
+                  <p className="text-[15px] text-gray-400">{s.phase}{plan.date ? ` · ~${guessDue(s.title)}` : ""}</p>
                 </div>
-                <button onClick={() => addSuggestion(s)} className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-gray-200 rounded hover:bg-gray-300 shrink-0"><Plus className="w-3.5 h-3.5" /> Add</button>
+                <button onClick={() => addSuggestion(s)} className="inline-flex items-center gap-1 px-2 py-1 text-[15px] bg-gray-200 rounded hover:bg-gray-300 shrink-0"><Plus className="w-3.5 h-3.5" /> Add</button>
               </div>
             ))}
           </div>

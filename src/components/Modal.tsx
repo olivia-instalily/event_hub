@@ -1,31 +1,28 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@instalily/ui/dialog";
+import { Button } from "@instalily/ui/button";
+import { Input } from "@instalily/ui/input";
 
-/** App-styled modal (replaces browser-native dialogs). Click backdrop or Esc to close. */
+/** App modal, now backed by the brand Dialog. Same API (mounted = open, onClose to dismiss):
+ *  Esc / backdrop / the built-in close button all route through onClose. */
 export function Modal({ title, onClose, children, maxWidth = "max-w-md" }: {
   title?: string;
   onClose: () => void;
   children: ReactNode;
   maxWidth?: string;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className={`bg-white rounded-2xl border border-black w-full ${maxWidth} p-6`} onClick={(e) => e.stopPropagation()}>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      {/* twMerge dedupes the size variant's sm:max-w-* against ours, so the caller's width wins. */}
+      <DialogContent className={`${maxWidth} sm:${maxWidth}`}>
         {title && (
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl">{title}</h2>
-            <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
-          </div>
+          <DialogHeader>
+            <DialogTitle className="text-xl">{title}</DialogTitle>
+          </DialogHeader>
         )}
         {children}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -43,18 +40,17 @@ export function PromptModal({ title, label, placeholder, submitLabel = "Add", on
   return (
     <Modal title={title} onClose={onClose} maxWidth="max-w-sm">
       {label && <label className="block text-sm font-medium mb-1">{label}</label>}
-      <input
+      <Input
         autoFocus
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
         placeholder={placeholder}
-        className="w-full px-3 py-2 border border-black rounded-lg text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-gray-300"
       />
-      <div className="flex justify-end gap-2">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
-        <button onClick={submit} disabled={!value.trim()} className="px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50">{submitLabel}</button>
-      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={submit} disabled={!value.trim()}>{submitLabel}</Button>
+      </DialogFooter>
     </Modal>
   );
 }
@@ -70,16 +66,13 @@ export function ConfirmModal({ title, message, confirmLabel = "Confirm", danger,
 }) {
   return (
     <Modal title={title ?? "Are you sure?"} onClose={onClose} maxWidth="max-w-sm">
-      <p className="text-sm text-gray-600 mb-5">{message}</p>
-      <div className="flex justify-end gap-2">
-        <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
-        <button
-          onClick={() => { onConfirm(); onClose(); }}
-          className={`px-3 py-1.5 text-sm rounded-lg text-white ${danger ? "bg-red-600 hover:bg-red-700" : "bg-gray-900 hover:bg-gray-800"}`}
-        >
+      <p className="text-sm text-muted-foreground">{message}</p>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button variant={danger ? "destructive" : "default"} onClick={() => { onConfirm(); onClose(); }}>
           {confirmLabel}
-        </button>
-      </div>
+        </Button>
+      </DialogFooter>
     </Modal>
   );
 }
