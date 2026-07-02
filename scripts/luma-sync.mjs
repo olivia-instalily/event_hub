@@ -41,8 +41,9 @@ async function luma(path, params = {}) {
   const url = new URL(LUMA_BASE + path);
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
   const res = await fetch(url, { headers: { 'x-luma-api-key': LUMA_API_KEY, accept: 'application/json' } });
-  if (res.status === 429) { console.error('Luma rate limit (300/min) hit — wait a minute and retry.'); process.exit(1); }
-  if (!res.ok) { console.error(`Luma ${path} -> ${res.status}: ${await res.text()}`); process.exit(1); }
+  // Throw (don't process.exit) so callers can isolate a single event's failure and keep going.
+  if (res.status === 429) throw new Error(`Luma rate limit (300/min) hit on ${path} — wait a minute and retry.`);
+  if (!res.ok) throw new Error(`Luma ${path} -> ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
@@ -158,46 +159,57 @@ async function cmdSync(only, dropAggregate) {
   if (error) { console.error(error); process.exit(1); }
   if (!events?.length) return console.log('No linked events to sync. Run `link` first.');
 
+  // Per-event isolation: one event's API/DB failure is logged and skipped, not fatal to the run.
+  let ok = 0, failed = 0, totalGuests = 0;
   for (const ev of events) {
-    const raw = await lumaAll('/event/get-guests', { event_api_id: ev.luma_event_id });
-    const guests = raw.map(readGuest).filter((g) => g.email);
-    const skipped = raw.length - guests.length;
+    try {
+      const raw = await lumaAll('/event/get-guests', { event_api_id: ev.luma_event_id });
+      const guests = raw.map(readGuest).filter((g) => g.email);
+      const skipped = raw.length - guests.length;
 
-    // Preserve existing type (don't clobber Partner/Hire) — only set type on brand-new rows.
-    const emails = guests.map((g) => g.email);
-    const { data: existing } = await sb.from('attendee').select('email').in('email', emails);
-    const known = new Set((existing ?? []).map((r) => r.email));
+      // Preserve existing type (don't clobber Partner/Hire) — only set type on brand-new rows.
+      const emails = guests.map((g) => g.email);
+      const { data: existing } = await sb.from('attendee').select('email').in('email', emails);
+      const known = new Set((existing ?? []).map((r) => r.email));
 
-    const attendees = guests.map((g) => {
-      const row = {
-        id: idFromEmail(g.email),
-        email: g.email,
-        name: g.name,
-        title: g.profile.title,
-        org: g.profile.org,
-        school: g.profile.school,
-        city: g.profile.city,
-        industry: g.profile.industry,
-      };
-      if (!known.has(g.email)) row.type = 'Unknown'; // Luma can't tell us Client/Hire/Partner
-      if (g.profile.linkedin) row.linkedin_url = g.profile.linkedin; // never overwrite a manual one with null
-      return row;
-    });
-    const links = guests.map((g) => ({
-      id: `ae-${idFromEmail(g.email)}-${ev.id}`,
-      attendee_id: idFromEmail(g.email),
-      event_id: ev.id,
-      role_at_event: 'attendee',
-      registration_status: g.approval ?? null,
-      checked_in: g.checkedIn,
-    }));
+      const attendees = guests.map((g) => {
+        const row = {
+          id: idFromEmail(g.email),
+          email: g.email,
+          name: g.name,
+          title: g.profile.title,
+          org: g.profile.org,
+          school: g.profile.school,
+          city: g.profile.city,
+          industry: g.profile.industry,
+        };
+        if (!known.has(g.email)) row.type = 'Unknown'; // Luma can't tell us Client/Hire/Partner
+        if (g.profile.linkedin) row.linkedin_url = g.profile.linkedin; // never overwrite a manual one with null
+        return row;
+      });
+      const links = guests.map((g) => ({
+        id: `ae-${idFromEmail(g.email)}-${ev.id}`,
+        attendee_id: idFromEmail(g.email),
+        event_id: ev.id,
+        role_at_event: 'attendee',
+        registration_status: g.approval ?? null,
+        checked_in: g.checkedIn,
+      }));
 
-    const e1 = (await sb.from('attendee').upsert(attendees, { onConflict: 'email' })).error;
-    const e2 = (await sb.from('attendee_event').upsert(links, { onConflict: 'attendee_id,event_id' })).error;
-    if (e1 || e2) { console.error(e1 ?? e2); process.exit(1); }
+      const e1 = (await sb.from('attendee').upsert(attendees, { onConflict: 'email' })).error;
+      if (e1) throw new Error(`attendee upsert failed: ${e1.message}`);
+      const e2 = (await sb.from('attendee_event').upsert(links, { onConflict: 'attendee_id,event_id' })).error;
+      if (e2) throw new Error(`attendee_event upsert failed: ${e2.message}`);
 
-    console.log(`${ev.id} (${ev.name}): ${guests.length} guests upserted${skipped ? `, ${skipped} skipped (no email)` : ''}.`);
+      ok++; totalGuests += guests.length;
+      console.log(`ok  ${ev.id} (${ev.name}): ${guests.length} guests upserted${skipped ? `, ${skipped} skipped (no email)` : ''}.`);
+    } catch (err) {
+      failed++;
+      console.error(`FAIL ${ev.id} (${ev.name}): ${err?.message ?? err}`);
+    }
   }
+  console.log(`Sync complete: ${ok}/${events.length} events ok, ${failed} failed, ${totalGuests} guests upserted.`);
+  if (failed) process.exitCode = 1; // signal partial failure to the caller / cron
 
   if (dropAggregate) {
     const sb2 = db();
@@ -212,12 +224,17 @@ const [cmd, ...rest] = process.argv.slice(2);
 const dropAggregate = rest.includes('--drop-aggregate');
 const positional = rest.filter((a) => !a.startsWith('--'));
 
-switch (cmd) {
-  case 'list': await cmdList(); break;
-  case 'import-events': await cmdImportEvents(); break;
-  case 'link': await cmdLink(positional[0], positional[1]); break;
-  case 'inspect': await cmdInspect(positional[0]); break;
-  case 'sync': await cmdSync(positional[0], dropAggregate); break;
-  default:
-    console.log('commands: list | link <eventId> <lumaId> | inspect <eventId> | sync [eventId] [--drop-aggregate]');
+try {
+  switch (cmd) {
+    case 'list': await cmdList(); break;
+    case 'import-events': await cmdImportEvents(); break;
+    case 'link': await cmdLink(positional[0], positional[1]); break;
+    case 'inspect': await cmdInspect(positional[0]); break;
+    case 'sync': await cmdSync(positional[0], dropAggregate); break;
+    default:
+      console.log('commands: list | link <eventId> <lumaId> | inspect <eventId> | sync [eventId] [--drop-aggregate]');
+  }
+} catch (err) {
+  console.error(`luma-sync ${cmd ?? ''} failed: ${err?.message ?? err}`);
+  process.exit(1);
 }

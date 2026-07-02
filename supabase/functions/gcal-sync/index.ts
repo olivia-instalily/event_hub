@@ -107,6 +107,7 @@ Deno.serve(async (req) => {
     await sb.from("event").update({ gcal_event_id: created.id, gcal_html_link: created.htmlLink ?? null }).eq("id", eventId);
     return json({ ok: true, gcalEventId: created.id, calendarId, htmlLink: created.htmlLink ?? null });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "gcal-sync", error: String((e as Error)?.message ?? e) }));
     return json({ error: (e as Error).message ?? String(e) }, 500);
   }
 });

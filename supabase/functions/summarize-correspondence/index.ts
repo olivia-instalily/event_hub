@@ -55,6 +55,7 @@ Deno.serve(async (req) => {
     const tb = (resp.content as any[]).find((b) => b.type === "text");
     return json({ summary: tb ? JSON.parse(tb.text).summary : null });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "summarize-correspondence", error: String((e as Error)?.message ?? e) }));
     return json({ summary: null, error: String((e as Error)?.message ?? e) });
   }
 });

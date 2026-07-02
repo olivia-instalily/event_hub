@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
     }
     return json({ configured: true, matches });
   } catch (e) {
-    console.error("greenhouse-sync failed:", e);
+    console.error(JSON.stringify({ fn: "greenhouse-sync", error: String((e as Error)?.message ?? e) }));
     return json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });

@@ -4,6 +4,7 @@ import {
   listEventTags, listAttendeesForEvent, tagPerson, untagLens, setPersonEventTagFields, confirmTag, dismissTag,
   type TagLens, type EventPersonTag, type PersonView,
 } from "../lib/db";
+import { eventFocus } from "../lib/eventFocus";
 
 // Tagging workspace = the People-page confirm-inbox + inline quick-tag over all attendees.
 // Event-scoped ("tag the room" as a focused session). Proposals (debrief/Slack feeders, later)
@@ -17,14 +18,17 @@ const LENS_CHIP: Record<TagLens, string> = {
 };
 const SOURCE_LABEL: Record<string, string> = { debrief: "Debrief", slack: "Slack", manual: "Manual" };
 
-// Event purpose orders which lens surfaces first; community events skip the funnel entirely.
+// Event purpose orders which lens surfaces first; "community" (neither hiring nor client) events
+// skip the triage funnel. Shares the hiring/client/neither classifier with the post-event view.
 function lensPlan(tag: string | null): { order: TagLens[]; community: boolean } {
   const t = (tag ?? "").toLowerCase();
-  if (/run|coffee|community|social|meetup/.test(t)) return { order: ["prospect", "partner", "candidate"], community: true };
-  if (/recruit|hire|talent|fireside|campus|career/.test(t)) return { order: ["candidate", "prospect", "partner"], community: false };
-  if (/client|gtm|sales|customer|exec|briefing/.test(t)) return { order: ["prospect", "candidate", "partner"], community: false };
+  // Partner-led events lead with the partner lens (checked before the focus buckets, where
+  // partner/sponsor otherwise reads as client-focused).
   if (/partner|sponsor|alliance/.test(t)) return { order: ["partner", "prospect", "candidate"], community: false };
-  return { order: ["candidate", "prospect", "partner"], community: false };
+  const focus = eventFocus(tag ? [tag] : []);
+  if (focus === "hiring") return { order: ["candidate", "prospect", "partner"], community: false };
+  if (focus === "client") return { order: ["prospect", "candidate", "partner"], community: false };
+  return { order: ["prospect", "partner", "candidate"], community: true }; // neither → community/engagement
 }
 
 export function TaggingWorkspace({ eventId, tag, isAdmin, currentProfileId }: {

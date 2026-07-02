@@ -2,6 +2,18 @@ import { supabase } from './supabase';
 import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
+import { categoryKey } from './budgetCategories';
+import type { BackfillExtract, TemplateLite, TemplateAdditions } from './backfill';
+import { generalizeStaffRole } from './backfill';
+import { vendorStage, type VendorRow as VendorListRow } from './vendorImport';
+
+// A template must be name-free: reduce staff roles to their general form and drop bare names / dups.
+const generalRoles = (roles: string[]): string[] => {
+  const out: string[] = []; const seen = new Set<string>();
+  for (const raw of roles) { const r = generalizeStaffRole(raw); if (!r) continue; const k = r.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(r); } }
+  return out;
+};
+import { mergePhaseList } from './phaseMerge';
 
 // The prototype's status tabs are future / in-process / past. Series carry richer
 // macro stages ("Wrapped", "Live", ...). Map them onto the three the UI has.
@@ -51,6 +63,7 @@ export interface EventListItem {
   labelIds: string[];
   macroStage: string | null; // set ⇒ an event we're actively planning (routes to the planning view)
   isTemplate: boolean; // a reusable Event Type (open slots), not a concrete instance
+  finalRecordComplete: boolean; // post-event reflections deliverable is Done → a complete record
 }
 
 export interface Speaker {
@@ -188,6 +201,7 @@ function toListItem(row: any): EventListItem {
     labelIds: (row.event_label ?? []).map((l: any) => l.label_id),
     macroStage: row.macro_stage ?? null,
     isTemplate: row.is_template ?? false,
+    finalRecordComplete: false, // set by listEvents from the reflection-deliverable status
   };
 }
 
@@ -235,7 +249,7 @@ export async function createPlanningEvent(input: {
   const eventId = newId('evt');
   // Snap the format to the closest existing one before storing (no near-duplicate formats).
   const format = await canonicalizeFormat(input.format ?? null);
-  const { error: eErr } = await supabase.from('event').insert({
+  const eventRow = {
     id: eventId, name: input.name, event_date: input.date, location: input.location, format,
     start_time: input.startTime ?? null, end_time: input.endTime ?? null,
     phases: input.phases ?? [], planning_lead_time: input.planningLeadTime ?? null,
@@ -244,17 +258,13 @@ export async function createPlanningEvent(input: {
     is_template: input.isTemplate ?? false,
     tags: input.tags, macro_stage: 'Planning', modeled_on_event_id: input.modeledOnEventId ?? null,
     hosting: input.hosting ?? 'solo', co_host: input.hosting === 'cohost' ? (input.coHost?.trim() || null) : null,
-  });
-  if (eErr) throw eErr;
+  };
 
-  const engRows = input.template.vendorCategories.map((cat) => ({ id: newId('eng'), event_id: eventId, category: cat, stage: 'Sourced' }));
-  if (engRows.length) { const { error } = await supabase.from('engagement').insert(engRows); if (error) throw error; }
+  const engagements = input.template.vendorCategories.map((cat) => ({ id: newId('eng'), event_id: eventId, category: cat, stage: 'Sourced' }));
 
   const budgetId = newId('bud');
-  const { error: bErr } = await supabase.from('budget').insert({ id: budgetId, event_id: eventId, currency: 'USD' });
-  if (bErr) throw bErr;
-  const lineRows = input.template.budgetLines.map((l) => ({ id: newId('bl'), budget_id: budgetId, label: l.label, confirmed_amount: l.estimate }));
-  if (lineRows.length) { const { error } = await supabase.from('budget_line').insert(lineRows); if (error) throw error; }
+  const budgetRow = { id: budgetId, event_id: eventId, currency: 'USD' };
+  const budgetLines = input.template.budgetLines.map((l) => ({ id: newId('bl'), budget_id: budgetId, label: l.label, confirmed_amount: l.estimate }));
 
   // Seed each workstream's due offset from the standard schedule (compressed if the
   // planning window is short). When the date is known at creation, resolve concrete due
@@ -262,22 +272,27 @@ export async function createPlanningEvent(input: {
   // the date is set.
   const startDate = new Date().toISOString().slice(0, 10);
   const base = input.date ? new Date(input.date + 'T00:00:00') : null;
-  const delRows = input.template.progressCategories.map((p) => {
+  type DelRow = { id: string; event_id: string; title: string; phase: string; status: string; due_offset_days: number | null; offset_start: number | null; resolved_due_date: string | null; locked: boolean };
+  const deliverables: DelRow[] = input.template.progressCategories.map((p) => {
     const offset = dueOffsetForTitle(p, input.date, startDate);
     let resolved: string | null = null;
     if (base) { const due = new Date(base); due.setDate(due.getDate() + offset); resolved = due.toISOString().slice(0, 10); }
-    return { id: newId('del'), event_id: eventId, title: p, phase: 'Planning', status: 'Todo', due_offset_days: offset, resolved_due_date: resolved };
+    return { id: newId('del'), event_id: eventId, title: p, phase: 'Planning', status: 'Todo', due_offset_days: offset, offset_start: null, resolved_due_date: resolved, locked: false };
   });
-  if (delRows.length) { const { error } = await supabase.from('deliverable').insert(delRows); if (error) throw error; }
 
   // Every event/template carries a non-deletable post-event post-mortem deliverable.
   // Placed in the last phase (else "Wrap"), a couple days after the event (offset +2).
   const lastPhase = (input.phases ?? []).slice().sort((a, b) => a.order - b.order).pop()?.name ?? 'Wrap';
   const pmOffset = 2;
   const pmDue = base ? (() => { const d = new Date(base); d.setDate(d.getDate() + pmOffset); return d.toISOString().slice(0, 10); })() : null;
-  { const { error } = await supabase.from('deliverable').insert({ id: newId('del'), event_id: eventId, title: 'Post-event reflections & insights', phase: lastPhase, status: 'Todo', offset_start: pmOffset, resolved_due_date: pmDue, locked: true }); if (error) throw error; }
+  deliverables.push({ id: newId('del'), event_id: eventId, title: 'Post-event reflections & insights', phase: lastPhase, status: 'Todo', due_offset_days: null, offset_start: pmOffset, resolved_due_date: pmDue, locked: true });
 
-  return eventId;
+  // All inserts run inside one plpgsql transaction — any failure rolls back everything.
+  const { data, error } = await supabase.rpc('create_planning_event', {
+    p_event: eventRow, p_engagements: engagements, p_budget: budgetRow, p_budget_lines: budgetLines, p_deliverables: deliverables,
+  });
+  if (error) throw error;
+  return (data as string) ?? eventId;
 }
 
 /** Persist a backfilled past event (no template). Returns the new event id. */
@@ -529,6 +544,23 @@ export async function updateEvent(
   if ('location' in fields) patch.location = fields.location;
   if ('startTime' in fields) patch.start_time = fields.startTime;
   if ('endTime' in fields) patch.end_time = fields.endTime;
+  const { error } = await supabase.from('event').update(patch).eq('id', eventId);
+  if (error) throw error;
+}
+
+/** Update an event/template's pattern fields (jsonb). Used when re-saving from the review page so
+ *  edits land on the EXISTING event instead of spawning a duplicate. */
+export async function setEventPattern(
+  eventId: string,
+  fields: { phases?: { name: string; order: number }[]; planningLeadTime?: string | null; heuristics?: string[]; outreach?: OutreachTemplate[]; walkthrough?: WalkStep[] },
+): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if ('phases' in fields) patch.phases = fields.phases ?? [];
+  if ('planningLeadTime' in fields) patch.planning_lead_time = fields.planningLeadTime ?? null;
+  if ('heuristics' in fields) patch.heuristics = fields.heuristics ?? [];
+  if ('outreach' in fields) patch.outreach = fields.outreach ?? [];
+  if ('walkthrough' in fields) patch.walkthrough = fields.walkthrough ?? [];
+  if (Object.keys(patch).length === 0) return;
   const { error } = await supabase.from('event').update(patch).eq('id', eventId);
   if (error) throw error;
 }
@@ -1018,7 +1050,9 @@ export interface ExtractedBrief {
   headcount: number | null; audience: string; format: string; tag: string | null;
   specificity: "event" | "template";
   overview: string; guardrails: string[]; heuristics: string[]; phases: string[];
-  deliverables: { title: string; phase: string; offsetStart: number | null; offsetEnd: number | null }[];
+  // `original` (template mode) = the pre-generalization text when a name/client/case-study was stripped.
+  deliverables: { title: string; phase: string; offsetStart: number | null; offsetEnd: number | null; original?: string }[];
+  droppedForTemplate?: { title: string; reason: string }[]; // template mode: too event-specific to keep
   vendors: string[]; staff: string[]; agenda: { time: string; title: string }[];
   walkthrough: WalkStep[]; outreach: OutreachTemplate[]; budgetTotal: number | null;
 }
@@ -1031,6 +1065,291 @@ export async function extractBrief(text: string): Promise<ExtractedBrief> {
   }
   if ((data as any)?.error) throw new Error((data as any).error);
   return data as ExtractedBrief;
+}
+
+// A debrief is a DIFFERENT document than a brief — backward-looking. Its own extractor returns
+// debrief-shaped fields (lessons/follow-ups/outcome/actuals/people) with category-awareness.
+export interface DebriefExtract {
+  eventName: string;
+  focus: 'hiring' | 'client' | 'community' | 'unclear';
+  outcome: { verdict: string; worthRepeating: 'yes' | 'no' | 'unsure' | null; turnoutActual: number | null; turnoutNote: string };
+  lessons: { text: string; proposedChange: string; area: string }[];
+  followUps: { action: string; owner: string; person: string; dueOffset: number | null }[];
+  peopleTags: { name: string; lens: TagLens; note: string; provenance: string }[];
+  actuals: { line: string; amount: number | null; note: string }[];
+}
+/** Extract a post-event debrief transcript into structured fields via Claude (server-side). */
+export async function extractDebrief(text: string): Promise<DebriefExtract> {
+  const { data, error } = await supabase.functions.invoke('extract-debrief', { body: { text } });
+  if (error) {
+    const msg = (data as any)?.error ?? error.message ?? String(error);
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as DebriefExtract;
+}
+/** Feed debrief-extracted people into the People confirm-inbox as PROPOSED tags, matched to this
+ *  event's attendees by name. Returns how many were proposed + any names that didn't match. */
+export async function proposeTagsFromDebrief(eventId: string, people: { name: string; lens: TagLens; note: string; provenance: string }[]): Promise<{ proposed: number; unmatched: string[] }> {
+  if (!people?.length) return { proposed: 0, unmatched: [] };
+  const attendees = await listAttendeesForEvent(eventId);
+  const byName = new Map<string, string>();
+  for (const a of attendees) if (a.name) byName.set(a.name.trim().toLowerCase(), a.id);
+  let proposed = 0; const unmatched: string[] = [];
+  for (const p of people) {
+    const id = byName.get((p.name ?? '').trim().toLowerCase());
+    if (!id) { unmatched.push(p.name); continue; }
+    try { await tagPerson(id, eventId, p.lens, { source: 'debrief', sourceRef: p.provenance || 'debrief', note: p.note || null, status: 'proposed' }); proposed++; } catch { /* skip one bad row */ }
+  }
+  return { proposed, unmatched };
+}
+
+// ── Backfill a past event from a dropped brief/debrief ───────────────────────
+/** Merge a brief extraction (structure/pattern) + a debrief extraction (outcome/actuals) into
+ *  the one shape the backfill flow needs. Runs both extractors; either may no-op. */
+export async function extractForBackfill(text: string): Promise<BackfillExtract> {
+  const [b, d] = await Promise.all([
+    extractBrief(text).catch(() => null),
+    extractDebrief(text).catch(() => null),
+  ]);
+  if (!b && !d) throw new Error('Extraction failed — check the dropped file or paste the text.');
+  // Numbers the LLM may miss in prose ("68 RSVP and 16 checked in") — pull them straight from text.
+  const firstNum = (...res: RegExp[]): number | null => {
+    for (const re of res) { const m = text.match(re); if (m) { const n = Number(m[1]); if (!Number.isNaN(n)) return n; } }
+    return null;
+  };
+  const rsvpN = firstNum(/(\d+)\s*(?:rsvps?|registered|expected|sign[- ]?ups?)\b/i, /\brsvps?\b\D{0,15}(\d+)/i);
+  const checkedN = firstNum(/(\d+)\s*(?:checked[- ]?in|check[- ]?ins?|showed\s*up|attended|turnout)\b/i, /\bchecked[- ]?in\b\D{0,15}(\d+)/i);
+  return {
+    name: (b?.title || d?.eventName || '').trim(),
+    date: b?.date || null,
+    location: b?.location || null,
+    format: b?.format || null,
+    tag: b?.tag ?? null,
+    headcount: b?.headcount ?? rsvpN,
+    turnoutActual: d?.outcome?.turnoutActual ?? checkedN,
+    budgetTotal: b?.budgetTotal ?? null,
+    verdict: d?.outcome?.verdict || '',
+    phases: b?.phases ?? [],
+    staffRoles: b?.staff ?? [],
+    lessons: (d?.lessons ?? []).map((l) => l.proposedChange || l.text).filter(Boolean),
+    heuristics: b?.heuristics ?? [],
+    actuals: (d?.actuals ?? []).map((a) => ({ line: a.line, amount: a.amount })),
+    deliverables: (b?.deliverables ?? []).map((dl) => dl.title).filter(Boolean),
+    agenda: (b?.agenda ?? []).filter((a) => a.title?.trim()),
+  };
+}
+
+/** Templates (is_template events) with just the pattern fields the matcher/adder need. */
+export async function listTemplates(): Promise<TemplateLite[]> {
+  const { data, error } = await supabase.from('event').select('id, name, format, tags, phases, staff_roles, reflections').eq('is_template', true);
+  if (error) throw error;
+  return (data ?? []).map((r: any) => ({
+    id: r.id, name: r.name, format: r.format ?? null, tags: r.tags ?? [],
+    phases: Array.isArray(r.phases) ? r.phases.map((p: any) => p?.name ?? p).filter(Boolean) : [],
+    staffRoles: Array.isArray(r.staff_roles) ? r.staff_roles : [],
+    reflections: Array.isArray(r.reflections) ? r.reflections : [],
+  }));
+}
+
+const backfillTemplateInput = (x: BackfillExtract): GeneratedTemplate => ({
+  vendorCategories: [],
+  budgetLines: x.actuals.filter((a) => a.line).map((a) => ({ label: a.line, estimate: a.amount ?? 0 })),
+  progressCategories: x.deliverables,
+});
+
+/** Cold-start: create a NEW template (is_template event) from the dropped event's pattern. */
+export async function createTemplateFromExtract(x: BackfillExtract): Promise<string> {
+  return createPlanningEvent({
+    name: x.format ? `${x.format} template` : (x.name ? `${x.name} (template)` : 'Event template'),
+    date: null, location: null, tags: x.tag ? [x.tag] : [], template: backfillTemplateInput(x),
+    format: x.format, phases: x.phases.map((name, order) => ({ name, order })),
+    staffRoles: generalRoles(x.staffRoles), reflections: [...x.lessons, ...x.heuristics], isTemplate: true,
+  });
+}
+
+/** Create the wrapped (settled, past) event record from the merged extract, pointed at a template. */
+export async function backfillWrappedEvent(x: BackfillExtract, modeledOnTemplateId: string | null): Promise<string> {
+  const eventId = await createPlanningEvent({
+    name: x.name || 'Backfilled event', date: x.date, location: x.location, tags: x.tag ? [x.tag] : [],
+    template: backfillTemplateInput(x), format: x.format,
+    phases: x.phases.map((name, order) => ({ name, order })),
+    staffRoles: x.staffRoles, reflections: [...x.lessons, ...x.heuristics],
+    modeledOnEventId: modeledOnTemplateId, isTemplate: false,
+  });
+  // It's history → mark it wrapped + settled (and setup_complete so it opens on the wrapped
+  // view, not the setup walkthrough), and fill the event-specific numbers we have.
+  const patch: Record<string, unknown> = { macro_stage: 'Wrapped', settle_state: 'settled', settled_at: new Date().toISOString(), setup_complete: true };
+  if (x.verdict.trim()) patch.verdict = x.verdict.trim();
+  if (x.turnoutActual != null) patch.checked_in = x.turnoutActual;
+  if (x.headcount != null) patch.rsvp = x.headcount;
+  await supabase.from('event').update(patch).eq('id', eventId).then(() => {}, () => {});
+  return eventId;
+}
+
+/** Point an event at an existing template (adopt it). */
+export async function adoptTemplate(eventId: string, templateId: string): Promise<void> {
+  const { error } = await supabase.from('event').update({ modeled_on_event_id: templateId }).eq('id', eventId);
+  if (error) throw error;
+}
+
+/** Derive a NEW template from a concrete event's own pattern (one-off event → "derive a template"),
+ *  and point the event at it. Returns the new template id. */
+export async function deriveTemplateFromEvent(eventId: string): Promise<string> {
+  const p = await getEventPlanning(eventId);
+  if (!p) throw new Error('event not found');
+  const templateId = await createPlanningEvent({
+    name: p.format ? `${p.format} template` : `${p.title} (template)`,
+    date: null, location: null, tags: p.tags, format: p.format,
+    template: {
+      vendorCategories: p.engagements.map((e) => e.category).filter((c): c is string => !!c),
+      budgetLines: (p.budget?.lines ?? []).filter((l) => l.label).map((l) => ({ label: l.label as string, estimate: l.confirmedAmount ?? 0 })),
+      progressCategories: p.deliverables.filter((d) => !d.locked).map((d) => d.title),
+    },
+    phases: p.phases.map((ph, i) => ({ name: ph.name, order: (ph as any).order ?? i })),
+    staffRoles: generalRoles(p.staffRoles), reflections: p.reflections, isTemplate: true,
+  });
+  await supabase.from('event').update({ modeled_on_event_id: templateId }).eq('id', eventId).then(() => {}, () => {});
+  return templateId;
+}
+
+/** Apply CONFIRMED additions to an existing template (one-directional; never rewrites the template's
+ *  existing pattern, never propagates to sibling past events). */
+export async function applyTemplateAdditions(templateId: string, add: TemplateAdditions): Promise<void> {
+  const { data } = await supabase.from('event').select('phases, staff_roles, reflections').eq('id', templateId).maybeSingle();
+  const curPhases = (Array.isArray((data as any)?.phases) ? (data as any).phases : []).map((p: any) => ({ name: p?.name ?? p, order: p?.order }));
+  const curRoles = Array.isArray((data as any)?.staff_roles) ? (data as any).staff_roles : [];
+  const curRefl = Array.isArray((data as any)?.reflections) ? (data as any).reflections : [];
+  // Role-aligned merge (single day-of, ordered, no duplicate roles) — never concatenate. Roles are
+  // generalized on both sides so a personal name can never land in (or linger in) the template.
+  const phases = mergePhaseList(curPhases, add.phases);
+  const roles = generalRoles([...curRoles, ...add.roles]);
+  const refl = Array.from(new Set([...curRefl, ...add.lessons]));
+  const { error } = await supabase.from('event').update({ phases, staff_roles: roles, reflections: refl }).eq('id', templateId);
+  if (error) throw error;
+}
+
+/** Enrich an already-wrapped event by FILLING gap fields from a freshly-dropped doc's extract.
+ *  Only touches the fields passed in `fields` (the current gaps) — never overwrites existing data. */
+export async function enrichEventFromExtract(eventId: string, x: BackfillExtract, fields: string[]): Promise<string[]> {
+  const want = new Set(fields);
+  const filled: string[] = []; // what actually changed → caller can report honestly
+  if (want.has('date') && x.date) { await setEventDate(eventId, x.date).catch(() => {}); filled.push('date'); }
+  const ev: Record<string, unknown> = {};
+  if (want.has('location') && x.location) ev.location = x.location;
+  if (want.has('turnout')) {
+    if (x.headcount != null) ev.rsvp = x.headcount;
+    if (x.turnoutActual != null) { ev.checked_in = x.turnoutActual; if (x.headcount == null) ev.headcount = x.turnoutActual; }
+  }
+  if (Object.keys(ev).length) { await supabase.from('event').update(ev).eq('id', eventId).then(() => {}, () => {}); if ('location' in ev) filled.push('location'); if ('rsvp' in ev || 'checked_in' in ev || 'headcount' in ev) filled.push('turnout'); }
+  if (want.has('outcome') && x.verdict.trim()) { await setEventVerdict(eventId, x.verdict).catch(() => {}); filled.push('outcome'); }
+  if (want.has('agenda') && x.agenda?.length) { await setEventAgenda(eventId, x.agenda).catch(() => {}); filled.push('agenda'); }
+  if (want.has('roles') && x.staffRoles.length) { await setEventStaffRoles(eventId, x.staffRoles).catch(() => {}); filled.push('roles'); }
+  if (want.has('budget') && x.actuals.some((a) => a.line)) {
+    await addBudgetActuals(eventId, x.actuals.filter((a) => a.line).map((a) => ({ label: a.line, amount: a.amount }))).catch(() => {});
+    filled.push('budget');
+  }
+  // Lessons are always additive (a debrief's whole point) — append any not already recorded,
+  // regardless of which gap fields were requested. Dedup case-insensitively against existing.
+  if (x.lessons?.length) {
+    const { data: er } = await supabase.from('event').select('reflections').eq('id', eventId).maybeSingle();
+    const cur: string[] = Array.isArray((er as any)?.reflections) ? (er as any).reflections : [];
+    const norm = (s: string) => s.trim().toLowerCase();
+    const seen = new Set(cur.map(norm));
+    const added: string[] = [];
+    for (const l of x.lessons) { const t = (l ?? '').trim(); if (t && !seen.has(norm(t))) { seen.add(norm(t)); added.push(t); } }
+    if (added.length) { await setEventReflections(eventId, [...cur, ...added]).catch(() => {}); filled.push(`${added.length} lesson${added.length === 1 ? '' : 's'}`); }
+  }
+  return filled;
+}
+
+/** Record ACTUAL spend (paid) on an event — used when a budget sheet is dropped to fill final
+ *  spend. Ensures a budget exists; lines land as 'paid' so they count as final spend (not estimates).
+ *  docUrl links the lines to the source doc they came from, so deleting that source cascades.
+ *  Re-import-safe: dedups by EXACT line label (normalized) against existing lines AND within the
+ *  drop, so re-dropping the same sheet UPDATES the amount instead of doubling it. NOTE: dedup is by
+ *  exact label, NOT canonical category — an itemized sheet legitimately has several distinct lines
+ *  in one category (e.g. "Food (dinner)" and "Beverage (wine + beer)" are both catering but are
+ *  separate spend), and merging them by category would silently drop money. */
+export async function addBudgetActuals(eventId: string, lines: { label: string; amount: number | null }[], docUrl?: string | null): Promise<number> {
+  const usable = lines.filter((l) => l.label?.trim());
+  if (!usable.length) return 0;
+  const { data } = await supabase.from('budget').select('id').eq('event_id', eventId).limit(1);
+  let budgetId = data?.[0]?.id as string | undefined;
+  if (!budgetId) { budgetId = genId('bud'); const { error } = await supabase.from('budget').insert({ id: budgetId, event_id: eventId, currency: 'USD' }); if (error) throw error; }
+
+  const labelKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  const existing = await listBudgetLines(budgetId);
+  const byKey = new Map<string, BudgetLineTracker>();
+  for (const l of existing) if (l.label) byKey.set(labelKey(l.label), l);
+
+  const seen = new Set<string>();
+  const toInsert: Record<string, unknown>[] = [];
+  let changed = 0;
+  for (const l of usable) {
+    const key = labelKey(l.label);
+    if (seen.has(key)) continue; // collapse exact-duplicate rows within the same sheet
+    seen.add(key);
+    const match = byKey.get(key);
+    if (match) {
+      // Update the existing line's amount in place (as paid actuals), preserving its other fields.
+      const { error } = await supabase.from('budget_line').update({ confirmed_amount: l.amount, payment_status: 'paid', doc_url: docUrl ?? match.docUrl ?? null }).eq('id', match.id);
+      if (!error) changed++;
+    } else {
+      toInsert.push({ id: genId('bl'), budget_id: budgetId, label: l.label, confirmed_amount: l.amount, payment_status: 'paid', doc_url: docUrl ?? null });
+    }
+  }
+  if (toInsert.length) { const { error } = await supabase.from('budget_line').insert(toInsert); if (error) throw error; }
+  return toInsert.length + changed;
+}
+
+// ── Source materials (project context) ───────────────────────────────────────
+/** Append a dropped doc to an event's source materials (project context). */
+export async function getSourceMaterials(eventId: string): Promise<SourceMaterial[]> {
+  const { data } = await supabase.from('event').select('source_materials').eq('id', eventId).maybeSingle();
+  return Array.isArray((data as any)?.source_materials) ? (data as any).source_materials : [];
+}
+
+export async function addSourceMaterial(eventId: string, material: SourceMaterial): Promise<void> {
+  const cur = await getSourceMaterials(eventId);
+  // Don't re-attach the same file: dedupe by url, and by name (a re-upload gets a fresh url).
+  if (cur.some((m) => m.url === material.url || m.name === material.name)) return;
+  const { error } = await supabase.from('event').update({ source_materials: [...cur, material] }).eq('id', eventId);
+  if (error) throw error;
+}
+
+/** Remove a source doc from project context. CASCADES everything derived SOLELY from it: budget
+ *  lines created from it (by doc_url) are deleted; vendors (engagements) created from it are deleted
+ *  and any budget line that was merely TAGGED with such a vendor is untagged (the line itself stays,
+ *  since it came from a different source). So removing a vendor sheet leaves the event with no
+ *  vendors from it, without disturbing budget amounts. Returns what was cleaned up. */
+export async function deleteSourceMaterial(eventId: string, url: string): Promise<{ budgetLinesRemoved: number; vendorsRemoved: number }> {
+  const { data } = await supabase.from('event').select('source_materials').eq('id', eventId).maybeSingle();
+  const cur: SourceMaterial[] = Array.isArray((data as any)?.source_materials) ? (data as any).source_materials : [];
+  const next = cur.filter((m) => m.url !== url);
+  const { error } = await supabase.from('event').update({ source_materials: next }).eq('id', eventId);
+  if (error) throw error;
+
+  // Vendors (engagements) created from this doc → untag any budget lines pointing at them, drop
+  // their candidates, then delete the engagements.
+  const { data: engs } = await supabase.from('engagement').select('id').eq('event_id', eventId).eq('doc_url', url);
+  const engIds = (engs ?? []).map((e: any) => e.id);
+  let vendorsRemoved = 0;
+  if (engIds.length) {
+    await supabase.from('budget_line').update({ linked_engagement: null }).in('linked_engagement', engIds);
+    await supabase.from('engagement_candidate').delete().in('engagement_id', engIds);
+    const { data: delEng } = await supabase.from('engagement').delete().in('id', engIds).select('id');
+    vendorsRemoved = delEng?.length ?? 0;
+  }
+
+  // Budget lines that CAME from this source doc (created from it).
+  const { data: buds } = await supabase.from('budget').select('id').eq('event_id', eventId);
+  let budgetLinesRemoved = 0;
+  for (const b of buds ?? []) {
+    const { data: del } = await supabase.from('budget_line').delete().eq('budget_id', b.id).eq('doc_url', url).select('id');
+    budgetLinesRemoved += del?.length ?? 0;
+  }
+  return { budgetLinesRemoved, vendorsRemoved };
 }
 
 // ── Greenhouse read-back (thin, email-matched application status) ─────────────
@@ -1157,7 +1476,19 @@ export async function listEvents(): Promise<EventListItem[]> {
     )
     .order('id');
   if (error) throw error;
-  return (data ?? []).map(toListItem);
+  const items = (data ?? []).map(toListItem);
+  // A record is "complete" strictly when its post-event reflections/insights deliverable is
+  // Done — which happens EITHER automatically once the completeness list has no gaps, OR when
+  // the user manually checks it off. Deliberately NOT keyed on "settled": a settled event can
+  // still have gaps, and we don't want the green check next to a yellow "to add" list.
+  const { data: reflDone } = await supabase
+    .from('deliverable')
+    .select('event_id')
+    .eq('status', 'Done')
+    .or('title.ilike.%reflection%,title.ilike.%insight%');
+  const complete = new Set((reflDone ?? []).map((d: any) => d.event_id));
+  for (const it of items) it.finalRecordComplete = complete.has(it.id);
+  return items;
 }
 
 // ── Consolidated budget (across all events) ─────────────────────────────────
@@ -1482,6 +1813,7 @@ export interface RunOfShowItem { time: string; title: string }
 export interface CarriedLesson {
   body: string;
   sourceEventName: string;
+  sourceEventId: string | null; // the event this learning came from (clickable), if known
   why: string;
 }
 export interface EventPlanning {
@@ -1506,10 +1838,18 @@ export interface EventPlanning {
   isTemplate: boolean;
   capacity: number | null;
   rsvp: number | null;
+  checkedIn: number | null; // event-level counted heads (a stat, distinct from identified records)
   owner: string | null;
   owners: { id: string; name: string; color: string | null }[];
   macroStage: string | null;
   status: EventStatus;
+  // Wrap & write-back (v1): settling lifecycle + recorded outcome + persisted debrief notes.
+  settleState: 'just_wrapped' | 'debriefed' | 'settled' | null;
+  settledAt: string | null;
+  verdict: string | null;
+  debriefNotes: string | null;
+  roleAssignments: Record<string, string>; // staff role → person who filled it (resolved at settle)
+  modeledOnEventId: string | null; // the template/source this event was spun up from
   overviewSummary: string | null;
   lumaUrl: string | null;
   lumaEventId: string | null;
@@ -1605,7 +1945,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, is_template, capacity, rsvp, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -1695,9 +2035,16 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     date: (row as any).event_date ?? null,
     capacity: (row as any).capacity ?? null,
     rsvp: (row as any).rsvp ?? null,
+    checkedIn: (row as any).checked_in ?? null,
     ...ownersOf(row),
     macroStage: (row as any).macro_stage ?? null,
     status: resolveStatus(row, (row as any).series ?? null),
+    settleState: (row as any).settle_state ?? null,
+    settledAt: (row as any).settled_at ?? null,
+    verdict: (row as any).verdict ?? null,
+    debriefNotes: (row as any).debrief_notes ?? null,
+    roleAssignments: ((row as any).role_assignments ?? {}) as Record<string, string>,
+    modeledOnEventId: (row as any).modeled_on_event_id ?? null,
     overviewSummary: (row as any).overview_summary ?? null,
     lumaUrl: (row as any).luma_url ?? null,
     lumaEventId: (row as any).luma_event_id ?? null,
@@ -1845,6 +2192,75 @@ export async function clearCandidateSelection(engagementId: string): Promise<voi
   if (error) throw error;
 }
 
+// Invoice line-items that are NOT vendors — taxes, fees, charges, sub/totals. A sheet where one
+// supplier (ACE) provides many lines shouldn't turn "HST (13%)" into its own vendor.
+const NON_VENDOR_ROW = /\b(hst|gst|pst|qst|vat|tax|hsc|cc\s*fee|credit[- ]?card|service charge|gratuity|tip|sub[- ]?total|grand\s*total|total|fees?)\b/i;
+
+/** Import a parsed vendor list. VENDOR-CENTRIC: one supplier (e.g. ACE) that appears on several
+ *  rows becomes ONE vendor, and its line categories TAG the matching existing budget lines
+ *  (`linked_engagement`) — it never creates budget lines or changes their amount / paid status, so
+ *  it can't inflate spend. Tax/fee/total rows are filtered out. Engagements are tagged with the
+ *  source `docUrl` so removing that doc cascades them away. Idempotent (dedup by vendor name). */
+export async function importVendors(eventId: string, rows: VendorListRow[], docUrl: string | null = null): Promise<{ vendors: number; tagged: number; skipped: number }> {
+  const clean = rows.filter((r) => !NON_VENDOR_ROW.test(r.category ?? '') && !NON_VENDOR_ROW.test(r.vendor ?? ''));
+  const skipped = rows.length - clean.length;
+  if (!clean.length) return { vendors: 0, tagged: 0, skipped };
+
+  // Existing budget lines (to TAG — never create/modify them here). Match by EXACT label, not
+  // canonical category: itemized lines like "Food (dinner)" and "Beverage (wine + beer)" both
+  // canonicalize to "Catering", so a category key would collapse them and mis-tag / drop one.
+  const labelKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  const { data: b } = await supabase.from('budget').select('id').eq('event_id', eventId).maybeSingle();
+  const budgetId = (b as any)?.id as string | undefined;
+  const lineByLabel = new Map<string, any>();
+  if (budgetId) {
+    const { data: blines } = await supabase.from('budget_line').select('id, label, linked_engagement').eq('budget_id', budgetId);
+    for (const l of blines ?? []) if (l.label) lineByLabel.set(labelKey(l.label), l);
+  }
+
+  // Existing vendors, keyed by their name (engagement.category holds the supplier name here).
+  const { data: engs } = await supabase.from('engagement').select('id, category').eq('event_id', eventId);
+  const engByName = new Map<string, any>();
+  for (const e of engs ?? []) if (e.category) engByName.set(e.category.trim().toLowerCase(), e);
+
+  // Group rows by SUPPLIER (vendor name; fall back to category when a row has no named vendor).
+  const groups = new Map<string, { name: string; rows: VendorListRow[] }>();
+  for (const r of clean) {
+    const name = (r.vendor && r.vendor.trim()) ? r.vendor.trim() : (r.category ?? '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (!groups.has(key)) groups.set(key, { name, rows: [] });
+    groups.get(key)!.rows.push(r);
+  }
+
+  let vendors = 0, tagged = 0;
+  for (const { name, rows: grp } of groups.values()) {
+    const stages = grp.map((r) => vendorStage(r.status));
+    const stage = stages.includes('Contracted') ? 'Contracted' : stages.includes('Selected') ? 'Selected' : stages.includes('Quoted') ? 'Quoted' : 'Sourced';
+    let eng = engByName.get(name.toLowerCase());
+    if (!eng) {
+      const id = genId('eng');
+      const { error } = await supabase.from('engagement').insert({ id, event_id: eventId, category: name, stage, doc_url: docUrl });
+      if (error) throw error;
+      eng = { id, category: name };
+      engByName.set(name.toLowerCase(), eng);
+      vendors++;
+    } else {
+      await supabase.from('engagement').update({ stage, ...(docUrl ? { doc_url: docUrl } : {}) }).eq('id', eng.id);
+    }
+    // TAG existing budget lines whose line item this supplier provided — do NOT create or re-price.
+    for (const r of grp) {
+      const line = lineByLabel.get(labelKey(r.category));
+      if (line && line.linked_engagement !== eng.id) {
+        await supabase.from('budget_line').update({ linked_engagement: eng.id }).eq('id', line.id);
+        line.linked_engagement = eng.id;
+        tagged++;
+      }
+    }
+  }
+  return { vendors, tagged, skipped };
+}
+
 // ── Budget tracker ──────────────────────────────────────────────────────────
 export async function addTrackerLine(budgetId: string, label: string, amount: number | null): Promise<BudgetLineTracker> {
   const id = genId('bl');
@@ -1862,6 +2278,11 @@ export async function setBudgetSyncUrl(id: string, url: string | null): Promise<
 }
 export async function attachLineDoc(id: string, url: string | null): Promise<void> {
   const { error } = await supabase.from('budget_line').update({ doc_url: url }).eq('id', id);
+  if (error) throw error;
+}
+/** Tag a budget line to a vendor engagement (or clear it with null). */
+export async function setBudgetLineEngagement(id: string, engagementId: string | null): Promise<void> {
+  const { error } = await supabase.from('budget_line').update({ linked_engagement: engagementId }).eq('id', id);
   if (error) throw error;
 }
 export async function setBudgetTarget(budgetId: string, target: number | null): Promise<void> {
@@ -1898,6 +2319,35 @@ export async function addBudgetLines(budgetId: string, lines: { label: string; a
   const rows = lines.map((l) => ({ id: genId('bl'), budget_id: budgetId, label: l.label, confirmed_amount: l.amount }));
   const { error } = await supabase.from('budget_line').insert(rows);
   if (error) throw error;
+}
+/** Re-import-safe replace: upsert dropped lines onto existing ones by canonical category
+ *  (the natural key — A/V == "audio visual"), instead of delete-then-add. Matched lines have
+ *  their amount UPDATED in place, preserving manually-set fields (target / status / note /
+ *  links); new categories are inserted. With pruneMissing, categories absent from the drop are
+ *  removed only AFTER the upserts succeed — so a mid-import failure can never empty the budget. */
+export async function upsertBudgetLines(
+  budgetId: string,
+  lines: { label: string; amount: number | null }[],
+  opts: { pruneMissing?: boolean } = {},
+): Promise<void> {
+  const existing = await listBudgetLines(budgetId);
+  const byKey = new Map<string, BudgetLineTracker>();
+  for (const l of existing) if (l.label) byKey.set(categoryKey(l.label), l);
+
+  const incoming = new Set<string>();
+  const toInsert: { label: string; amount: number | null }[] = [];
+  for (const line of lines) {
+    const key = categoryKey(line.label);
+    incoming.add(key);
+    const match = byKey.get(key);
+    if (match) await updateBudgetLine(match.id, { amount: line.amount }); // preserve target/status/note/links
+    else toInsert.push(line);
+  }
+  await addBudgetLines(budgetId, toInsert);
+  if (opts.pruneMissing) {
+    const stale = existing.filter((l) => !l.label || !incoming.has(categoryKey(l.label)));
+    await Promise.all(stale.map((l) => deleteBudgetLine(l.id)));
+  }
 }
 /** Classify a budget's lines for drop-import overwrite handling:
  *  empty (no lines) · projected (seeded estimates, nothing user-touched) · real (user data). */
@@ -2026,6 +2476,20 @@ export async function addDeliverable(eventId: string, fields: { title: string; p
 export async function setDeliverableStatus(id: string, status: string): Promise<void> {
   const { error } = await supabase.from('deliverable').update({ status }).eq('id', id);
   if (error) throw error;
+}
+/** Count an event's deliverables, total and not-yet-Done — used to phrase a bulk-action confirm. */
+export async function getDeliverableCounts(eventId: string): Promise<{ total: number; open: number }> {
+  const { data } = await supabase.from('deliverable').select('status').eq('event_id', eventId);
+  const rows = data ?? [];
+  return { total: rows.length, open: rows.filter((d) => d.status !== 'Done').length };
+}
+/** Set the status on EVERY deliverable of an event (e.g. a bulk "mark everything done"). Returns
+ *  how many rows changed (those not already at `status`), so a caller can confirm honestly. */
+export async function setAllDeliverablesStatus(eventId: string, status: string): Promise<number> {
+  const { data, error } = await supabase
+    .from('deliverable').update({ status }).eq('event_id', eventId).neq('status', status).select('id');
+  if (error) throw error;
+  return data?.length ?? 0;
 }
 /** Fetch a deliverable's title + Linear linkage (for confirmation messages with a ticket link). */
 export async function getDeliverableLinear(id: string): Promise<{ title: string; linearIssueId: string | null; linearIssueUrl: string | null } | null> {
@@ -2215,6 +2679,39 @@ export async function getCarriedLessons(eventId: string): Promise<CarriedLesson[
 // the day after the event. Idempotent — never creates a second debrief. Live Google Calendar
 // booking (free/busy + invites) is a confirm-first action that needs the calendar connector
 // wired server-side; until then this is the reminder/task fallback the spec calls for.
+// ── Wrap & write-back (settling lifecycle) ───────────────────────────────────
+export type SettleState = 'just_wrapped' | 'debriefed' | 'settled';
+/** Advance the post-event settling lifecycle (just_wrapped → debriefed → settled). */
+export async function setSettleState(eventId: string, state: SettleState): Promise<void> {
+  const { error } = await supabase.from('event').update({ settle_state: state }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Record the event's outcome / one-line verdict. */
+export async function setEventVerdict(eventId: string, verdict: string | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ verdict: verdict?.trim() || null }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Persist raw debrief notes on the event as project knowledge. */
+export async function saveDebriefNotes(eventId: string, notes: string | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ debrief_notes: notes?.trim() || null }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Resolve staff roles → people at settle time (role name → assignee). Empty values are dropped. */
+export async function setRoleAssignments(eventId: string, assignments: Record<string, string>): Promise<void> {
+  const clean: Record<string, string> = {};
+  for (const [role, who] of Object.entries(assignments)) { const v = who?.trim(); if (v) clean[role] = v; }
+  const { error } = await supabase.from('event').update({ role_assignments: clean }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Settle the event atomically (mark settled + carry its reflections back to the modeled-on
+ *  template). Returns how many reflections were newly carried over. */
+export async function settleEvent(eventId: string): Promise<{ settled: boolean; template: string | null; reflectionsCarried: number }> {
+  const { data, error } = await supabase.rpc('settle_event', { p_event_id: eventId });
+  if (error) throw error;
+  const r = (data ?? {}) as any;
+  return { settled: !!r.settled, template: r.template ?? null, reflectionsCarried: r.reflectionsCarried ?? 0 };
+}
+
 export async function scheduleDebrief(eventId: string, dueDate: string, phase: string): Promise<Deliverable | null> {
   const { data: existing } = await supabase.from('deliverable').select('id').eq('event_id', eventId).ilike('title', '%debrief%').limit(1);
   if (existing?.length) return null; // already scheduled — don't double-book

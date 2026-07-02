@@ -201,6 +201,7 @@ Deno.serve(async (req) => {
 
     return json({ ok: true, teamId, projectId: project.id, projectUrl: project.url, synced, total: deliverables.length });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "linear-sync", error: String((e as Error)?.message ?? e) }));
     return json({ error: (e as Error).message ?? String(e) }, 500);
   }
 });

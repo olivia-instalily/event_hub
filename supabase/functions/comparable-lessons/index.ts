@@ -62,11 +62,11 @@ Deno.serve(async (req) => {
     // Current event — loaded for a real event, or synthesized from a draft preview.
     let ev: any;
     if (eventId) {
-      const { data } = await sb.from("event").select("id, name, format, tags, modeled_on_event_id").eq("id", eventId).maybeSingle();
+      const { data } = await sb.from("event").select("id, name, format, tags, modeled_on_event_id, series_id").eq("id", eventId).maybeSingle();
       if (!data) return json({ error: "event not found" }, 404);
       ev = data;
     } else {
-      ev = { id: null, name: draft.name ?? "", format: draft.format ?? null, tags: draft.tags ?? [], modeled_on_event_id: draft.modeledOnEventId ?? null };
+      ev = { id: null, name: draft.name ?? "", format: draft.format ?? null, tags: draft.tags ?? [], modeled_on_event_id: draft.modeledOnEventId ?? null, series_id: null };
     }
     const myTags: string[] = ev.tags ?? [];
 
@@ -79,17 +79,39 @@ Deno.serve(async (req) => {
       linkedSeriesId = (src as any)?.series_id ?? null;
     }
 
-    // Reflections live at series level; gather them per series with the series name.
+    // Reflections live at series level; each also records the EVENT it came from (event_id).
     const { data: refs } = await sb
       .from("reflection")
-      .select("body, series_id, series:event_series ( name )")
+      .select("body, series_id, event_id, series:event_series ( name )")
       .not("series_id", "is", null);
 
-    const linkedLessons = linkedSeriesId
-      ? (refs ?? [])
-          .filter((r: any) => r.series_id === linkedSeriesId)
-          .map((r: any) => ({ body: r.body, sourceEventName: r.series?.name ?? "the event you started from", why: "from the event you started from" }))
-      : [];
+    // Resolve each learning's source EVENT (name + id) so the UI can link back to it; fall
+    // back to the series name when the source event is unknown (legacy rows).
+    const refEventIds = Array.from(new Set((refs ?? []).map((r: any) => r.event_id).filter(Boolean)));
+    const { data: srcEvents } = refEventIds.length
+      ? await sb.from("event").select("id, name").in("id", refEventIds)
+      : { data: [] as any[] };
+    const nameById = new Map((srcEvents ?? []).map((e: any) => [e.id, e.name]));
+    const provOf = (body: string) => {
+      const r = (refs ?? []).find((x: any) => x.body === body);
+      const id = (r as any)?.event_id ?? null;
+      return { id, name: (id && nameById.get(id)) || (r as any)?.series?.name || "a past event" };
+    };
+
+    // This event's OWN series — its learnings are always shown on its page (and on anything
+    // spawned from it), never dropped by the relevance filter. Same for the series it started from.
+    const ownSeriesId = (ev as any).series_id as string | null;
+    const carry = (sid: string | null, why: string) =>
+      sid
+        ? (refs ?? [])
+            .filter((r: any) => r.series_id === sid)
+            .map((r: any) => { const p = provOf(r.body); return { body: r.body, sourceEventId: p.id, sourceEventName: p.name, why }; })
+        : [];
+    const ownLessons = carry(ownSeriesId, "from this event");
+    const linkedLessons = carry(linkedSeriesId, "from the event you started from");
+    // Always-carried, deduped by body (own takes precedence over linked).
+    const alwaysSeen = new Set<string>();
+    const alwaysLessons = [...ownLessons, ...linkedLessons].filter((l) => (alwaysSeen.has(l.body) ? false : (alwaysSeen.add(l.body), true)));
 
     const today = new Date().toISOString().slice(0, 10);
     const seriesIds = Array.from(new Set((refs ?? []).map((r: any) => r.series_id)));
@@ -116,25 +138,27 @@ Deno.serve(async (req) => {
       const c = bySeries.get((pe as any).series_id);
       if (c) for (const t of (pe as any).tags ?? []) if (!c.tags.includes(t)) c.tags.push(t);
     }
-    // Keep only series that actually have a past event (so future-only series don't leak).
+    // Keep only series that actually have a past event (so future-only series don't leak), and
+    // never re-offer the own/linked series here — they're always carried above, verbatim.
     const pastSeries = new Set((pastEvents ?? []).map((pe: any) => pe.series_id));
+    const skip = new Set([ownSeriesId, linkedSeriesId].filter(Boolean) as string[]);
     const candidates = Array.from(bySeries.entries())
-      .filter(([sid]) => pastSeries.has(sid))
+      .filter(([sid]) => pastSeries.has(sid) && !skip.has(sid))
       .map(([, c]) => c);
 
-    // No comparable series → still carry the linked event's lessons if there are any.
-    if (candidates.length === 0) return json({ lessons: linkedLessons });
+    // No other comparable series → still carry the always-on (own + linked) lessons.
+    if (candidates.length === 0) return json({ lessons: alwaysLessons });
 
     const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
     if (!apiKey) {
-      // Deterministic fallback: the linked event's lessons first, then reflections
-      // from other sources sharing ≥1 tag.
-      const lessons = [...linkedLessons];
+      // Deterministic fallback: always-carried lessons first, then reflections from other
+      // sources sharing ≥1 tag.
+      const lessons = [...alwaysLessons];
+      const seenBody = new Set(lessons.map((l) => l.body));
       for (const c of candidates) {
-        if (c.seriesId === linkedSeriesId) continue; // already carried above
         const shared = c.tags.find((t) => myTags.includes(t));
         if (!shared) continue;
-        for (const body of c.reflections) lessons.push({ body, sourceEventName: c.source, why: `shared tag: ${shared}` });
+        for (const body of c.reflections) if (!seenBody.has(body)) { const p = provOf(body); lessons.push({ body, sourceEventId: p.id, sourceEventName: p.name, why: `shared tag: ${shared}` }); seenBody.add(body); }
       }
       return json({ lessons });
     }
@@ -153,11 +177,14 @@ Deno.serve(async (req) => {
     const textBlock = (resp.content as any[]).find((b) => b.type === "text");
     const claudeLessons: { body: string; sourceEventName: string; why: string }[] =
       textBlock ? (JSON.parse(textBlock.text).lessons ?? []) : [];
-    // Guarantee the linked event's lessons are carried, even if Claude judged them
-    // a weak thematic match — they were explicitly chosen as the starting point.
-    const seen = new Set(claudeLessons.map((l) => l.body));
-    return json({ lessons: [...linkedLessons.filter((l) => !seen.has(l.body)), ...claudeLessons] });
+    // Enrich Claude's picks with real source-event provenance (it only knows the series name).
+    const claudeEnriched = claudeLessons.map((l) => { const p = provOf(l.body); return { ...l, sourceEventId: p.id, sourceEventName: p.name }; });
+    // Always-carried (own + linked) lessons come first and are never dropped by Claude's filter;
+    // then Claude's comparable picks, deduped against them.
+    const seen = new Set(alwaysLessons.map((l) => l.body));
+    return json({ lessons: [...alwaysLessons, ...claudeEnriched.filter((l) => !seen.has(l.body))] });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "comparable-lessons", error: String((e as Error)?.message ?? e) }));
     return json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });

@@ -19,28 +19,53 @@ function iconFor(m: SourceMaterial) {
 
 /** The original files dropped to create this event/template — shown at the top for reference,
  *  previewable in place (image / text / PDF render inline; anything else opens out). */
-export function SourceMaterials({ items, className = "" }: { items: SourceMaterial[]; className?: string }) {
+export function SourceMaterials({ items, className = "", onDelete, label = "Source materials", hint = "dropped to create this" }: { items: SourceMaterial[]; className?: string; onDelete?: (m: SourceMaterial) => Promise<void> | void; label?: string; hint?: string }) {
   const [preview, setPreview] = useState<SourceMaterial | null>(null);
+  const [confirming, setConfirming] = useState<SourceMaterial | null>(null);
+  const [busy, setBusy] = useState(false);
   if (!items.length) return null;
+  const doDelete = async () => {
+    if (!confirming || !onDelete) return;
+    setBusy(true);
+    try { await onDelete(confirming); } finally { setBusy(false); setConfirming(null); }
+  };
   return (
     <div className={`bg-white rounded-2xl border border-gray-200 p-4 ${className}`}>
       <div className="flex items-center gap-2 mb-3 text-sm text-gray-500">
-        <Paperclip className="w-4 h-4" /> Source materials <span className="text-gray-300">· dropped to create this</span>
+        <Paperclip className="w-4 h-4" /> {label} <span className="text-gray-300">· {hint}</span>
       </div>
       <div className="flex flex-wrap gap-2">
         {items.map((m, i) => {
           const Icon = iconFor(m);
           return (
-            <button key={i} onClick={() => setPreview(m)} title={`Preview ${m.name}`}
-              className="group inline-flex items-center gap-2 max-w-[16rem] px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-800 hover:bg-gray-50 transition-colors">
-              <Icon className="w-4 h-4 text-gray-400 shrink-0" />
-              <span className="truncate">{m.name}</span>
-              <Eye className="w-3.5 h-3.5 text-gray-300 shrink-0 group-hover:text-gray-500" />
-            </button>
+            <span key={i} className="group inline-flex items-center gap-2 max-w-[18rem] pl-3 pr-1.5 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-800 hover:bg-gray-50 transition-colors">
+              <button onClick={() => setPreview(m)} title={`Preview ${m.name}`} className="inline-flex items-center gap-2 min-w-0">
+                <Icon className="w-4 h-4 text-gray-400 shrink-0" />
+                <span className="truncate">{m.name}</span>
+                <Eye className="w-3.5 h-3.5 text-gray-300 shrink-0 group-hover:text-gray-500" />
+              </button>
+              {onDelete && (
+                <button onClick={() => setConfirming(m)} title="Remove from project context" aria-label="Remove" className="shrink-0 text-gray-300 hover:text-red-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </span>
           );
         })}
       </div>
       {preview && <MaterialPreview item={preview} onClose={() => setPreview(null)} />}
+      {confirming && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" onClick={() => !busy && setConfirming(null)}>
+          <div className="bg-white rounded-2xl border border-gray-200 max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg mb-1">Remove “{confirming.name}”?</h3>
+            <p className="text-sm text-gray-600 mb-5">It's removed as project context. Anything derived solely from it (e.g. budget lines from this sheet) is removed too.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirming(null)} disabled={busy} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+              <button onClick={doDelete} disabled={busy} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700 disabled:opacity-50">{busy ? "Removing…" : "Remove"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

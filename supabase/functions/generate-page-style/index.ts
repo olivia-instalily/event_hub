@@ -63,6 +63,7 @@ Deno.serve(async (req) => {
     const tb = (resp.content as any[]).find((b) => b.type === "text");
     return json(tb ? JSON.parse(tb.text) : FALLBACK);
   } catch (e) {
+    console.error(JSON.stringify({ fn: "generate-page-style", error: String((e as Error)?.message ?? e) }));
     return json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });

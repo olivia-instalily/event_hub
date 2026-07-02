@@ -78,6 +78,7 @@ Deno.serve(async (req) => {
 
     return json({ ok: true, lumaEventId: match.id, name: match.name, coverImageUrl: match.cover_url, lumaUrl: match.url });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "attach-luma", error: String((e as Error)?.message ?? e) }));
     return json({ error: String(e) }, 500);
   }
 });

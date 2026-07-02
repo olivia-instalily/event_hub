@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { type EventPlanning, type Deliverable, type OutreachTemplate, type EngagementWithCandidates, eventsFromTemplate, spinUpFromTemplate, type TemplateChild, addDeliverable, deleteDeliverable, setEventStaffRoles, setEventOutreach, addEngagement, deleteEngagement } from "../lib/db";
 import { fundingFor } from "../lib/scoping";
+import { canonicalPhaseFor } from "../lib/phaseMerge";
 import { SourceMaterials } from "./SourceMaterials";
 import { LocationInput } from "./LocationEdit";
 import { TagStack } from "./TagStack";
@@ -399,8 +400,9 @@ function Walkthrough({ plan, phases, phaseRefs, onJumpDeliverable }: { plan: Eve
     : plan.deliverables.map((d) => ({ title: d.title, rationale: "", phase: d.phase ?? "", linkedKind: "deliverable" as const, linkedLabel: d.title, isCallout: false }));
 
   const order = new Map(phases.map((p) => [p.name, p.order]));
+  const nodeNames = phases.map((p) => p.name);
   const byPhase = new Map<string, typeof steps>();
-  for (const s of steps) { const k = s.phase || "Steps"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(s); }
+  for (const s of steps) { const k = canonicalPhaseFor(s.phase, nodeNames) || "Steps"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(s); }
   const phaseOrder = [...byPhase.keys()].sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
 
   return (
@@ -484,8 +486,9 @@ function Deliverables({ items, phases, jumpKey, onAdd, onRemove }: { items: Deli
   }, [highlight]);
 
   const order = new Map(phases.map((p) => [p.name, p.order]));
+  const nodeNames = phases.map((p) => p.name);
   const byPhase = new Map<string, Deliverable[]>();
-  for (const d of items) { const k = d.phase ?? "Unphased"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(d); }
+  for (const d of items) { const k = canonicalPhaseFor(d.phase, nodeNames) || "Unphased"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(d); }
   // Show every phase (even empty) so each can take an addition; keep brief order.
   const names = Array.from(new Set([...phases.map((p) => p.name), ...byPhase.keys()])).sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
   const submit = (phase: string) => { const t = title.trim(); if (!t) return; onAdd(t, phase); setTitle(""); setAdding(null); };

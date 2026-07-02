@@ -78,6 +78,7 @@ Deno.serve(async (req) => {
     if (!textBlock) return json({ error: "No template returned." }, 502);
     return json(JSON.parse(textBlock.text));
   } catch (e) {
+    console.error(JSON.stringify({ fn: "generate-template", error: String((e as Error)?.message ?? e) }));
     return json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });

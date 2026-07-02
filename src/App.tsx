@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Home, Calendar, Users, Briefcase, DollarSign, Plus } from 'lucide-react';
 import { filesFromDrop } from './lib/drop';
+import { looksLikeBackfill } from './lib/backfill';
 import { EventsPage } from './components/EventsPage';
 import { HomePage } from './components/HomePage';
 import { PeoplePage } from './components/PeoplePage';
@@ -23,18 +24,29 @@ export default function Component() {
   const [eventsNonce, setEventsNonce] = useState(0);
   // Set when arriving at Events via a "Create Event" button, so the modal opens on mount.
   const [createOnEvents, setCreateOnEvents] = useState(false);
-  // Which tab an open event was launched from, so its Back button returns there.
-  const [eventOrigin, setEventOrigin] = useState<'events' | 'budget'>('events');
+  // Which page an open event was launched from, so its Back button returns there
+  // (e.g. a Home todo → Back to Home, a Budget row → Back to Budget).
+  type Page = 'home' | 'events' | 'people' | 'vendors' | 'budget';
+  const [eventOrigin, setEventOrigin] = useState<Page>('events');
   // Files dropped anywhere on the page → jump to Events, open Create, ingest straight to review.
   const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  const [droppedLooksPast, setDroppedLooksPast] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
-  const onAppDrop = (files: File[]) => {
+  const onAppDrop = async (files: File[]) => {
     if (!files.length) return;
+    // Light sniff: a dropped debrief/recap is a BACKFILL, not a create. If it looks past, hand
+    // EventsPage a flag so it asks (past vs in-process) instead of barreling into the create flow.
+    let suspect = false;
+    try {
+      const texty = files.find((f) => /text|json|csv|markdown|plain/i.test(f.type) || /\.(txt|md|vtt|srt|csv|json)$/i.test(f.name)) ?? files[0];
+      suspect = looksLikeBackfill(await texty.text());
+    } catch { /* unreadable — treat as create */ }
     setDroppedFiles(files);
+    setDroppedLooksPast(suspect);
     setSelectedEventId(null);
     setPeopleEventFilter(null);
-    setCreateOnEvents(true);
+    setCreateOnEvents(!suspect); // suspect → EventsPage shows the chooser, not the create modal
     setEventsNonce((n) => n + 1);
     setActivePage('events');
   };
@@ -52,7 +64,7 @@ export default function Component() {
 
   // Open an event's detail from anywhere (e.g. a Home card, the Budget page). The event
   // view always renders under the Events tab; `origin` records where to return on Back.
-  const openEvent = (eventId: string, origin: 'events' | 'budget' = 'events') => {
+  const openEvent = (eventId: string, origin: Page = 'events') => {
     setSelectedEventId(eventId);
     setEventOrigin(origin);
     setPeopleEventFilter(null);
@@ -64,7 +76,8 @@ export default function Component() {
   const setSelectedFromEvents = (id: string | null) => {
     setSelectedEventId(id);
     if (id === null) {
-      if (eventOrigin === 'budget') setActivePage('budget');
+      // Back from the event detail → return to the page it was launched from.
+      if (eventOrigin !== 'events') setActivePage(eventOrigin);
       setEventOrigin('events');
     } else {
       setEventOrigin('events');
@@ -129,7 +142,7 @@ export default function Component() {
       </nav>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {activePage === 'home' && <HomePage onOpenEvent={openEvent} onCreateEvent={createEvent} />}
+        {activePage === 'home' && <HomePage onOpenEvent={(id) => openEvent(id, 'home')} onCreateEvent={createEvent} />}
         {activePage === 'events' && (
           <EventsPage
             key={eventsNonce}
@@ -138,7 +151,8 @@ export default function Component() {
             onViewPeople={viewPeopleForEvent}
             openCreate={createOnEvents}
             initialFiles={droppedFiles}
-            onFilesConsumed={() => setDroppedFiles(null)}
+            looksPast={droppedLooksPast}
+            onFilesConsumed={() => { setDroppedFiles(null); setDroppedLooksPast(false); }}
           />
         )}
         {activePage === 'people' && (

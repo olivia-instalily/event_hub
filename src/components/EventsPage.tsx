@@ -1,8 +1,8 @@
-import { Bookmark, Calendar, MapPin, LayoutGrid, List, Plus, ChevronDown, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight, Sparkles } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, ChevronDown, ChevronLeft, ChevronRight, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight, Sparkles, BadgeCheck } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, addAttendee, addDeliverable, spinUpFromTemplate, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
@@ -10,6 +10,7 @@ import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage } from "./EventPlanningPage";
 import { PhaseRail, PHASE_COLORS } from "./TemplateView";
 import { ConfirmModal } from "./Modal";
+import { BackfillModal } from "./BackfillModal";
 import { TAG_CATEGORIES, tagColor, tagBadgeVariant } from "../lib/tags";
 import { emptyScoping, saveScoping, loadScoping } from "../lib/scoping";
 import { matchFormat } from "../lib/formats";
@@ -164,7 +165,7 @@ function detectTag(text: string): string | null {
 
 // ── Phases & deliverables from a brief's structure ────────────────────────────
 interface IngestPhase { name: string; order: number }
-interface IngestDeliverable { title: string; phase: string; offsetStart: number | null; offsetEnd: number | null }
+interface IngestDeliverable { title: string; phase: string; offsetStart: number | null; offsetEnd: number | null; original?: string }
 
 // A time cue in a sentence → a day-offset (range). Negative = before the event, 0 = day-of,
 // positive = after. Returns null when there's no schedule signal (so non-tasks are skipped).
@@ -327,6 +328,8 @@ interface Ingest {
   slotHints: Partial<Record<keyof IngestFields, string>>; // [bracket] placeholders → per-field hint text
   owner: string | null;
   warnings: string[];
+  droppedForTemplate: { title: string; reason: string }[]; // template mode: tasks removed as too event-specific
+  sourceId: string | null;   // set when reviewing an EXISTING event/template → save UPDATES it (no duplicate)
 }
 
 // Rebuild the review (ingest) from an already-saved event/template, so its generation page
@@ -371,6 +374,8 @@ function ingestFromPlan(plan: EventPlanning): Ingest {
     slotHints: {},
     owner: plan.owner ?? null,
     warnings: [],
+    droppedForTemplate: [], // a re-opened saved event has no pending generalization diff
+    sourceId: plan.id, // reviewing an existing event/template → re-save updates it
   };
 }
 
@@ -461,12 +466,109 @@ function LumaSwatch({ url, fallback }: { url: string | null; fallback: string })
   );
 }
 
+// Month-grid calendar of the (filtered) events, placed on their dates. Click an event to open it.
+function CalendarView({ events, onOpen }: { events: EventListItem[]; onOpen: (id: string) => void }) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const now = new Date();
+  const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const todayIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  const byDay = useMemo(() => {
+    const map = new Map<string, EventListItem[]>();
+    for (const e of events) { if (!e.date) continue; const arr = map.get(e.date); if (arr) arr.push(e); else map.set(e.date, [e]); }
+    return map;
+  }, [events]);
+  const undated = events.filter((e) => !e.date);
+  // Hover preview (with cover) — fixed-positioned so it escapes the grid's overflow clipping.
+  const [preview, setPreview] = useState<{ e: EventListItem; top: number; left: number } | null>(null);
+  const onChipEnter = (ev: React.MouseEvent, e: EventListItem) => {
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    setPreview({ e, top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 288) });
+  };
+  const dotColor = (e: EventListItem) => e.macroStage === "Wrapped" || e.status === "past" ? "bg-gray-400" : e.status === "in-process" ? "bg-amber-500" : "bg-blue-500";
+
+  const first = new Date(cursor.y, cursor.m, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(cursor.y, cursor.m + 1, 0).getDate();
+  const cells: (string | null)[] = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(`${cursor.y}-${pad(cursor.m + 1)}-${pad(d)}`);
+  while (cells.length % 7) cells.push(null);
+
+  const shift = (delta: number) => setCursor((c) => { const d = new Date(c.y, c.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const monthLabel = first.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-lg">{monthLabel}</h3>
+        <div className="flex items-center gap-1">
+          <button onClick={() => shift(-1)} className="p-1.5 rounded-lg border border-border hover:bg-gray-50" aria-label="Previous month"><ChevronLeft className="w-4 h-4" /></button>
+          <button onClick={() => setCursor({ y: now.getFullYear(), m: now.getMonth() })} className="px-2.5 py-1 rounded-lg border border-border text-sm hover:bg-gray-50">Today</button>
+          <button onClick={() => shift(1)} className="p-1.5 rounded-lg border border-border hover:bg-gray-50" aria-label="Next month"><ChevronRight className="w-4 h-4" /></button>
+        </div>
+      </div>
+      <div className="grid grid-cols-7 gap-px bg-border rounded-xl overflow-hidden border border-border">
+        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+          <div key={d} className="bg-gray-50 text-[11px] text-gray-500 text-center py-1.5">{d}</div>
+        ))}
+        {cells.map((iso, i) => (
+          <div key={i} className={`bg-white min-h-[104px] p-1.5 ${iso === todayIso ? "ring-2 ring-inset ring-gray-900/15" : ""}`}>
+            {iso && <div className={`text-[11px] mb-1 ${iso === todayIso ? "font-semibold text-gray-900" : "text-gray-400"}`}>{Number(iso.slice(8))}</div>}
+            {iso && (byDay.get(iso) ?? []).map((e) => (
+              <button
+                key={e.id}
+                onClick={() => onOpen(e.id)}
+                onMouseEnter={(ev) => onChipEnter(ev, e)}
+                onMouseLeave={() => setPreview(null)}
+                className="flex items-center gap-1 w-full text-left text-[11px] rounded px-1 py-0.5 mb-0.5 bg-gray-100 text-gray-800 hover:bg-gray-200 transition-colors"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor(e)}`} />
+                <span className="truncate">{e.startTime ? `${e.startTime} ` : ""}{e.title}</span>
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+      {undated.length > 0 && (
+        <div className="mt-3 text-[13px] text-gray-500">
+          <span className="text-gray-400">No date ({undated.length}):</span>{" "}
+          {undated.slice(0, 10).map((e) => (
+            <button key={e.id} onClick={() => onOpen(e.id)} className="underline decoration-dotted underline-offset-2 mr-2 hover:text-gray-900">{e.title}</button>
+          ))}
+          {undated.length > 10 && <span className="text-gray-400">+{undated.length - 10} more</span>}
+        </div>
+      )}
+
+      {/* Hover preview — cover (if any) + the essentials. Fixed so it isn't clipped by the grid. */}
+      {preview && (
+        <div className="fixed z-50 w-72 rounded-xl border border-border bg-white shadow-xl overflow-hidden pointer-events-none" style={{ top: preview.top, left: preview.left }}>
+          {preview.e.coverImageUrl && (
+            <img src={preview.e.coverImageUrl} alt="" className="h-28 w-full object-cover" style={{ objectPosition: preview.e.coverPosition ?? "50% 50%" }} />
+          )}
+          <div className="p-3">
+            <p className="font-medium text-sm text-gray-900">{preview.e.title}</p>
+            <p className="text-[12px] text-gray-500 mt-0.5">
+              {[preview.e.date, preview.e.startTime && preview.e.endTime ? `${preview.e.startTime}–${preview.e.endTime}` : preview.e.startTime, preview.e.location].filter(Boolean).join(" · ") || "—"}
+            </p>
+            <div className="flex items-center gap-2 mt-1.5 text-[11px] text-gray-400">
+              {preview.e.format && <span className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">{preview.e.format}</span>}
+              {preview.e.macroStage === "Wrapped" ? <span>wrapped</span> : preview.e.attendeeCount != null ? <span>{preview.e.attendeeCount} checked in</span> : preview.e.rsvp != null ? <span>{preview.e.rsvp} RSVPs</span> : null}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface EventsPageProps {
   selectedEventId: string | null;
   setSelectedEventId: (id: string | null) => void;
   onViewPeople: (filter: { id: string; name: string; tag?: string | null; status?: 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers' }) => void;
   openCreate?: boolean; // open the Create Event modal on mount (set when navigated here via a Create button)
   initialFiles?: File[] | null; // files dropped anywhere on the page → ingest straight into review
+  looksPast?: boolean; // the global drop sniffed a past event → ask (backfill vs in-process) first
   onFilesConsumed?: () => void; // called once the dropped files have been handed to the modal
 }
 
@@ -556,7 +658,7 @@ function TagFilter({ value, onChange, className = "" }: { value: string; onChang
   );
 }
 
-function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void }) {
+function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview, onBackfill }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void; onBackfill: (text?: string, files?: File[]) => void }) {
   // Files dropped on the page open the modal already processing — the first paint is the
   // "reading…" state. A resumed review (re-opened after generating) lands straight back on
   // the review screen with the cached extraction, no reprocessing.
@@ -596,6 +698,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
   // are stashed and applied right after the event is created.
   const [briefDragOver, setBriefDragOver] = useState(false);
   const [ingest, setIngest] = useState<Ingest | null>(resumeIngest ?? null);
+  const [pastHint, setPastHint] = useState<string | null>(null); // brief text, when a drop reads as a PAST event
   // Files dropped on the first (choose) screen, held until the user picks one of the three.
   const [pendingDrop, setPendingDrop] = useState<File[] | null>(null);
   const [choice, setChoice] = useState<'planning' | 'backfill' | null>(null);
@@ -629,8 +732,11 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
       if (pendingDrop) { setPlanKind('solo'); const fs = pendingDrop; setPendingDrop(null); void handleBriefDrop(fs); }
       else setMode('planFork');
     } else if (choice === 'backfill') {
-      if (pendingDrop) { const fs = pendingDrop; setPendingDrop(null); void handleBackfillDrop(fs); }
-      else setMode('backfill');
+      // Backfill is its OWN flow (opposite direction from create) — hand off to the backfill modal,
+      // passing along any dropped brief's text. Never run a past event through the create flow.
+      const fs = pendingDrop; setPendingDrop(null);
+      if (fs?.length) void (async () => { const c = await Promise.all(fs.map(classifyDropFile)); onBackfill(c.find((x) => x.kind === "brief")?.text ?? undefined, fs); })();
+      else onBackfill();
     }
   };
   // Classify every dropped input by content, extract per type, and assemble a single review.
@@ -744,7 +850,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
       phases = phaseNames.map((name, i) => ({ name, order: i }));
       const dSeen = new Set<string>();
       deliverables = ex.deliverables
-        .map((d) => ({ title: d.title, phase: d.phase ?? (phaseNames[0] ?? "Planning"), offsetStart: d.offsetStart, offsetEnd: d.offsetEnd }))
+        .map((d) => ({ title: d.title, phase: d.phase ?? (phaseNames[0] ?? "Planning"), offsetStart: d.offsetStart, offsetEnd: d.offsetEnd, original: d.original || undefined }))
         .filter((d) => d.title.trim() && (dSeen.has(`${d.phase}|${d.title}`.toLowerCase()) ? false : (dSeen.add(`${d.phase}|${d.title}`.toLowerCase()), true)));
     } else {
       ({ phases, deliverables } = briefs[0]?.text ? parsePhasesAndDeliverables(briefs[0].text!) : { phases: [], deliverables: [] });
@@ -754,27 +860,14 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
       : (briefs[0]?.text ? parseProseRoles(briefs[0].text!) : { vendors: [], staff: [], reflections: [], agenda: [] });
     const tag = ex?.tag ?? (briefs[0]?.text ? detectTag(briefs[0].text!) : null);
 
-    setIngest({ fields, tag, isTemplate, attendees, phases, deliverables, vendors: roles.vendors, staff: roles.staff, reflections: roles.reflections, agenda: roles.agenda, walkthrough: ex?.walkthrough ?? [], heuristics: ex?.heuristics ?? [], outreach: ex?.outreach ?? [], materials, unsorted, hasBrief: briefs.length > 0, cover: covers[0]?.dataUrl ?? null, coverFile: covers[0]?.file ?? null, budgetLines, budgetSource, budgetLowConfidence, conflict, flags, slotHints, owner: nn(ex?.owner) ?? b?.owner ?? null, warnings });
+    // Safety net: a dropped brief with a PAST date is almost certainly a backfill, not a create.
+    // Offer to switch flows (don't silently route a past event through create).
+    const todayIso = new Date().toISOString().slice(0, 10);
+    setPastHint(!isTemplate && fields.date && fields.date < todayIso ? (briefs[0]?.text ?? "") : null);
+    setIngest({ fields, tag, isTemplate, attendees, phases, deliverables, vendors: roles.vendors, staff: roles.staff, reflections: roles.reflections, agenda: roles.agenda, walkthrough: ex?.walkthrough ?? [], heuristics: ex?.heuristics ?? [], outreach: ex?.outreach ?? [], materials, unsorted, hasBrief: briefs.length > 0, cover: covers[0]?.dataUrl ?? null, coverFile: covers[0]?.file ?? null, budgetLines, budgetSource, budgetLowConfidence, conflict, flags, slotHints, owner: nn(ex?.owner) ?? b?.owner ?? null, warnings, droppedForTemplate: (isTemplate && ex?.droppedForTemplate) ? ex.droppedForTemplate : [], sourceId: null });
     setMode("review");
   };
 
-  // Backfill (past event) drop: prefill the backfill form from a dropped brief. Keeps the
-  // parsed date as-is (it's a past event — don't roll it forward).
-  const handleBackfillDrop = async (files: File[]) => {
-    const classified = await Promise.all(files.map(classifyDropFile));
-    const brief = classified.find((c) => c.kind === "brief");
-    if (brief?.text) {
-      const b = parseBrief(brief.text);
-      setBf((prev) => ({
-        ...prev,
-        name: prev.name || b.title || "",
-        date: prev.date || b.date || "",
-        location: prev.location || b.location || "",
-        description: prev.description || brief.text!.slice(0, 2000),
-      }));
-    }
-    setMode("backfill");
-  };
   useEffect(() => {
     if (formatTouched || formatCatalog.length === 0) return;
     const text = `${meta.name} ${description}`;
@@ -819,6 +912,27 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
     const name = f.name.trim() || 'Untitled event';
     const today = new Date().toISOString().slice(0, 10);
     const asTemplate = ingest.isTemplate; // save as a reusable Event Type (no date / open slots)
+
+    // Reviewing an EXISTING event/template → SAVE (update in place), never create a duplicate.
+    // Apply the edited scalar + pattern fields; don't re-add deliverables/budget (they already exist).
+    if (ingest.sourceId) {
+      const id = ingest.sourceId;
+      const headNum = f.headcount.trim() ? Number(f.headcount) : null;
+      setCreating(true); setCreateError(null);
+      try {
+        await updateEvent(id, { name, location: f.venue.trim() || null, startTime: f.startTime || null, endTime: f.endTime || null, format: joinFormats(f.format), audience: f.audience.trim() || null });
+        await updateEventTags(id, [ingest.tag]).catch(() => {});
+        if (!asTemplate && f.date) await setEventDate(id, f.date).catch(() => {});
+        await setEventStaffRoles(id, ingest.staff).catch(() => {});
+        await setEventReflections(id, ingest.reflections).catch(() => {});
+        await setEventAgenda(id, ingest.agenda).catch(() => {});
+        await setEventPattern(id, { phases: ingest.phases, heuristics: ingest.heuristics, outreach: ingest.outreach, walkthrough: ingest.walkthrough }).catch(() => {});
+        if (headNum != null && Number.isFinite(headNum)) await setHeadcount(id, headNum).catch(() => {});
+        onCacheReview?.(ingest);
+        onCreated(id); // straight back to the actual template/event
+      } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
+      return;
+    }
     const isPast = !asTemplate && !!f.date && f.date < today; // past date → backfill (templates never backfill)
     const headNum = f.headcount.trim() ? Number(f.headcount) : null;
     setCreating(true); setCreateError(null);
@@ -1016,7 +1130,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
           </div>
         )}
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-2xl">Create event</h2>
+          <h2 className="text-2xl">{ingest?.sourceId ? `Review ${ingest.isTemplate ? "template" : "event"}` : "Create event"}</h2>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
         </div>
 
@@ -1243,6 +1357,14 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
           </div>
         ) : mode === 'review' && ingest ? (
           <div className="space-y-5">
+            {pastHint !== null && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center gap-3 flex-wrap">
+                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                <p className="text-sm text-amber-900 flex-1 min-w-0">This looks like a <span className="font-medium">past event</span>{ingest.fields.date ? ` (${ingest.fields.date})` : ""}. Backfilling records what happened and updates the template — a different flow than creating a new one.</p>
+                <button onClick={() => onBackfill(pastHint || undefined, ingest?.materials?.map((m) => m.file))} className="shrink-0 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black">Switch to backfill</button>
+                <button onClick={() => setPastHint(null)} className="shrink-0 text-sm text-gray-600 hover:text-gray-900">It's upcoming</button>
+              </div>
+            )}
             <div className="rounded-lg bg-gray-900 text-white px-3 py-2.5 text-sm flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2">
                 <span className="text-gray-300">Save as</span>
@@ -1308,13 +1430,16 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
                 {!ingest.tag && <span className="text-[15px] text-amber-600">pick one to continue</span>}
               </div>
               <div className="flex flex-wrap items-center gap-2 mb-2">
-                <input type="date" value={ingest.fields.date} onChange={(e) => patchIngestField('date', e.target.value)} className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                {/* Templates are date-less by definition — only a real event gets a date. Time stays optional. */}
+                {!ingest.isTemplate && (
+                  <input type="date" value={ingest.fields.date} onChange={(e) => patchIngestField('date', e.target.value)} className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                )}
                 <input type="time" value={ingest.fields.startTime} onChange={(e) => patchIngestField('startTime', e.target.value)} className="px-2 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                 <span className="text-gray-400">–</span>
                 <input type="time" value={ingest.fields.endTime} onChange={(e) => patchIngestField('endTime', e.target.value)} className="px-2 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                 <FormatPicker value={ingest.fields.format} onChange={(arr) => patchIngestField('format', arr)} />
               </div>
-              {ingest.fields.date && (
+              {!ingest.isTemplate && ingest.fields.date && (
                 <p className="text-[15px] text-gray-400 mb-1">{ingest.fields.date < new Date().toISOString().slice(0, 10) ? "Past date → will be logged as a backfilled event." : "Upcoming → will be created as a planning event."}</p>
               )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
@@ -1351,17 +1476,30 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
                       <div key={ph.name}>
                         <p className="text-[15px] font-medium text-gray-700">{ph.name}</p>
                         {ds.length === 0 ? <p className="text-[15px] text-gray-300 pl-2">no dated tasks</p> : ds.map(({ d, i }) => (
-                          <div key={i} className="flex items-center gap-2 text-sm pl-2 py-0.5">
-                            <span className="text-[13px] text-gray-400 w-20 shrink-0">{offLabel(d)}</span>
-                            <span className="flex-1 truncate">{d.title}</span>
-                            <button onClick={() => patchIngest({ deliverables: ingest.deliverables.filter((_, j) => j !== i) })} className="text-gray-300 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+                          <div key={i} className="pl-2 py-0.5">
+                            <div className="flex items-center gap-2 text-sm">
+                              <span className="text-[13px] text-gray-400 w-20 shrink-0">{offLabel(d)}</span>
+                              <span className="flex-1 truncate">{d.title}</span>
+                              <button onClick={() => patchIngest({ deliverables: ingest.deliverables.filter((_, j) => j !== i) })} className="text-gray-300 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+                            </div>
+                            {d.original && <p className="pl-[88px] text-[11px] text-gray-400 italic truncate" title={d.original}>generalized · was: {d.original}</p>}
                           </div>
                         ))}
                       </div>
                     );
                   })}
                 </div>
-                <p className="text-[15px] text-gray-400 mt-2">Offsets (and ranges) are saved with each deliverable and resolve to dates once the event date is set.</p>
+                {ingest.isTemplate && ingest.droppedForTemplate.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                    <p className="text-[13px] font-medium text-gray-600 mb-1">Dropped as too event-specific · {ingest.droppedForTemplate.length}</p>
+                    <ul className="space-y-0.5">
+                      {ingest.droppedForTemplate.map((x, i) => (
+                        <li key={i} className="text-[12px] text-gray-500"><span className="line-through">{x.title}</span> <span className="text-gray-400">— {x.reason}</span></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="text-[15px] text-gray-400 mt-2">{ingest.isTemplate ? "Template mode: names/clients stripped (role captured in staff), each task phased by function. " : ""}Offsets (and ranges) are saved with each deliverable and resolve to dates once the event date is set.</p>
               </div>
             )}
 
@@ -1431,7 +1569,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
             {/* Reflections / guardrails */}
             {ingest.reflections.length > 0 && (
               <div className="rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center justify-between mb-2"><h3 className="font-medium">Reflections / guardrails</h3><span className="text-[13px] uppercase tracking-wide text-gray-500 bg-gray-100 rounded px-1.5 py-0.5">from brief · saved to guardrails</span></div>
+                <div className="flex items-center justify-between mb-2"><h3 className="font-medium">Learnings</h3><span className="text-[13px] uppercase tracking-wide text-gray-500 bg-gray-100 rounded px-1.5 py-0.5">from brief · saved to learnings</span></div>
                 <ul className="space-y-1 text-sm">
                   {ingest.reflections.map((r, i) => (
                     <li key={i} className="flex items-start gap-2"><span className="text-gray-300 mt-0.5">•</span><span className="flex-1">{r}</span><button onClick={() => patchIngest({ reflections: ingest.reflections.filter((_, j) => j !== i) })} className="text-gray-300 hover:text-red-600 shrink-0"><X className="w-3.5 h-3.5" /></button></li>
@@ -1482,7 +1620,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
               const blockTitle = ingest.conflict ? 'Resolve the budget conflict first' : !ingest.tag ? 'Pick a tag first' : !ingest.fields.name.trim() ? 'Add an event name first' : undefined;
               // A clear template match (same tag, format as a tiebreaker) → offer "Build from template" beside Create.
               const tag = ingest.tag;
-              const cands = !ingest.isTemplate && tag ? events.filter((e) => e.isTemplate && e.tags.includes(tag)) : [];
+              const cands = !ingest.isTemplate && !ingest.sourceId && tag ? events.filter((e) => e.isTemplate && e.tags.includes(tag)) : [];
               const fmt = ingest.fields.format[0];
               const match = cands.length ? ((fmt ? cands.find((e) => parseFormats(e.format).includes(fmt)) : null) ?? cands[0]) : null;
               return (
@@ -1498,7 +1636,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
                         <Sparkles className="w-4 h-4" /> {creating ? 'Building…' : `Build from “${match.title}”`}
                       </button>
                     )}
-                    <Button onClick={createFromIngest} disabled={blocked} title={blockTitle}>{creating ? 'Creating…' : ingest.isTemplate ? 'Save as template' : 'Create event'}</Button>
+                    <Button onClick={createFromIngest} disabled={blocked} title={blockTitle}>{ingest.sourceId ? (creating ? 'Saving…' : 'Save') : creating ? 'Creating…' : ingest.isTemplate ? 'Save as template' : 'Create event'}</Button>
                   </div>
                 </div>
               );
@@ -1561,13 +1699,13 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
   );
 }
 
-export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, openCreate = false, initialFiles = null, onFilesConsumed }: EventsPageProps) {
+export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, openCreate = false, initialFiles = null, looksPast = false, onFilesConsumed }: EventsPageProps) {
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [bookmarkedEvents, setBookmarkedEvents] = useState<Set<string>>(new Set());
-  const [viewMode, setViewMode] = useState<'cards' | 'lines'>('cards');
+  const [viewMode, setViewMode] = useState<'cards' | 'lines' | 'calendar'>('cards');
   const [statusFilter, setStatusFilter] = useState<EventStatus | 'all' | 'templates'>('all');
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
@@ -1579,6 +1717,19 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [createOpen, setCreateOpen] = useState(openCreate);
+  const [backfillOpen, setBackfillOpen] = useState(false);
+  const [backfillText, setBackfillText] = useState<string | undefined>(undefined); // handed from a past-event drop
+  const [backfillFiles, setBackfillFiles] = useState<File[] | null>(null); // the dropped file(s) → tagged on the record
+  // A global drop that sniffed as a past event → ask (backfill vs in-process) before routing.
+  const [pastChooser, setPastChooser] = useState<File[] | null>(null);
+  useEffect(() => { if (looksPast && initialFiles?.length) setPastChooser(initialFiles); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const chooseBackfill = async () => {
+    const files = pastChooser ?? []; setPastChooser(null);
+    const c = await Promise.all(files.map(classifyDropFile));
+    const text = c.find((x) => x.kind === "brief")?.text ?? (await files[0]?.text().catch(() => "")) ?? "";
+    setBackfillText(text || undefined); setBackfillFiles(files.length ? files : null); setBackfillOpen(true); onFilesConsumed?.();
+  };
+  const chooseInProcess = () => { setPastChooser(null); setCreateOpen(true); }; // create modal consumes initialFiles
   // The last processed review, kept so the just-generated event can return to its
   // generation/review page without re-running the brief. `resumeIngest` (when set on
   // re-open) lands the create modal straight back on that review.
@@ -1765,10 +1916,15 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           ))}
         </div>
 
-        <Button onClick={openCreateFresh}>
-          <Plus className="w-4 h-4" />
-          Create Event
-        </Button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setBackfillOpen(true)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border bg-white text-sm text-gray-700 hover:bg-gray-50">
+            Backfill past event
+          </button>
+          <Button onClick={openCreateFresh}>
+            <Plus className="w-4 h-4" />
+            Create Event
+          </Button>
+        </div>
       </div>
 
       {/* Filters and View Toggle */}
@@ -1858,6 +2014,13 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           >
             <List className="w-4 h-4" />
           </button>
+          <button
+            onClick={() => setViewMode('calendar')}
+            title="Calendar"
+            className={`p-2 rounded transition-colors ${viewMode === 'calendar' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+          >
+            <CalendarDays className="w-4 h-4" />
+          </button>
         </div>
         </div>
       </div>
@@ -1879,16 +2042,20 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           {filteredEvents.map((event) => (
             <div
               key={event.id}
-              className="bg-card rounded-xl ring-1 ring-foreground/10 p-6 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex flex-col"
+              className="group bg-card rounded-xl ring-1 ring-foreground/10 p-6 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex flex-col"
               onClick={() => setSelectedEventId(event.id)}
             >
               {event.coverImageUrl && (
-                <img
-                  src={event.coverImageUrl}
-                  alt=""
-                  className="-mx-6 -mt-6 mb-4 h-36 w-[calc(100%+3rem)] max-w-none object-cover"
-                  style={{ objectPosition: event.coverPosition ?? '50% 50%' }}
-                />
+                // Fixed band (card size never changes); the image scales up on hover and is clipped
+                // by the card's overflow-hidden — expands without reflowing the row.
+                <div className="-mx-6 -mt-6 mb-4 h-36 overflow-hidden">
+                  <img
+                    src={event.coverImageUrl}
+                    alt=""
+                    className="h-full w-full max-w-none object-cover transition-transform duration-300 ease-out group-hover:scale-110"
+                    style={{ objectPosition: event.coverPosition ?? '50% 50%' }}
+                  />
+                </div>
               )}
 
               <div className="flex items-center justify-between gap-2 mb-3 min-h-[2rem]">
@@ -1917,7 +2084,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                 </div>
               </div>
 
-              <h2 className="text-xl mb-2">{event.title}</h2>
+              <h2 className="text-xl mb-2 flex items-center gap-1.5">
+                <span>{event.title}</span>
+                {event.finalRecordComplete && <span title="Final record complete" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+              </h2>
               {event.seriesName && <p className="text-gray-500 text-sm mb-4">{event.seriesName}</p>}
 
               <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -2032,7 +2202,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                     <div className="flex items-center gap-3">
                       <LumaSwatch url={event.coverImageUrl} fallback={tagColor(event.tags[0])} />
                       <div>
-                        <p className="font-medium">{event.title}</p>
+                        <p className="font-medium flex items-center gap-1.5">
+                          <span>{event.title}</span>
+                          {event.finalRecordComplete && <span title="Final record complete" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                        </p>
                         {event.seriesName && <p className="text-sm text-gray-500">{event.seriesName}</p>}
                       </div>
                     </div>
@@ -2071,6 +2244,34 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
         </div>
       )}
 
+      {/* Calendar View — month grid, events on their dates */}
+      {!loading && !error && viewMode === 'calendar' && (
+        <CalendarView events={filteredEvents} onOpen={(id) => setSelectedEventId(id)} />
+      )}
+
+      {pastChooser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => { setPastChooser(null); onFilesConsumed?.(); }}>
+          <div className="bg-white rounded-2xl border border-border max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-1"><AlertCircle className="w-5 h-5 text-amber-600" /><h2 className="text-lg">Looks like a backfilled event</h2></div>
+            <p className="text-sm text-gray-600 mb-5">This reads like a past event (a debrief/recap). Backfilling records what happened and updates the template. Is this a past event, or one you're still planning?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={chooseBackfill} className="w-full px-3 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-black text-left">Past event — backfill it <span className="text-gray-300">· → wrapped record</span></button>
+              <button onClick={chooseInProcess} className="w-full px-3 py-2 rounded-lg border border-border bg-white text-sm text-gray-800 hover:bg-gray-50 text-left">In-process / upcoming — create it <span className="text-gray-400">· → plan it</span></button>
+              <button onClick={() => { setPastChooser(null); onFilesConsumed?.(); }} className="text-sm text-gray-500 hover:text-gray-800 mt-1">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {backfillOpen && (
+        <BackfillModal
+          initialText={backfillText}
+          initialFiles={backfillFiles}
+          onClose={() => { setBackfillOpen(false); setBackfillText(undefined); setBackfillFiles(null); }}
+          onCreated={async (id) => { setBackfillOpen(false); setBackfillText(undefined); setBackfillFiles(null); await load(); setSelectedEventId(id); }}
+        />
+      )}
+
       {createOpen && (
         <CreateEventModal
           events={events}
@@ -2078,6 +2279,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           resumeIngest={resumeIngest}
           onFilesConsumed={onFilesConsumed}
           onClose={() => { setCreateOpen(false); setResumeIngest(null); }}
+          onBackfill={(text, files) => { setCreateOpen(false); setResumeIngest(null); setBackfillText(text); setBackfillFiles(files ?? null); setBackfillOpen(true); }}
           onCacheReview={(ing) => { pendingReview.current = ing; }}
           onCreated={async (id) => { if (pendingReview.current) { setReviewCache({ ingest: pendingReview.current, eventId: id }); pendingReview.current = null; } await load(); setCreateOpen(false); setResumeIngest(null); setSelectedEventId(id); }}
         />

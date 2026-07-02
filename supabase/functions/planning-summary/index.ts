@@ -45,6 +45,7 @@ Deno.serve(async (req) => {
     const textBlock = (resp.content as any[]).find((b) => b.type === "text");
     return json({ summary: textBlock ? JSON.parse(textBlock.text).summary : null });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "planning-summary", error: String((e as Error)?.message ?? e) }));
     return json({ summary: null, error: String((e as Error)?.message ?? e) });
   }
 });

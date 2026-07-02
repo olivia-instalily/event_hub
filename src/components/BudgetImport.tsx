@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Upload, X, AlertCircle, ArrowRight, Loader2, ClipboardPaste } from "lucide-react";
 import {
-  addBudgetLines, deleteBudgetLine, updateBudgetLine, classifyBudgetLines,
+  addBudgetLines, upsertBudgetLines, updateBudgetLine, classifyBudgetLines,
   type PlanningBudget, type BudgetLineTracker,
 } from "../lib/db";
 import { categoryKey } from "../lib/budgetCategories";
@@ -147,10 +147,13 @@ export function BudgetDropArea({ onFile, className, children }: { onFile: (f: Fi
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
   return (
     <div
-      onDragEnter={(e) => { if (!hasFiles(e)) return; e.preventDefault(); depth.current++; setOver(true); }}
-      onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
-      onDragLeave={() => { depth.current = Math.max(0, depth.current - 1); if (depth.current === 0) setOver(false); }}
-      onDrop={(e) => { e.preventDefault(); depth.current = 0; setOver(false); const f = e.dataTransfer.files?.[0]; if (f) onFile(f); }}
+      // stopPropagation so a budget CSV dropped here is handled ONLY by this event's importer —
+      // without it the drop also bubbles to the app-level handler, which routes the same file
+      // into the create/backfill flow and can touch OTHER events' budgets unprompted.
+      onDragEnter={(e) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); depth.current++; setOver(true); }}
+      onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); } }}
+      onDragLeave={(e) => { e.stopPropagation(); depth.current = Math.max(0, depth.current - 1); if (depth.current === 0) setOver(false); }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); depth.current = 0; setOver(false); const f = e.dataTransfer.files?.[0]; if (f) onFile(f); }}
       className={`relative ${className ?? ""}`}
     >
       {children}
@@ -271,12 +274,12 @@ export function BudgetImportModal({ budget, file, currency = "USD", onClose, onA
         await addBudgetLines(budget.id, usable);
         note = `Added ${usable.length} budget line${usable.length === 1 ? "" : "s"}.`;
       } else if (kind === "projected") {
-        await Promise.all(budget.lines.map((l) => deleteBudgetLine(l.id)));
-        await addBudgetLines(budget.id, usable);
+        // Upsert by category (no delete-then-add): updates amounts in place, prunes leftovers.
+        await upsertBudgetLines(budget.id, usable, { pruneMissing: true });
         note = `Replaced ${budget.lines.length} projected estimate${budget.lines.length === 1 ? "" : "s"}.`;
       } else if (mergeMode === "replace") {
-        await Promise.all(budget.lines.map((l) => deleteBudgetLine(l.id)));
-        await addBudgetLines(budget.id, usable);
+        // Upsert + prune missing — preserves manually-set fields on categories that re-appear.
+        await upsertBudgetLines(budget.id, usable, { pruneMissing: true });
         note = `Replaced the budget with ${usable.length} dropped line${usable.length === 1 ? "" : "s"}.`;
       } else {
         // Append: merge conflicts by chosen winner; add the rest.

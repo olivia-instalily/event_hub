@@ -5,7 +5,7 @@ import { SourceMaterials } from "./SourceMaterials";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star,
+  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2,
 } from "lucide-react";
 import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
@@ -14,10 +14,14 @@ import {
   getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, createLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
-  addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetTarget, updateBudgetLine,
+  addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
   addDeliverable, setDeliverableStatus, setDeliverableDueDate, deleteDeliverable,
   getPlanningSummary, saveOverviewSummary,
-  getEventPeopleStats, listAttendeesForEvent, scheduleDebrief, extractBrief,
+  getEventPeopleStats, listAttendeesForEvent, scheduleDebrief,
+  extractDebrief, proposeTagsFromDebrief, upsertBudgetLines, type DebriefExtract,
+  extractForBackfill, enrichEventFromExtract, addBudgetActuals, deriveTemplateFromEvent, applyTemplateAdditions, listTemplates, adoptTemplate,
+  uploadAttachment, addSourceMaterial, deleteSourceMaterial, getSourceMaterials,
+  setSettleState, setEventVerdict, saveDebriefNotes, settleEvent, setRoleAssignments, type SettleState,
   listEventTags, type EventPersonTag,
   type PersonView, type PeopleStats,
   setEventAgenda, setEventStaffRoles, setEventReflections,
@@ -47,11 +51,15 @@ import { GCalSync } from "./GCalSync";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
 import { DateEdit } from "./DateEdit";
-import { BudgetDropZone, BudgetDropArea, BudgetImportModal } from "./BudgetImport";
+import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
+import { parseVendors } from "../lib/vendorImport";
 import { EventSetup } from "./EventSetup";
 import { ScopingForm } from "./ScopingForm";
 import { PeoplePage } from "./PeoplePage";
 import { loadScoping, saveScoping, fundingFor, type ScopingForm as ScopingData } from "../lib/scoping";
+import { eventFocus, FOCUS_LABEL } from "../lib/eventFocus";
+import { templateAdditions, hasAdditions, matchTemplates, type TemplateMatch } from "../lib/backfill";
+import { canonicalPhaseFor } from "../lib/phaseMerge";
 import { domainFromUrl, isFreeMailDomain } from "../lib/url";
 
 interface Props {
@@ -741,12 +749,20 @@ const BUDGET_STATUS_META: Record<BudgetStatus, { label: string; badge: string; r
 
 /** Click-into-category detail: edit label/amount, move status, attach material, and add a
  *  web address whose email updates feed the general updates + progress areas. */
-function BudgetLineModal({ eventId, line, onClose, onChange }: {
+// A concise label for a vendor engagement: "Category · Selected vendor" (falls back gracefully).
+const engagementLabel = (e: EngagementWithCandidates): string => {
+  const sel = e.candidates.find((c) => c.isSelected)?.vendorName?.trim();
+  if (e.category && sel) return `${e.category} · ${sel}`;
+  return e.category || sel || "Vendor";
+};
+function BudgetLineModal({ eventId, line, engagements, onClose, onChange }: {
   eventId: string;
   line: BudgetLineTracker;
+  engagements: EngagementWithCandidates[];
   onClose: () => void;
   onChange: (f: Partial<BudgetLineTracker>) => void;
 }) {
+  const setEngagement = async (id: string | null) => { onChange({ linkedEngagement: id }); await setBudgetLineEngagement(line.id, id).catch(() => {}); };
   const [label, setLabel] = useState(line.label ?? "");
   const [amount, setAmount] = useState(line.confirmedAmount != null ? String(line.confirmedAmount) : "");
   const [note, setNote] = useState(line.note ?? "");
@@ -801,6 +817,25 @@ function BudgetLineModal({ eventId, line, onClose, onChange }: {
           </div>
 
           <div>
+            <p className="text-sm font-medium mb-1.5">Vendor</p>
+            {engagements.length === 0 ? (
+              <p className="text-[13px] text-gray-400">No vendors on this event yet — add one on the Vendors tab, then tag it here.</p>
+            ) : (
+              <Select
+                value={line.linkedEngagement ?? "none"}
+                onValueChange={(v) => setEngagement(v === "none" ? null : v)}
+                items={[{ value: "none", label: "Not linked to a vendor" }, ...engagements.map((e) => ({ value: e.id, label: engagementLabel(e) }))]}
+              >
+                <SelectTrigger size="sm" className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not linked to a vendor</SelectItem>
+                  {engagements.map((e) => <SelectItem key={e.id} value={e.id}>{engagementLabel(e)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          <div>
             <p className="text-sm font-medium mb-1.5">Update / comment</p>
             {hasNote && !editingNote ? (
               <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
@@ -851,7 +886,8 @@ function BudgetLineModal({ eventId, line, onClose, onChange }: {
   );
 }
 
-function BudgetTracker({ budget, eventId }: { budget: PlanningBudget; eventId: string }) {
+function BudgetTracker({ budget, eventId, engagements = [] }: { budget: PlanningBudget; eventId: string; engagements?: EngagementWithCandidates[] }) {
+  const engById = new Map(engagements.map((e) => [e.id, e]));
   // A confirmed (assigned) scoping budget seeds the target when none is set yet.
   const assignedBudget = loadScoping(eventId).assignedBudget;
   const seedTarget = budget.targetAmount ?? assignedBudget;
@@ -957,7 +993,14 @@ function BudgetTracker({ budget, eventId }: { budget: PlanningBudget; eventId: s
           currency={cur}
           file={dropFile}
           onClose={() => setDropFile(null)}
-          onApplied={async (note) => { setDropFile(null); setImportNote(note); setLines(await listBudgetLines(budget.id)); }}
+          onApplied={async (note) => {
+            const f = dropFile;
+            setDropFile(null); setImportNote(note);
+            // Tag the imported sheet as a source material so it shows under the event's files
+            // (dedupes by name, so re-importing the same file won't duplicate it).
+            if (f) { try { const url = await uploadAttachment(f); await addSourceMaterial(eventId, { name: f.name, url, type: f.type || "text/csv" }); } catch { /* non-fatal */ } }
+            setLines(await listBudgetLines(budget.id));
+          }}
         />
       )}
 
@@ -965,6 +1008,7 @@ function BudgetTracker({ budget, eventId }: { budget: PlanningBudget; eventId: s
         <BudgetLineModal
           eventId={eventId}
           line={openLine}
+          engagements={engagements}
           onClose={() => setOpenId(null)}
           onChange={(f) => patch(openLine.id, f)}
         />
@@ -1011,7 +1055,12 @@ function BudgetTracker({ budget, eventId }: { budget: PlanningBudget; eventId: s
             {shown.length === 0 && <tr><td colSpan={4} className="px-3 py-3 text-gray-400">No lines.</td></tr>}
             {shown.map((l) => (
               <tr key={l.id} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => setOpenId(l.id)} title="Open details">
-                <td className="px-3 py-2">{l.label}</td>
+                <td className="px-3 py-2">
+                  {l.label}
+                  {l.linkedEngagement && engById.get(l.linkedEngagement) && (
+                    <span className="ml-2 text-[12px] text-gray-400">· {engagementLabel(engById.get(l.linkedEngagement)!)}</span>
+                  )}
+                </td>
                 <td className="px-3 py-2 text-right">{money(l.confirmedAmount, cur)}</td>
                 <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                   <Select value={l.status} onValueChange={(v) => setStatus(l.id, v as BudgetStatus)} items={BUDGET_STATUSES.map((s) => ({ value: s, label: BUDGET_STATUS_META[s].label }))}>
@@ -1077,7 +1126,7 @@ function SortableRow({ id, children }: { id: string; children: (h: RowHandle) =>
   return <>{children({ setNodeRef: s.setNodeRef, style, attributes: s.attributes, listeners: s.listeners, isDragging: s.isDragging })}</>;
 }
 
-function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLinearSynced }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void }) {
+function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
   const [items, setItems] = useState(initial);
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
   const [title, setTitle] = useState("");
@@ -1270,6 +1319,12 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
                           {d.linearIssueUrl && (
                             <a href={d.linearIssueUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open issue in Linear" className="inline-flex text-purple-600 hover:text-purple-800 no-underline"><Activity className="w-3.5 h-3.5" /></a>
                           )}
+                          {/* The post-event reflections task links to its reflection page. */}
+                          {onOpenReflection && /reflection/i.test(d.title) && (
+                            <button onClick={(e) => { e.stopPropagation(); onOpenReflection(); }} title="Open the post-event reflection" className="inline-flex items-center gap-0.5 text-gray-500 hover:text-gray-900 text-[13px]">
+                              <ExternalLink className="w-3.5 h-3.5" /> Open
+                            </button>
+                          )}
                         </p>
                         <span className="inline-flex items-center gap-1.5 text-[15px] text-gray-500">
                           {tOffsetLabel(d.offsetStart, d.offsetEnd) && <span className="text-gray-400 bg-gray-100 rounded px-1">{tOffsetLabel(d.offsetStart, d.offsetEnd)}</span>}
@@ -1316,7 +1371,7 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
 }
 
 // ── Carried lessons ─────────────────────────────────────────────────────────
-function CarriedLessons({ eventId }: { eventId: string }) {
+function CarriedLessons({ eventId, onOpenEvent }: { eventId: string; onOpenEvent?: (id: string) => void }) {
   const [lessons, setLessons] = useState<CarriedLesson[] | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -1325,7 +1380,7 @@ function CarriedLessons({ eventId }: { eventId: string }) {
   }, [eventId]);
 
   if (lessons === null) return <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">Finding comparable past events…</div>;
-  if (lessons.length === 0) return <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No comparable past events with lessons yet.</div>;
+  if (lessons.length === 0) return <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No comparable past events with learnings yet.</div>;
 
   return (
     <div className="bg-white rounded-2xl border border-border divide-y divide-gray-100">
@@ -1334,7 +1389,12 @@ function CarriedLessons({ eventId }: { eventId: string }) {
           <Lightbulb className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
           <div>
             <p className="text-sm text-gray-700">{l.body}</p>
-            <p className="text-[15px] text-gray-400 mt-1">from {l.sourceEventName}{l.why ? ` · ${l.why}` : ""}</p>
+            <p className="text-[15px] text-gray-400 mt-1">
+              from {l.sourceEventId && onOpenEvent && l.sourceEventId !== eventId
+                ? <button onClick={() => onOpenEvent(l.sourceEventId!)} className="text-gray-600 underline decoration-dotted underline-offset-2 hover:text-gray-900">{l.sourceEventName}</button>
+                : <span className="text-gray-500">{l.sourceEventName}</span>}
+              {l.why ? ` · ${l.why}` : ""}
+            </p>
           </div>
         </div>
       ))}
@@ -1623,27 +1683,28 @@ function deriveMarkers(plan: EventPlanning): { markers: OvMarker[]; currentKey: 
 
 // Interactive timeline: primary phase nodes (large) + secondary view-moments (small). The
 // date-derived "NOW" marker is fixed; the selected node is what's being previewed.
-function OverviewTimeline({ markers, currentKey, selectedKey, onSelect }: { markers: OvMarker[]; currentKey: string; selectedKey: string; onSelect: (k: string) => void }) {
+function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }: { markers: OvMarker[]; currentKey: string; selectedKey: string; onSelect: (k: string) => void; locked?: boolean }) {
   if (markers.length === 0) return null;
   return (
     <div className="bg-white rounded-2xl border border-border p-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-medium text-gray-700">Timeline <span className="text-gray-400 font-normal">· click a phase to preview</span></h3>
-        {selectedKey !== currentKey && <button onClick={() => onSelect(currentKey)} className="text-xs text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"><ChevronLeft className="w-3.5 h-3.5" /> Back to now</button>}
+        <h3 className="text-[15px] font-medium text-gray-700">Timeline <span className="text-gray-400 font-normal">· {locked ? "final record" : "click a phase to preview"}</span></h3>
+        {!locked && selectedKey !== currentKey && <button onClick={() => onSelect(currentKey)} className="text-xs text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"><ChevronLeft className="w-3.5 h-3.5" /> Back to now</button>}
       </div>
       <div className="relative">
-        <div className="absolute left-0 right-0 top-4 h-px bg-gray-200" />
+        <div className="absolute left-0 right-0 top-[18px] h-px bg-gray-200" />
         <div className="flex">
           {markers.map((m) => {
-            const isSel = m.key === selectedKey, isNow = m.key === currentKey, big = m.kind === "primary";
+            // Locked: every phase reads as completed (no selection, no NOW), a static record.
+            const isSel = !locked && m.key === selectedKey, isNow = !locked && m.key === currentKey, big = m.kind === "primary";
             return (
-              <button key={m.key} type="button" onClick={() => onSelect(m.key)} title={m.label} className="group relative flex-1 min-w-[56px] flex flex-col items-center px-1 text-center">
-                <span className="relative flex h-8 w-full items-center justify-center">
-                  <span className={`rounded-full transition-colors ${big ? "w-3.5 h-3.5 border-2 " + m.color.border : "w-2.5 h-2.5"} ${isSel ? `ring-4 ${m.color.ring}` : ""} ${isSel ? m.color.dot : m.kind === "secondary" ? `${m.color.band} ${m.color.fillSoft}` : `bg-white ${m.color.fillSoft}`}`} />
+              <button key={m.key} type="button" onClick={() => { if (!locked) onSelect(m.key); }} disabled={locked} title={m.label} className={`group relative flex-1 min-w-[64px] flex flex-col items-center px-1 text-center ${locked ? "cursor-default" : ""}`}>
+                <span className="relative flex h-9 w-full items-center justify-center">
+                  <span className={`rounded-full transition-colors ${big ? "w-5 h-5 border-2 " + m.color.border : "w-3.5 h-3.5"} ${isSel ? `ring-4 ${m.color.ring}` : ""} ${isSel || locked ? m.color.dot : m.kind === "secondary" ? `${m.color.band} ${m.color.fillSoft}` : `bg-white ${m.color.fillSoft}`}`} />
                 </span>
-                <span className={`mt-1 text-[11px] leading-tight ${isSel ? `${m.color.text} font-semibold` : m.kind === "secondary" ? "text-gray-400" : "text-gray-600"}`}>{m.label}</span>
-                {m.date && <span className="mt-0.5 text-[10px] text-gray-400 whitespace-nowrap">{fmtShort(m.date)}</span>}
-                {isNow && <span className="mt-0.5 inline-flex items-center gap-1 text-[9px] font-semibold tracking-wide text-gray-900"><span className="w-1.5 h-1.5 rounded-full bg-gray-900" /> NOW</span>}
+                <span className={`mt-1.5 text-[13px] leading-tight ${isSel ? `${m.color.text} font-semibold` : m.kind === "secondary" ? "text-gray-400" : "text-gray-600"}`}>{m.label}</span>
+                {m.date && <span className="mt-0.5 text-[11px] text-gray-400 whitespace-nowrap">{fmtShort(m.date)}</span>}
+                {isNow && <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-gray-900"><span className="w-2 h-2 rounded-full bg-gray-900" /> NOW</span>}
               </button>
             );
           })}
@@ -1729,6 +1790,626 @@ function DayOfView({ plan, temporal }: { plan: EventPlanning; temporal: "past" |
   );
 }
 
+// The fields a complete record of an event's category carries — shared by the completeness panel
+// and the page-level "drop project knowledge" handler so both judge gaps identically. Budget/vendors
+// aren't load-bearing for community ("neither") events, so they're skipped there.
+function completenessFields(plan: EventPlanning): { key: string; label: string; present: boolean }[] {
+  const focus = eventFocus(plan.tags, plan.format);
+  return ([
+    { key: "date", label: "Event date", present: !!plan.date },
+    { key: "location", label: "Venue / location", present: !!plan.location },
+    { key: "turnout", label: "Turnout", present: plan.rsvp != null || plan.headcount != null || plan.checkedIn != null },
+    // Final spend = ACTUAL (non-estimate) money recorded. A bare estimate line still reads as
+    // "missing final spend" — you budgeted, but didn't record what was actually spent.
+    { key: "budget", label: "Final spend / actuals", present: (plan.budget?.lines ?? []).some((l) => l.status !== "estimate" && (l.confirmedAmount ?? 0) > 0) },
+    { key: "outcome", label: "Outcome / verdict", present: !!plan.verdict?.trim() },
+    { key: "agenda", label: "Run of show", present: plan.agenda.length > 0 },
+    { key: "vendors", label: "Vendors", present: plan.engagements.length > 0, skip: focus === "neither" },
+    { key: "roles", label: "Staffing / roles", present: plan.staffRoles.length > 0 },
+  ] as { key: string; label: string; present: boolean; skip?: boolean }[]).filter((f) => !f.skip);
+}
+
+// Ingest a dropped doc as PROJECT KNOWLEDGE for an EXISTING event (never a new event / structure).
+// A budget sheet records actuals + is kept as a linked source; any other doc is kept as project
+// context and run through the brief/debrief extractor to fill only the named gap fields (plus
+// always-additive lessons). Returns a human message + whether anything changed (→ caller reloads).
+async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): Promise<{ message: string; applied: boolean }> {
+  // Is this exact file already attached? Reuse its URL (so re-processed lines stay linked to the
+  // same source for cascade-delete) and — for the LLM/prose path only — skip re-extraction. The
+  // budget and run-of-show paths are idempotent, so we always let them RECONCILE: re-dropping a
+  // sheet updates / back-fills lines (e.g. a line that a prior parse missed) without doubling.
+  const attachedMat = (await getSourceMaterials(eventId)).find((m) => m.name.trim().toLowerCase() === file.name.trim().toLowerCase());
+  const ensureSource = async (type: string): Promise<string | null> => {
+    if (attachedMat) return attachedMat.url;
+    try { const url = await uploadAttachment(file); await addSourceMaterial(eventId, { name: file.name, url, type: file.type || type }); return url; } catch { return null; }
+  };
+
+  // PDFs: read via pdf.js (lazy-loaded). Table structure is lost in a PDF, so we DON'T run the
+  // CSV/table parsers on it — a budget/vendor table would come out garbled. Instead we keep it as
+  // context and route prose (briefs/debriefs) to the LLM; if it looks like budget/vendor data we
+  // nudge the user toward a CSV/Markdown table, which imports reliably.
+  const isPdf = /\.pdf$/i.test(file.name) || file.type.includes("pdf");
+  if (isPdf) {
+    let pdfText = "";
+    try { const { readPdfText } = await import("../lib/pdfText"); pdfText = await readPdfText(file); }
+    catch { pdfText = ""; }
+    await ensureSource("application/pdf"); // attach it regardless (previewable project context)
+    if (!pdfText.trim()) {
+      return { message: "Added the PDF, but couldn't read any text from it (it looks scanned / image-only). To pull data out, export it as .csv or .md, or paste the text.", applied: true };
+    }
+    const { looksLikeBudgetOrVendor } = await import("../lib/pdfText");
+    if (looksLikeBudgetOrVendor(pdfText)) {
+      return { message: "Added the PDF to project context. It looks like budget / vendor data — PDFs lose table structure, so it wasn't imported as lines. For a clean import, drop a CSV or Markdown table (or paste it).", applied: true };
+    }
+    if (attachedMat) return { message: `“${file.name}” is already added — nothing new to extract.`, applied: false };
+    const x = await extractForBackfill(pdfText);
+    const filled = await enrichEventFromExtract(eventId, x, gapKeys);
+    return filled.length
+      ? { message: `Updated from the PDF: ${filled.join(", ")}.`, applied: true }
+      : { message: "Added the PDF to project context — nothing new to fill in for this event.", applied: true };
+  }
+
+  const text = await file.text();
+  if (!text.trim()) return { message: "Couldn't read any text from that file — try a .txt, .md, or .csv (or paste the text).", applied: false };
+
+  // A VENDOR list (header names a Vendor column) → engagements + candidates, each paired to a
+  // budget line. Checked before budget so a vendor sheet with amounts doesn't land as bare budget.
+  const vendorRows = parseVendors(text);
+  if (vendorRows) {
+    const docUrl = await ensureSource("text/csv"); // keep the sheet as project context (+ provenance)
+    const r = await importVendors(eventId, vendorRows, docUrl);
+    const bits = [`${r.vendors} vendor${r.vendors === 1 ? "" : "s"}`, `${r.tagged} budget line${r.tagged === 1 ? "" : "s"} tagged`];
+    if (r.skipped) bits.push(`${r.skipped} tax/fee row${r.skipped === 1 ? "" : "s"} skipped`);
+    return { message: `Recorded ${bits.join(", ")}. (Existing budget lines were tagged, not re-priced.)`, applied: r.vendors > 0 || r.tagged > 0 };
+  }
+
+  const isSheet = /\.csv$/i.test(file.name) || /csv|spreadsheet|excel/i.test(file.type);
+  const nonEmptyLines = text.split(/\r?\n/).filter((l) => l.trim()).length || 1;
+  const parsed = parseBudgetText(text).filter((l) => l.label.trim() && l.label !== "Untitled" && l.amount != null);
+  const budgetLines = (isSheet || (parsed.length >= 2 && parsed.length / nonEmptyLines >= 0.4)) ? parsed : [];
+  if (budgetLines.length) {
+    const docUrl = await ensureSource("text/csv");
+    const n = await addBudgetActuals(eventId, budgetLines, docUrl);
+    return { message: n ? `Recorded ${n} budget line${n === 1 ? "" : "s"} (final spend) from the sheet — matching lines were updated, not duplicated.` : "No budget rows found in that file.", applied: n > 0 };
+  }
+  // A run-of-show is a schedule, not prose — the brief extractor won't reliably pull it. Parse
+  // time-prefixed rows directly and fill the agenda when it's a gap.
+  const ros = parseRunOfShow(text);
+  if (gapKeys.includes("agenda") && ros.length >= 2) {
+    await ensureSource("text/plain");
+    await setEventAgenda(eventId, ros);
+    return { message: `Recorded ${ros.length} run-of-show items.`, applied: true };
+  }
+  // Prose / LLM path: NOT idempotent (re-extraction re-adds lessons etc.), so skip if already here.
+  if (attachedMat) return { message: `“${file.name}” is already added — nothing new to extract. Remove it first to re-process.`, applied: false };
+  await ensureSource("text/plain"); // keep the doc as project context, then extract what it can fill
+  const x = await extractForBackfill(text);
+  const filled = await enrichEventFromExtract(eventId, x, gapKeys);
+  if (filled.length) return { message: `Updated: ${filled.join(", ")}.`, applied: true };
+  return { message: "Saved as project context — nothing new to fill in for this event.", applied: true };
+}
+
+// Pull run-of-show rows out of a dropped schedule: lines that begin with a time (9:00, 9:00 AM,
+// 9am, or a 10:00–10:45 range), the rest of the line as the activity. Needs the leading token to
+// be a real time (has ":MM" or am/pm) so "12 people" / "2024 recap" don't masquerade as rows.
+function parseRunOfShow(text: string): { time: string; title: string }[] {
+  const re = /^(\d{1,2}:\d{2}\s*(?:[ap]\.?m\.?)?(?:\s*[-–—]\s*\d{1,2}:\d{2}\s*(?:[ap]\.?m\.?)?)?|\d{1,2}\s*[ap]\.?m\.?)\s*[-–—:|·\t]?\s*(.+)$/i;
+  const out: { time: string; title: string }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = line.match(re);
+    if (!m) continue;
+    const time = m[1].replace(/\s+/g, " ").trim();
+    const title = m[2].trim();
+    if (title) out.push({ time, title });
+  }
+  return out;
+}
+
+// On the wrapped view, "what would make this complete" + a drop-to-fill enrichment target.
+// Lists fields a complete record of this category has but this backfilled event lacks; dropping a
+// doc (e.g. a budget sheet) extracts it and fills only the gaps. Resolved fields drop off the list.
+function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: string; onApplied: () => void }) {
+  const focus = eventFocus(plan.tags, plan.format);
+  const fields = completenessFields(plan);
+  const gaps = fields.filter((f) => !f.present);
+
+  const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // The non-deletable "Post-event reflections & insights" to-do. Auto-checks off (disappears) once
+  // the record is complete; otherwise the owner can tick it manually (with a heads-up).
+  const reflDeliv = plan.deliverables.find((d) => /reflection|insight/i.test(d.title));
+  const reflOpen = !!reflDeliv && reflDeliv.status !== "Done";
+  // "Complete" = no gaps left, OR the reflections deliverable is marked done (manually declared).
+  // Same signal as the green "final record" check on the card, so the two never disagree.
+  const complete = gaps.length === 0 || reflDeliv?.status === "Done";
+  const [confirmRefl, setConfirmRefl] = useState(false);
+  useEffect(() => {
+    if (complete && reflDeliv && reflDeliv.status !== "Done") setDeliverableStatus(reflDeliv.id, "Done").then(() => onApplied()).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [complete, reflDeliv?.id, reflDeliv?.status]);
+  const checkOffRefl = async () => { if (reflDeliv) await setDeliverableStatus(reflDeliv.id, "Done").catch(() => {}); setConfirmRefl(false); onApplied(); };
+
+  const onDropDoc = async (file?: File | null) => {
+    setOver(false);
+    if (!file) return;
+    setBusy(true); setMsg(null);
+    try {
+      const { message, applied } = await ingestEventDoc(eventId, file, gaps.map((g) => g.key));
+      setMsg(message);
+      if (applied) onApplied();
+    } catch (e: any) { setMsg(e?.message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const drag = {
+    onClick: () => fileRef.current?.click(),
+    onDragEnter: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setOver(true); },
+    onDragOver: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setOver(true); },
+    onDragLeave: (e: React.DragEvent) => { e.stopPropagation(); setOver(false); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); void onDropDoc(e.dataTransfer.files?.[0]); },
+  };
+
+  return (
+    <div {...drag} className={`rounded-2xl border-2 border-dashed px-4 py-3 cursor-pointer transition-colors ${over ? "border-amber-500 bg-amber-100" : "border-amber-200 bg-amber-50 hover:bg-amber-100/60"}`}>
+      <input ref={fileRef} type="file" hidden onChange={(e) => { void onDropDoc(e.target.files?.[0]); e.currentTarget.value = ""; }} />
+      <div className="flex items-center gap-2 mb-1">
+        <Paperclip className="w-4 h-4 text-amber-700" />
+        <h3 className="text-[15px] font-medium text-amber-900">{!complete ? "What would make this a complete record" : "Add further info"}</h3>
+        {busy && <Loader2 className="w-4 h-4 animate-spin text-amber-700" />}
+      </div>
+      {!complete ? (
+        <>
+          <p className="text-[12px] text-amber-700 mb-2">Still missing for a complete {focus === "neither" ? "community" : focus} record — drop or click to add a doc (debrief, budget sheet, brief); only the gaps fill in.</p>
+          <ul className="space-y-1">
+            {gaps.map((g) => <li key={g.key} className="flex items-center gap-2 text-[13px] text-amber-900"><span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />{g.label}</li>)}
+          </ul>
+        </>
+      ) : (
+        <p className="text-[12px] text-amber-700">This record looks complete. Drop or click to add or correct anything.</p>
+      )}
+      {msg && <p className="text-[12px] text-amber-800 mt-2">{msg}</p>}
+
+      {/* Post-event reflections & insights — shown until the record is complete (then auto-checks). */}
+      {reflOpen && !complete && (
+        <div className="mt-3 pt-3 border-t border-amber-200" onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => setConfirmRefl(true)} className="flex items-center gap-2 text-[13px] text-amber-900 hover:text-amber-950">
+            <span className="w-4 h-4 rounded border border-amber-400 bg-white shrink-0" />
+            Post-event reflections &amp; insights
+          </button>
+        </div>
+      )}
+      {confirmRefl && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" onClick={(e) => { e.stopPropagation(); setConfirmRefl(false); }}>
+          <div className="bg-white rounded-2xl border border-gray-200 max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg mb-1">Mark reflections complete?</h3>
+            <p className="text-sm text-gray-600 mb-5">This event still isn't a complete record. Check this off? You can still add more information later.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmRefl(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+              <button onClick={checkOffRefl} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black">Check it off</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Wrapped "Template" view: the pattern this event feeds. Reuses the pattern-mode TemplateView,
+// pointed at the template the event is modeled on; if there's none, offers to derive one. Above
+// it, proposes this event's NEW phases/roles/lessons to ADD to the template (propose-then-confirm,
+// one-directional — never rewrites the template or sibling events).
+function WrappedTemplate({ plan, eventId, onApplied, onOpenEvent }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenEvent?: (id: string) => void }) {
+  const templateId = plan.modeledOnEventId;
+  const [tmpl, setTmpl] = useState<EventPlanning | null>(null);
+  const [loading, setLoading] = useState(!!templateId);
+  const [deriving, setDeriving] = useState(false);
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false); // additions applied → show a condensed confirmation
+
+  useEffect(() => {
+    if (!templateId) { setTmpl(null); setLoading(false); return; }
+    let live = true; setLoading(true);
+    getEventPlanning(templateId).then((t) => { if (live) { setTmpl(t); setLoading(false); } }).catch(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [templateId]);
+
+  // No template yet → look for an existing one of the same type to adopt (match, don't auto-merge).
+  const [candidates, setCandidates] = useState<TemplateMatch[]>([]);
+  useEffect(() => {
+    if (templateId) return;
+    let live = true;
+    listTemplates().then((ts) => { if (live) setCandidates(matchTemplates(ts, { format: plan.format, tag: plan.tags[0] ?? null }).filter((m) => m.score >= 2)); }).catch(() => {});
+    return () => { live = false; };
+  }, [templateId]);
+  const derive = async () => { setDeriving(true); try { await deriveTemplateFromEvent(eventId); onApplied(); } finally { setDeriving(false); } };
+  const adopt = async (id: string) => { setBusy(true); try { await adoptTemplate(eventId, id); onApplied(); } finally { setBusy(false); } };
+
+  const adds = tmpl ? templateAdditions(
+    { id: tmpl.id, name: tmpl.title, format: tmpl.format, tags: tmpl.tags, phases: tmpl.phases.map((p) => p.name), staffRoles: tmpl.staffRoles, reflections: tmpl.reflections },
+    { name: plan.title, date: null, location: null, format: plan.format, tag: plan.tags[0] ?? null, headcount: null, turnoutActual: null, budgetTotal: null, verdict: "", phases: plan.phases.map((p) => p.name), staffRoles: plan.staffRoles, lessons: plan.reflections, heuristics: plan.heuristics, actuals: [], deliverables: [], agenda: [] },
+  ) : null;
+  const addKey = (kind: string, v: string) => `${kind}:${v}`;
+  const [addedCount, setAddedCount] = useState(0);
+  const apply = async () => {
+    if (!templateId || !adds) return;
+    const toAdd = {
+      phases: adds.phases.filter((v) => !excluded.has(addKey("phase", v))),
+      roles: adds.roles.filter((v) => !excluded.has(addKey("role", v))),
+      lessons: adds.lessons.filter((v) => !excluded.has(addKey("lesson", v))),
+    };
+    const n = toAdd.phases.length + toAdd.roles.length + toAdd.lessons.length;
+    if (!n) return;
+    setBusy(true);
+    try {
+      await applyTemplateAdditions(templateId, toAdd);
+      setAddedCount(n);
+      // Refetch the TEMPLATE so the proposal recomputes as EMPTY — the added items must not
+      // reappear in the "to add" list once confirmed.
+      const fresh = await getEventPlanning(templateId).catch(() => null);
+      if (fresh) setTmpl(fresh);
+      setDone(true); // persistent confirmation — stays until explicitly dismissed / a refresh
+      onApplied();   // refresh the event view too
+    } finally { setBusy(false); }
+  };
+  const dismiss = () => setDone(false);
+
+  if (loading) return <p className="text-sm text-gray-400">Loading template…</p>;
+  if (!templateId || !tmpl) {
+    return (
+      <div className="bg-white rounded-2xl border border-border p-6">
+        <h3 className="font-medium mb-1">No template yet</h3>
+        <p className="text-sm text-gray-500 mb-4 max-w-md">This event isn't modeled on a template. {candidates.length ? "Build on a matching one, or derive a new template from its pattern." : "Derive one from its pattern — phases, roles, deliverables, learnings — so the next event of this kind can reuse it."}</p>
+        {candidates.length > 0 && (
+          <div className="space-y-1.5 mb-4">
+            {candidates.map((m) => (
+              <div key={m.template.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2">
+                <span className="text-sm">Looks like <span className="font-medium">{m.template.name}</span>{m.template.format ? ` (${m.template.format})` : ""}</span>
+                <button onClick={() => adopt(m.template.id)} disabled={busy} className="shrink-0 px-2.5 py-1 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">Build on it</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <button onClick={derive} disabled={deriving} className="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">{deriving ? "Deriving…" : "Derive a new template from this event"}</button>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {done ? (
+        // Persistent confirmation — stays until explicitly closed (or a page refresh). Links to
+        // the template it was added to.
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <span className="inline-flex items-center gap-2 min-w-0">
+            <Check className="w-4 h-4 shrink-0" />
+            <span>Added {addedCount} item{addedCount === 1 ? "" : "s"} to{" "}
+              {onOpenEvent ? (
+                <button onClick={() => onOpenEvent(tmpl.id)} className="font-medium underline decoration-dotted underline-offset-2 hover:text-emerald-900">{tmpl.title}</button>
+              ) : <span className="font-medium">“{tmpl.title}”</span>}.
+            </span>
+          </span>
+          <button onClick={dismiss} className="shrink-0 text-emerald-600 hover:text-emerald-900" aria-label="Dismiss"><X className="w-4 h-4" /></button>
+        </div>
+      ) : adds && hasAdditions(adds) ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-[13px] font-medium text-amber-900 mb-1">This event adds to “{tmpl.title}”</p>
+          <p className="text-[12px] text-amber-700 mb-2">Only what's new. Confirming adds to the template — it never rewrites the template's pattern or other events.</p>
+          <div className="space-y-1">
+            {([["phase", adds.phases], ["role", adds.roles], ["lesson", adds.lessons]] as const).flatMap(([kind, items]) => items.map((v) => {
+              const k = addKey(kind, v);
+              return (
+                <label key={k} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={!excluded.has(k)} onChange={() => setExcluded((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; })} />
+                  <span className="text-gray-400 text-[11px] uppercase w-12 shrink-0">{kind}</span><span className="flex-1">{v}</span>
+                </label>
+              );
+            }))}
+          </div>
+          <div className="flex items-center gap-2 mt-2">
+            {(() => {
+              const selected = adds.phases.length + adds.roles.length + adds.lessons.length - excluded.size;
+              return <button onClick={apply} disabled={busy || selected <= 0} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">{busy ? "Adding…" : "Add to template"}</button>;
+            })()}
+          </div>
+        </div>
+      ) : null}
+      <TemplateView plan={tmpl} eventId={tmpl.id} onExit={() => {}} onOpenEvent={onOpenEvent} />
+    </div>
+  );
+}
+
+// Wrapped "Deliverables" tab: a read-only RECORD of what shipped (and who owned it), grouped by
+// phase. Everything's done by nature here — no statuses to change, no overdue, no worklist.
+function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
+  const nodeNames = plan.phases.map((p) => p.name);
+  const byPhase = new Map<string, Deliverable[]>();
+  for (const d of plan.deliverables) { const k = canonicalPhaseFor(d.phase, nodeNames) || "Other"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(d); }
+  const order = new Map(nodeNames.map((n, i) => [n, i]));
+  const phaseOrder = [...byPhase.keys()].sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
+  const done = plan.deliverables.filter((d) => d.status === "Done").length;
+  const whoFor = (d: Deliverable) => (d.ownerRole ? plan.roleAssignments[d.ownerRole] ?? d.ownerRole : null);
+  return (
+    <section className="space-y-4">
+      <p className="text-[13px] text-gray-500">What shipped — {done}/{plan.deliverables.length} complete. A record; reopen the workspace to change anything.</p>
+      {/* Run of show — drop a schedule on the page to fill this; shows once recorded. */}
+      <div className="bg-white rounded-2xl border border-border p-5">
+        <h4 className="font-medium mb-2">Run of show</h4>
+        {plan.agenda.length === 0 ? (
+          <p className="text-sm text-gray-400">No run-of-show on record — drop the schedule (.docx / .txt / .csv) on this page to add it.</p>
+        ) : (
+          <ul className="divide-y divide-gray-100 text-sm">
+            {plan.agenda.map((a, i) => (
+              <li key={i} className="flex gap-3 py-1.5"><span className="text-gray-400 w-20 tabular-nums shrink-0">{a.time}</span><span className="text-gray-800">{a.title}</span></li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {plan.deliverables.length === 0 && <p className="text-sm text-gray-400">No deliverables on record.</p>}
+      {phaseOrder.map((name) => (
+        <div key={name} className="bg-white rounded-2xl border border-border p-5">
+          <h4 className="font-medium mb-2">{name}</h4>
+          <ul className="divide-y divide-gray-100 text-sm">
+            {byPhase.get(name)!.map((d) => (
+              <li key={d.id} className="flex items-center gap-3 py-2">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${d.status === "Done" ? "bg-green-500" : "bg-gray-300"}`} />
+                <span className="flex-1 min-w-0 truncate text-gray-800">{d.title}</span>
+                {whoFor(d) && <span className="text-[12px] text-gray-500 inline-flex items-center gap-1 shrink-0"><Users className="w-3 h-3" /> {whoFor(d)}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+// Locked rundown: a settled event is a read-only record. No phase navigation, no editing —
+// just the summarized info (outcome, the numbers, what shipped, lessons, who filled which role,
+// who mattered, the debrief notes).
+function LockedRundown({ plan, assignedTarget, onOpenPeople, onApplied }: { plan: EventPlanning; assignedTarget: number | null; onOpenPeople: () => void; onApplied?: () => void }) {
+  const [stats, setStats] = useState<PeopleStats | null>(null);
+  const [tags, setTags] = useState<EventPersonTag[]>([]);
+  const [lessons, setLessons] = useState<string[]>(plan.reflections ?? []);
+  const removeLearning = (i: number) => {
+    const next = lessons.filter((_, j) => j !== i);
+    setLessons(next);
+    setEventReflections(plan.id, next).catch(() => {});
+    onApplied?.();
+  };
+  useEffect(() => {
+    let live = true;
+    getEventPeopleStats(plan.id).then((s) => { if (live) setStats(s); }).catch(() => {});
+    listEventTags(plan.id).then((t) => { if (live) setTags(t); }).catch(() => {});
+    return () => { live = false; };
+  }, [plan.id]);
+
+  // General turnout = heads counted / estimated (event-level stat). Known people = the individuals
+  // we actually have records for (identified attendees). They differ — you count more heads than you
+  // can name. Show general turnout big; float known-people small when it's a different number.
+  const counted = plan.checkedIn ?? null;                       // heads counted at the event
+  const estimated = plan.rsvp ?? stats?.registered ?? null;     // RSVPs / expected
+  const known = stats?.total ?? null;                           // identified attendee records
+  const showPct = estimated && counted != null ? Math.round((counted / estimated) * 100) : null;
+  const lines = plan.budget?.lines ?? [];
+  const spent = lines.filter((l) => l.status === "paid").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
+  const target = assignedTarget ?? plan.budget?.targetAmount ?? null;
+  const perHead = counted ? Math.round(spent / counted) : null;
+  const focus = eventFocus(plan.tags, plan.format);
+  const roles = Object.entries(plan.roleAssignments ?? {});
+  const tagged = new Map<string, { name: string | null; starred: boolean }>();
+  for (const t of tags.filter((t) => t.status === "confirmed")) {
+    const cur = tagged.get(t.attendeeId) ?? { name: t.name, starred: false };
+    cur.starred = cur.starred || t.priority; tagged.set(t.attendeeId, cur);
+  }
+  const Tile = ({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) => (
+    <div className="bg-gradient-to-b from-primary/5 to-white to-60% rounded-2xl border border-border p-5">
+      <p className="text-[13px] text-gray-500 mb-1">{label}</p>
+      <p className="text-2xl font-semibold text-gray-900">{value}</p>
+      {hint && <p className="text-[11px] text-gray-400">{hint}</p>}
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* outcome banner */}
+      <div className="rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4">
+        <div className="flex items-center gap-2 mb-1">
+          <Lock className="w-4 h-4 text-gray-400" />
+          <h3 className="font-medium">Final record</h3>
+          {plan.settledAt && <span className="text-[12px] text-gray-400">settled {fmtShort(plan.settledAt.slice(0, 10))}</span>}
+          <span className={`ml-auto text-[11px] px-2 py-0.5 rounded-full ${focus === "hiring" ? "bg-violet-50 text-violet-700 border border-violet-200" : focus === "client" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-gray-100 text-gray-500"}`}>{FOCUS_LABEL[focus]}</span>
+        </div>
+        <p className="text-sm text-gray-800">{plan.verdict ? plan.verdict : <span className="text-gray-400">No verdict recorded.</span>}</p>
+      </div>
+
+      {/* the numbers */}
+      <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${focus === "neither" ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>
+        {/* Turnout (the people card): general turnout counted/estimated, with known-people floating. */}
+        <div className="relative bg-gradient-to-b from-primary/5 to-white to-60% rounded-2xl border border-border p-5">
+          {known != null && known !== counted && (
+            <span className="absolute top-2 right-3 text-[11px] text-gray-400" title="people we have records for (by name/email)">{known} known</span>
+          )}
+          <p className="text-[13px] text-gray-500 mb-1">Turnout</p>
+          <p className="text-2xl font-semibold text-gray-900">{counted ?? estimated ?? "—"}{estimated != null && counted != null && <span className="text-base text-gray-400"> / {estimated}</span>}</p>
+          <p className="text-[11px] text-gray-400">{showPct != null ? `${showPct}% show rate` : counted != null ? "counted" : "RSVPs"}</p>
+        </div>
+        <Tile label="Final spend" value={<>{money(spent)}{target != null && <span className="text-base text-gray-400"> / {money(target)}</span>}</>} hint={target != null ? (spent > target ? `${money(spent - target)} over` : `${money(target - spent)} under`) : "paid"} />
+        <Tile label="Cost per head" value={perHead != null ? money(perHead) : "—"} hint="spend ÷ counted" />
+        {focus === "hiring" && <Tile label="Candidates flagged" value={attendeesFlagged(tags) || "—"} hint="tagged candidate" />}
+        {focus === "client" && <Tile label="Clients & partners" value={[...tagged.values()].length || "—"} hint="tagged" />}
+      </div>
+
+      {/* Learnings — full width. Same data as reflections, the post-event framing. */}
+      <div>
+        <h4 className="font-medium mb-2">Learnings</h4>
+        {lessons.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">None recorded.</div>
+        ) : (
+          <div className="bg-white rounded-2xl border border-border divide-y divide-gray-100">
+            {lessons.map((l, i) => (
+              <div key={i} className="group px-6 py-4 flex gap-3">
+                <Lightbulb className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                <p className="text-sm text-gray-700 flex-1">{l}</p>
+                <button onClick={() => removeLearning(i)} title="Delete learning" aria-label="Delete learning" className="shrink-0 text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Roles — full width when present. */}
+      {roles.length > 0 && (
+        <div className="bg-white rounded-2xl border border-border p-5">
+          <h4 className="font-medium mb-2">Roles</h4>
+          <ul className="space-y-1 text-sm">{roles.map(([role, who]) => <li key={role} className="flex justify-between gap-2"><span className="text-gray-500">{role}</span><span className="text-gray-800">{who}</span></li>)}</ul>
+        </div>
+      )}
+
+      {/* Who mattered + Vendors — equal split below Learnings (same width & height). */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+        <button onClick={onOpenPeople} className="h-full bg-white rounded-2xl border border-border p-5 text-left hover:bg-gray-50">
+          <h4 className="font-medium mb-1 inline-flex items-center gap-1.5">Who mattered <ChevronRight className="w-4 h-4 text-gray-400" /></h4>
+          {tagged.size === 0 ? <p className="text-[13px] text-gray-400">No one tagged.</p> : (
+            <div className="flex items-center gap-2 flex-wrap text-[13px]">
+              <span className="text-gray-600">{tagged.size} tagged</span>
+              {[...tagged.values()].slice(0, 5).map((p, i) => <span key={i} className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 rounded-full px-2.5 py-0.5">{p.starred && <Star className="w-3 h-3 text-amber-500" fill="currentColor" />}{p.name ?? "—"}</span>)}
+            </div>
+          )}
+        </button>
+        <div className="h-full bg-white rounded-2xl border border-border p-5">
+          <h4 className="font-medium mb-2">Vendors <span className="text-gray-400 font-normal text-sm">· who we used</span></h4>
+          {plan.engagements.length === 0 ? <p className="text-sm text-gray-400">No vendors recorded.</p> : (
+            <ul className="space-y-1 text-sm">
+              {plan.engagements.map((e) => {
+                const sel = e.candidates.find((c) => c.isSelected);
+                return (
+                  <li key={e.id} className="flex justify-between gap-2">
+                    <span className="text-gray-500 truncate">{e.category ?? "—"}{sel?.vendorName ? ` · ${sel.vendorName}` : ""}</span>
+                    <span className="text-gray-800 shrink-0">{e.confirmedAmount != null ? money(e.confirmedAmount) : e.stage}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {/* debrief notes */}
+      {plan.debriefNotes && (
+        <details className="bg-white rounded-2xl border border-border p-5">
+          <summary className="font-medium cursor-pointer">Debrief notes</summary>
+          <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{plan.debriefNotes}</p>
+        </details>
+      )}
+    </div>
+  );
+}
+const attendeesFlagged = (tags: EventPersonTag[]) => new Set(tags.filter((t) => t.status === "confirmed" && t.lens === "candidate").map((t) => t.attendeeId)).size;
+
+// Settling lifecycle: just wrapped → debriefed → settled. "Settle" carries the event's
+// confirmed reflections back to the template it was modeled on (atomic, via settle_event RPC).
+const SETTLE_STEPS: { key: SettleState; label: string }[] = [
+  { key: "just_wrapped", label: "Just wrapped" },
+  { key: "debriefed", label: "Debriefed" },
+  { key: "settled", label: "Settled" },
+];
+function SettlingTracker({ plan, spent, target, onApplied }: { plan: EventPlanning; spent: number; target: number | null; onApplied: () => void }) {
+  // Post-event view only renders once the date has passed → default to "just wrapped".
+  const state: SettleState = plan.settleState ?? "just_wrapped";
+  const idx = SETTLE_STEPS.findIndex((s) => s.key === state);
+  const [verdict, setVerdict] = useState(plan.verdict ?? "");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  // Roles → people: the owner resolves each staff role to a person as part of settling.
+  const roles = plan.staffRoles ?? [];
+  const [assigns, setAssigns] = useState<Record<string, string>>(plan.roleAssignments ?? {});
+  const unassigned = roles.filter((r) => !(assigns[r] ?? "").trim()).length;
+  const saveAssigns = () => setRoleAssignments(plan.id, assigns).catch(() => {});
+
+  const saveVerdict = () => { if ((verdict.trim() || null) !== (plan.verdict ?? null)) setEventVerdict(plan.id, verdict).catch(() => {}); };
+  const markDebriefed = async () => { setBusy(true); try { await setSettleState(plan.id, "debriefed"); onApplied(); } finally { setBusy(false); } };
+  const settle = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      if (verdict.trim() !== (plan.verdict ?? "")) await setEventVerdict(plan.id, verdict).catch(() => {});
+      if (roles.length) await setRoleAssignments(plan.id, assigns).catch(() => {});
+      const r = await settleEvent(plan.id);
+      setMsg(r.template ? `Settled · carried ${r.reflectionsCarried} learning${r.reflectionsCarried === 1 ? "" : "s"} back to the template.` : "Settled · no template to carry learnings to.");
+      onApplied();
+    } catch (e: any) { setMsg(e?.message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <section className="bg-white rounded-2xl border border-border p-5">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="font-medium">Wrap-up</h3>
+        {plan.settledAt && <span className="text-[12px] text-gray-400">settled {fmtShort(plan.settledAt.slice(0, 10))}</span>}
+      </div>
+      {/* tracker */}
+      <div className="flex items-center gap-2 mb-4">
+        {SETTLE_STEPS.map((s, i) => (
+          <div key={s.key} className="flex items-center gap-2">
+            <span className={`flex items-center justify-center w-6 h-6 rounded-full text-[12px] shrink-0 ${i < idx ? "bg-emerald-600 text-white" : i === idx ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-400"}`}>{i < idx ? <Check className="w-3.5 h-3.5" /> : i + 1}</span>
+            <span className={`text-sm ${i === idx ? "text-gray-900 font-medium" : i < idx ? "text-gray-600" : "text-gray-400"}`}>{s.label}</span>
+            {i < SETTLE_STEPS.length - 1 && <span className="w-6 h-px bg-gray-200" />}
+          </div>
+        ))}
+      </div>
+      {/* recorded outcome */}
+      <label className="block text-[13px] text-gray-500 mb-1">Outcome / verdict</label>
+      <textarea
+        value={verdict}
+        onChange={(e) => setVerdict(e.target.value)}
+        onBlur={saveVerdict}
+        disabled={state === "settled"}
+        rows={2}
+        placeholder="One-line verdict — how did it land? what's the call on running it again?"
+        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 disabled:bg-gray-50 disabled:text-gray-500"
+      />
+      {/* roles → people (only when the event carries staff roles) */}
+      {roles.length > 0 && (
+        <div className="mt-4">
+          <div className="flex items-center gap-2 mb-1">
+            <label className="block text-[13px] text-gray-500">Assign roles</label>
+            {unassigned > 0 && <span className="text-[11px] text-amber-600">{unassigned} unassigned</span>}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {roles.map((r) => (
+              <div key={r} className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 w-32 shrink-0 truncate" title={r}>{r}</span>
+                <input
+                  value={assigns[r] ?? ""}
+                  onChange={(e) => setAssigns((p) => ({ ...p, [r]: e.target.value }))}
+                  onBlur={saveAssigns}
+                  disabled={state === "settled"}
+                  placeholder="Who filled this?"
+                  className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 disabled:bg-gray-50 disabled:text-gray-500"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* final actuals + transition */}
+      <div className="flex items-center justify-between gap-3 mt-3">
+        <p className="text-[12px] text-gray-400">Final spend {money(spent)}{target != null && <> of {money(target)} target</>}.</p>
+        <div className="flex items-center gap-2">
+          {state === "just_wrapped" && <button onClick={markDebriefed} disabled={busy} className="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">Mark debriefed</button>}
+          {state === "debriefed" && <button onClick={settle} disabled={busy || unassigned > 0} title={unassigned > 0 ? "Assign all roles to settle" : undefined} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">{busy ? "Settling…" : unassigned > 0 ? `Assign ${unassigned} role${unassigned === 1 ? "" : "s"} to settle` : "Settle & write back"}</button>}
+          {state === "settled" && <span className="inline-flex items-center gap-1 text-sm text-emerald-700"><Check className="w-4 h-4" /> Settled</span>}
+        </div>
+      </div>
+      {msg && <p className="text-[12px] text-gray-500 mt-2">{msg}</p>}
+    </section>
+  );
+}
+
 // ── Post-event view: how it went → close it out → reflection → attendees ──────
 // Stats, close-out and attendee tagging render immediately on wrap (real captured data);
 // only the reflection section waits on the debrief. This view is past-only — no projections.
@@ -1753,15 +2434,55 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
   const overUnder = target != null ? spent - target : null;
   const perHead = checkedIn ? Math.round(spent / checkedIn) : null;
   const flagged = attendees.filter((a) => a.applicationStatus && a.applicationStatus !== "none").length;
+  // What the event is FOR shapes how we measure turnout (candidate vs client signal vs none).
+  const focus = eventFocus(plan.tags, plan.format);
+  const clientCount = attendees.filter((a) => a.type === "Client" || a.type === "Partner").length;
+
+  // Dropping a file ANYWHERE on the post-event view = debrief / post-event material → route it
+  // into the reflection extractor and scroll there.
+  const [over, setOver] = useState(false);
+  const [incoming, setIncoming] = useState<{ text: string; nonce: number } | null>(null);
+  const dropNonce = useRef(0);
+  const onDropMaterial = async (file?: File | null) => {
+    setOver(false);
+    if (!file) return;
+    try {
+      const text = await file.text();
+      if (!text.trim()) return;
+      dropNonce.current += 1;
+      setIncoming({ text, nonce: dropNonce.current });
+      setTimeout(() => document.getElementById("post-event-reflection")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+    } catch { /* unreadable file — ignore */ }
+  };
 
   return (
-    <div className="space-y-6">
+    <div
+      // stopPropagation so the drop is handled HERE as debrief material, not bubbled to the
+      // app-level handler that opens the create-event flow + jumps to the Events page.
+      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setOver(true); }}
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setOver(true); }}
+      onDragLeave={(e) => { e.stopPropagation(); if (e.currentTarget === e.target) setOver(false); }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); void onDropMaterial(e.dataTransfer.files?.[0]); }}
+      className="relative space-y-6"
+    >
+      {over && (
+        <div className="absolute inset-0 z-20 rounded-2xl bg-white/85 border-2 border-dashed border-gray-800 flex items-center justify-center pointer-events-none">
+          <span className="inline-flex items-center gap-2 text-sm text-gray-800"><Paperclip className="w-4 h-4" /> Drop debrief / post-event material to process</span>
+        </div>
+      )}
       {future && <ProjectionBanner label="Post-event" />}
 
-      {/* 1 · How it went — real captured data, no projections */}
+      {/* 0 · Settling lifecycle — just wrapped → debriefed → settled + recorded outcome */}
+      {!future && <SettlingTracker plan={plan} spent={spent} target={target} onApplied={onApplied} />}
+
+      {/* 1 · How it went — real captured data, no projections. The 4th metric is the event's
+          purpose signal: candidates (hiring) / clients (client) / none (community). */}
       <section>
-        <h3 className="text-lg font-medium mb-3">How it went</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="text-lg font-medium">How it went</h3>
+          <span className={`text-[11px] px-2 py-0.5 rounded-full ${focus === "hiring" ? "bg-violet-50 text-violet-700 border border-violet-200" : focus === "client" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-gray-100 text-gray-500"}`}>{FOCUS_LABEL[focus]}</span>
+        </div>
+        <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${focus === "neither" ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>
           <div className="bg-white rounded-2xl border border-border p-5">
             <p className="text-[13px] text-gray-500 mb-1">Turnout</p>
             <p className="text-2xl font-semibold text-gray-900">{checkedIn ?? "—"}<span className="text-base text-gray-400"> / {rsvp ?? "—"}</span></p>
@@ -1777,11 +2498,21 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
             <p className="text-2xl font-semibold text-gray-900">{perHead != null ? money(perHead) : "—"}</p>
             <p className="text-[11px] text-gray-400">spend ÷ checked in</p>
           </div>
-          <div className="bg-white rounded-2xl border border-border p-5">
-            <p className="text-[13px] text-gray-500 mb-1">Flagged in Greenhouse</p>
-            <p className="text-2xl font-semibold text-gray-900">{flagged || "—"}</p>
-            <p className="text-[11px] text-gray-400">attendees with an application</p>
-          </div>
+          {/* purpose signal — hiring shows candidates, client shows clients, community shows nothing */}
+          {focus === "hiring" && (
+            <div className="bg-white rounded-2xl border border-border p-5">
+              <p className="text-[13px] text-gray-500 mb-1">Flagged in Greenhouse</p>
+              <p className="text-2xl font-semibold text-gray-900">{flagged || "—"}</p>
+              <p className="text-[11px] text-gray-400">attendees with an application</p>
+            </div>
+          )}
+          {focus === "client" && (
+            <div className="bg-white rounded-2xl border border-border p-5">
+              <p className="text-[13px] text-gray-500 mb-1">Clients & partners</p>
+              <p className="text-2xl font-semibold text-gray-900">{clientCount || "—"}</p>
+              <p className="text-[11px] text-gray-400">in the room</p>
+            </div>
+          )}
         </div>
       </section>
 
@@ -1789,7 +2520,7 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
       <CloseItOut plan={plan} onOpenDeliverable={onOpenDeliverable} onOpenPeople={onOpenPeople} onApplied={onApplied} />
 
       {/* 3 · Post-event reflection — gated on the debrief; doesn't block the rest */}
-      <ReflectionSection plan={plan} onApplied={onApplied} />
+      <ReflectionSection plan={plan} onApplied={onApplied} incoming={incoming} />
 
       {/* 4 · Who mattered — summary + entry point only; the tagging workspace lives on People */}
       <WhoMattered eventId={plan.id} onOpenPeople={onOpenPeople} />
@@ -1924,102 +2655,140 @@ function CloseItOut({ plan, onOpenDeliverable, onOpenPeople, onApplied }: { plan
   );
 }
 
-// Reflection: two states. Waiting (debrief scheduled / none yet) → manual-notes fallback always
-// available. Notes → existing extract pipeline → propose-then-confirm items, grouped by route.
-interface ReflectionProposal { lessons: string[]; followUps: string[]; outcome: string }
-function ReflectionSection({ plan, onApplied }: { plan: EventPlanning; onApplied: () => void }) {
+// Reflection: a DEBRIEF transcript → the debrief extractor → propose-then-confirm, routed by
+// what a debrief actually produces. Lessons→template (via guardrails→settle), follow-ups→
+// deliverables, outcome→verdict, actuals→budget, people→proposed tags in the People inbox.
+type DebriefProposal = DebriefExtract & { peopleResult?: { proposed: number; unmatched: string[] } };
+function ReflectionSection({ plan, onApplied, incoming }: { plan: EventPlanning; onApplied: () => void; incoming?: { text: string; nonce: number } | null }) {
   const debrief = plan.deliverables.find((d) => /debrief/i.test(d.title));
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [proposal, setProposal] = useState<ReflectionProposal | null>(null);
+  const [p, setP] = useState<DebriefProposal | null>(null);
   const [open, setOpen] = useState(false);
-  // Local guardrail list so confirmed lessons/outcomes accumulate without a stale snapshot.
   const reflectionsRef = useRef<string[]>(plan.reflections);
+  const notesFileRef = useRef<HTMLInputElement>(null);
   const postPhase = plan.phases[plan.phases.length - 1]?.name ?? "Wrap-up";
   const due = plan.date ? addDays(plan.date, 1) : null;
 
-  const extract = async () => {
-    if (!notes.trim()) return;
+  const extract = async (override?: string) => {
+    const t = (override ?? notes).trim();
+    if (!t) return;
     setBusy(true); setErr(null);
     try {
-      const b = await extractBrief(notes);
-      setProposal({
-        lessons: [...(b.guardrails ?? []), ...(b.heuristics ?? [])].filter(Boolean),
-        followUps: (b.deliverables ?? []).map((d) => d.title).filter(Boolean),
-        outcome: (b.overview ?? "").trim(),
-      });
+      saveDebriefNotes(plan.id, t).catch(() => {}); // keep the raw transcript as event knowledge
+      const d = await extractDebrief(t);
+      // People go straight to the People confirm-inbox as PROPOSED tags (matched by name).
+      const peopleResult = d.peopleTags.length ? await proposeTagsFromDebrief(plan.id, d.peopleTags).catch(() => ({ proposed: 0, unmatched: [] as string[] })) : { proposed: 0, unmatched: [] };
+      setP({ ...d, peopleResult });
     } catch (e: any) { setErr(e?.message ?? String(e)); }
     finally { setBusy(false); }
   };
 
-  const drop = (kind: keyof ReflectionProposal, i: number) =>
-    setProposal((p) => (!p ? p : kind === "outcome" ? { ...p, outcome: "" } : { ...p, [kind]: (p[kind] as string[]).filter((_, j) => j !== i) }));
+  // Material dropped anywhere on the post-event view arrives here as debrief notes → extract.
+  useEffect(() => {
+    if (!incoming?.text?.trim()) return;
+    setNotes(incoming.text); setOpen(true);
+    void extract(incoming.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming?.nonce]);
 
-  const addLesson = async (kind: "lessons" | "outcome", i: number, text: string) => {
+  const dropLesson = (i: number) => setP((s) => (s ? { ...s, lessons: s.lessons.filter((_, j) => j !== i) } : s));
+  const dropFollowUp = (i: number) => setP((s) => (s ? { ...s, followUps: s.followUps.filter((_, j) => j !== i) } : s));
+  const dropActual = (i: number) => setP((s) => (s ? { ...s, actuals: s.actuals.filter((_, j) => j !== i) } : s));
+  const clearOutcome = () => setP((s) => (s ? { ...s, outcome: { ...s.outcome, verdict: "" } } : s));
+
+  // Lessons → event guardrails (carried to the TEMPLATE on settle). Prefer the prescribed change.
+  const addLesson = async (i: number, text: string) => {
     reflectionsRef.current = [...reflectionsRef.current, text];
     await setEventReflections(plan.id, reflectionsRef.current).catch(() => {});
-    drop(kind, i); onApplied();
+    dropLesson(i); onApplied();
   };
-  const addFollowUp = async (i: number, title: string) => {
-    await addDeliverable(plan.id, { title, phase: postPhase, ownerRole: null, dueDate: due, offsetStart: 1 }).catch(() => {});
-    drop("followUps", i); onApplied();
+  const addFollowUp = async (i: number, action: string) => {
+    await addDeliverable(plan.id, { title: action, phase: postPhase, ownerRole: null, dueDate: due, offsetStart: 1 }).catch(() => {});
+    dropFollowUp(i); onApplied();
+  };
+  const addOutcome = async (verdict: string) => {
+    await setEventVerdict(plan.id, verdict).catch(() => {});
+    clearOutcome(); onApplied();
+  };
+  const addActual = async (i: number, line: string, amount: number | null) => {
+    if (plan.budget?.id) await upsertBudgetLines(plan.budget.id, [{ label: line, amount }]).catch(() => {});
+    dropActual(i); onApplied();
   };
 
-  const ItemRow = ({ text, route, onConfirm, onDismiss }: { text: string; route: string; onConfirm: () => void; onDismiss: () => void }) => (
+  const ItemRow = ({ text, sub, route, onConfirm, onDismiss }: { text: string; sub?: string; route: string; onConfirm: () => void; onDismiss: () => void }) => (
     <li className="flex items-start gap-2 rounded-lg border border-gray-200 px-3 py-2">
-      <span className="flex-1 min-w-0 text-sm text-gray-800">{text}<span className="ml-2 text-[11px] text-gray-400">→ {route}</span></span>
+      <span className="flex-1 min-w-0 text-sm text-gray-800">{text}{sub && <span className="block text-[12px] text-gray-500">{sub}</span>}<span className="ml-2 text-[11px] text-gray-400">→ {route}</span></span>
       <button onClick={onConfirm} className="shrink-0 text-emerald-600 hover:text-emerald-800" title="Confirm"><Check className="w-4 h-4" /></button>
       <button onClick={onDismiss} className="shrink-0 text-gray-300 hover:text-red-600" title="Dismiss"><X className="w-4 h-4" /></button>
     </li>
   );
 
-  const proposedCount = proposal ? proposal.lessons.length + proposal.followUps.length + (proposal.outcome ? 1 : 0) : 0;
+  const count = p ? p.lessons.length + p.followUps.length + p.actuals.length + (p.outcome.verdict ? 1 : 0) : 0;
+  const hasProposal = !!p && (count > 0 || (p.peopleResult?.proposed ?? 0) > 0);
 
   return (
-    <section>
+    <section id="post-event-reflection" className="scroll-mt-24">
       <h3 className="text-lg font-medium mb-3">Post-event reflection</h3>
       <div className="bg-white rounded-2xl border border-border p-5 space-y-4">
         {/* waiting state */}
-        {proposedCount === 0 && (
+        {!hasProposal && (
           <div className="flex items-start gap-3">
             <Lightbulb className="w-5 h-5 text-gray-300 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               {debrief
-                ? <p className="text-sm text-gray-600">Debrief scheduled{debrief.dueDate ? ` for ${fmtShort(debrief.dueDate)}` : ""} · its notes will sync here. You can also paste notes now.</p>
-                : <p className="text-sm text-gray-600">No debrief scheduled. Paste meeting notes (or any reflection) and EventHub will extract proposed lessons, follow-ups, and outcomes.</p>}
+                ? <p className="text-sm text-gray-600">Debrief scheduled{debrief.dueDate ? ` for ${fmtShort(debrief.dueDate)}` : ""} · its notes will sync here. <span className="text-gray-400">Drop a transcript anywhere on this page, or paste notes below.</span></p>
+                : <p className="text-sm text-gray-600">No debrief scheduled. <span className="text-gray-400">Drop a transcript (.txt/.vtt) anywhere on this page, or paste notes below</span> — EventHub extracts learnings, follow-ups, outcome, actuals, and people.</p>}
+              {plan.debriefNotes && <p className="text-[12px] text-gray-400 mt-1">Debrief notes saved as event knowledge.</p>}
             </div>
           </div>
         )}
 
         {/* manual notes input */}
-        {!open && proposedCount === 0 ? (
-          <button onClick={() => setOpen(true)} className="text-sm text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-4 h-4" /> Paste debrief notes</button>
-        ) : proposedCount === 0 ? (
+        {!open && !hasProposal ? (
+          <div className="flex items-center gap-3">
+            <button onClick={() => setOpen(true)} className="text-sm text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-4 h-4" /> Paste debrief notes</button>
+            <button onClick={() => notesFileRef.current?.click()} className="text-sm text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"><Paperclip className="w-4 h-4" /> Attach a transcript</button>
+            <input ref={notesFileRef} type="file" hidden onChange={(e) => { const f = e.target.files?.[0]; e.currentTarget.value = ""; if (f) void f.text().then((t) => { setNotes(t); setOpen(true); void extract(t); }); }} />
+          </div>
+        ) : !hasProposal ? (
           <div className="space-y-2">
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={6} placeholder="Paste the debrief transcript or notes…" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
             <div className="flex items-center gap-2">
-              <button onClick={extract} disabled={busy || !notes.trim()} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">{busy ? "Extracting…" : "Extract"}</button>
+              <button onClick={() => extract()} disabled={busy || !notes.trim()} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">{busy ? "Extracting…" : "Extract"}</button>
               <button onClick={() => { setOpen(false); setNotes(""); }} className="text-sm text-gray-500 hover:text-gray-800">Cancel</button>
               {err && <span className="text-sm text-red-600">{err}</span>}
             </div>
           </div>
         ) : null}
 
-        {/* propose-then-confirm, grouped by route */}
-        {proposal && proposedCount > 0 && (
+        {/* propose-then-confirm, by debrief route */}
+        {p && hasProposal && (
           <div className="space-y-4">
-            <p className="text-[13px] text-gray-500">Proposed from the notes — confirm what's real, dismiss the rest. Nothing's applied until you confirm.</p>
-            {proposal.lessons.length > 0 && (
-              <div><p className="text-[13px] font-medium text-gray-700 mb-1">Lessons</p><ul className="space-y-1.5">{proposal.lessons.map((t, i) => <ItemRow key={i} text={t} route="guardrails" onConfirm={() => addLesson("lessons", i, t)} onDismiss={() => drop("lessons", i)} />)}</ul></div>
+            <p className="text-[13px] text-gray-500">From the debrief{p.focus !== "unclear" ? ` · read as ${p.focus}` : ""} — confirm what's real, dismiss the rest. Nothing's applied until you confirm.</p>
+            {p.lessons.length > 0 && (
+              <div><p className="text-[13px] font-medium text-gray-700 mb-1">Learnings → template</p><ul className="space-y-1.5">{p.lessons.map((l, i) => {
+                const text = l.proposedChange || l.text;
+                return <ItemRow key={i} text={text} sub={l.proposedChange && l.text !== l.proposedChange ? l.text : undefined} route={l.area || "template"} onConfirm={() => addLesson(i, text)} onDismiss={() => dropLesson(i)} />;
+              })}</ul></div>
             )}
-            {proposal.followUps.length > 0 && (
-              <div><p className="text-[13px] font-medium text-gray-700 mb-1">Follow-ups</p><ul className="space-y-1.5">{proposal.followUps.map((t, i) => <ItemRow key={i} text={t} route="deliverable" onConfirm={() => addFollowUp(i, t)} onDismiss={() => drop("followUps", i)} />)}</ul></div>
+            {p.followUps.length > 0 && (
+              <div><p className="text-[13px] font-medium text-gray-700 mb-1">Follow-ups → deliverables</p><ul className="space-y-1.5">{p.followUps.map((f, i) => <ItemRow key={i} text={f.action} sub={[f.owner, f.person].filter(Boolean).join(" · ") || undefined} route="deliverable" onConfirm={() => addFollowUp(i, f.action)} onDismiss={() => dropFollowUp(i)} />)}</ul></div>
             )}
-            {proposal.outcome && (
-              <div><p className="text-[13px] font-medium text-gray-700 mb-1">Outcome</p><ul className="space-y-1.5"><ItemRow text={proposal.outcome} route="event verdict" onConfirm={() => addLesson("outcome", 0, proposal.outcome)} onDismiss={() => drop("outcome", 0)} /></ul></div>
+            {p.outcome.verdict && (
+              <div><p className="text-[13px] font-medium text-gray-700 mb-1">Outcome → verdict</p><ul className="space-y-1.5"><ItemRow text={p.outcome.verdict} sub={p.outcome.turnoutNote || undefined} route="event verdict" onConfirm={() => addOutcome(p.outcome.verdict)} onDismiss={clearOutcome} /></ul></div>
             )}
-            <button onClick={() => { setProposal(null); setNotes(""); setOpen(false); }} className="text-[13px] text-gray-500 hover:text-gray-800">Done</button>
+            {p.actuals.length > 0 && (
+              <div><p className="text-[13px] font-medium text-gray-700 mb-1">Actuals → budget</p><ul className="space-y-1.5">{p.actuals.map((a, i) => <ItemRow key={i} text={`${a.line}${a.amount != null ? ` · ${money(a.amount)}` : ""}`} sub={a.note || undefined} route="budget line" onConfirm={() => addActual(i, a.line, a.amount)} onDismiss={() => dropActual(i)} />)}</ul></div>
+            )}
+            {(p.peopleResult?.proposed ?? 0) > 0 && (
+              <p className="text-[13px] text-gray-600">{p.peopleResult!.proposed} {p.peopleResult!.proposed === 1 ? "person" : "people"} flagged → review in the <span className="font-medium">People</span> tagging inbox.{p.peopleResult!.unmatched.length ? ` (${p.peopleResult!.unmatched.length} name${p.peopleResult!.unmatched.length === 1 ? "" : "s"} not matched to an attendee)` : ""}</p>
+            )}
+            {p.peopleTags.length > 0 && (p.peopleResult?.proposed ?? 0) === 0 && (
+              <p className="text-[13px] text-gray-400">{p.peopleTags.length} person mention{p.peopleTags.length === 1 ? "" : "s"} found, but none matched this event's attendees.</p>
+            )}
+            <button onClick={() => { setP(null); setNotes(""); setOpen(false); }} className="text-[13px] text-gray-500 hover:text-gray-800">Done</button>
           </div>
         )}
       </div>
@@ -2283,17 +3052,30 @@ function StringListEditor({ title, initial, onSave, variant, addLabel, placehold
   );
 }
 
-function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void }) {
+function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number }) {
   const facts = buildFacts(plan);
   // Phase-aware view: the timeline's date-derived "now" sets the default; clicking a node
   // previews another phase's view (Overview-internal state, not tab navigation).
   const { markers, currentKey } = deriveMarkers(plan);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Jump to the post-event reflection (e.g. from the "Post-event reflections & insights"
+  // deliverable): force the post view, then scroll to the reflection section once it mounts.
+  useEffect(() => {
+    if (!reflectionJump) return;
+    const postKey = markers.find((m) => m.view === "post")?.key;
+    if (postKey) setSelectedKey(postKey);
+    const t = setTimeout(() => document.getElementById("post-event-reflection")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reflectionJump]);
   const selKey = selectedKey ?? currentKey;
   const selIdx = markers.findIndex((m) => m.key === selKey);
   const curIdx = markers.findIndex((m) => m.key === currentKey);
   const selectedView: ViewMode = markers[selIdx]?.view ?? "planning";
   const temporal: "past" | "current" | "future" = selIdx === curIdx ? "current" : selIdx > curIdx ? "future" : "past";
+  // A settled event is LOCKED: the timeline becomes a static record and the body collapses to a
+  // read-only rundown — no moving between phases.
+  const locked = plan.settleState === "settled";
   // Use the cached digest; only regenerate on Resync (which also pulls Gmail).
   const [summary, setSummary] = useState<string | null>(plan.overviewSummary);
   const [resyncing, setResyncing] = useState(false);
@@ -2339,11 +3121,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
 
   return (
     <div className="space-y-6">
-      {/* Add-to-Google-Calendar prompt — only while unsynced. Once synced, the green calendar
-          icon in the header conveys it (no persistent banner). */}
-      {plan.date && !plan.gcalEventId && (
+      {/* Past or locked → "what would make this a complete record" (+ drop-to-fill), so any
+          done event can be finished into a complete record. Upcoming → the GCal prompt. */}
+      {(locked || temporal === "past") ? (
+        <CompletenessPanel plan={plan} eventId={eventId} onApplied={onApplied} />
+      ) : plan.date && !plan.gcalEventId ? (
         <GCalSync eventId={eventId} synced={false} variant="action" onSynced={onApplied} />
-      )}
+      ) : null}
 
       {/* Status digest — synthesized one-liner by default; Claude bullets after Resync. */}
       <div className="bg-white rounded-2xl border border-border p-4">
@@ -2362,11 +3146,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
         {resyncMsg && <p className="text-[15px] text-gray-400 mt-2">{resyncMsg}</p>}
       </div>
 
-      {/* Interactive phase timeline — full width */}
-      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} />
+      {/* Phase timeline — interactive while live; a static record once settled/locked. */}
+      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
 
-      {/* Phase-aware body — the timeline's selected node decides which view shows. */}
-      {selectedView === "day-before" ? (
+      {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
+      {locked ? (
+        <LockedRundown plan={plan} assignedTarget={tgt} onOpenPeople={onOpenPeople} onApplied={onApplied} />
+      ) : selectedView === "day-before" ? (
         <DayBeforeView plan={plan} temporal={temporal} />
       ) : selectedView === "day-of" ? (
         <DayOfView plan={plan} temporal={temporal} />
@@ -2395,7 +3181,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
               </div>
               {/* Grows to fill the right column so its bottom aligns with the Linear box on the left. */}
               <div className="flex-1 flex flex-col">
-                <StringListEditor title="Guardrails" initial={plan.reflections} onSave={(v) => setEventReflections(eventId, v).catch(() => {})} variant="bullets" addLabel="Add note" placeholder="Add a guardrail" empty="No guardrails yet." />
+                <StringListEditor title="Learnings" initial={plan.reflections} onSave={(v) => setEventReflections(eventId, v).catch(() => {})} variant="bullets" addLabel="Add note" placeholder="Add a learning" empty="No learnings yet." />
               </div>
             </div>
           </div>
@@ -2416,8 +3202,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
 
       {/* Carried lessons */}
       <div>
-        <h3 className="text-lg font-medium mb-3">Carried lessons</h3>
-        <CarriedLessons eventId={eventId} />
+        <h3 className="text-lg font-medium mb-3">Carried learnings</h3>
+        <CarriedLessons eventId={eventId} onOpenEvent={onOpenEvent} />
       </div>
     </div>
   );
@@ -2578,12 +3364,55 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   const [plan, setPlan] = useState<EventPlanning | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
+  const [wrappedView, setWrappedView] = useState<"event" | "template">("event"); // segmented toggle on a wrapped event
+  const [eventSubTab, setEventSubTab] = useState<"record" | "deliverables" | "budget" | "people">("record"); // tabs UNDER "This event"
+  const [reopened, setReopened] = useState(false); // wrapped event re-opened to the normal workspace
   const [deliverableJump, setDeliverableJump] = useState<string | null>(null); // Overview → a specific deliverable
+  const [reflectionJump, setReflectionJump] = useState(0); // Deliverables → the post-event reflection page
   // People is a tab here (keeps the event header/tabs); links set the status it opens on.
   const [peopleStatus, setPeopleStatus] = useState<'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers'>('all');
   const goPeople = (status: typeof peopleStatus) => { setPeopleStatus(status); setTab('people'); };
   const [version, setVersion] = useState(0); // bumps on each fetch → remounts tab content with fresh data
   const [reload, setReload] = useState(0);   // bumped when an auto-update applies a change
+
+  // Drag-and-drop ONTO an open event = project knowledge for THIS event (context + gap-fill), never
+  // a new-event brief. We stop the drop from bubbling to the app-level create/backfill handler.
+  const [dropOver, setDropOver] = useState(false);
+  const [dropBusy, setDropBusy] = useState(false);
+  const [dropMsg, setDropMsg] = useState<string | null>(null);
+  const dropDepth = useRef(0);
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+  const onPageDrop = async (file: File) => {
+    if (!plan) return;
+    setDropBusy(true); setDropMsg(null);
+    try {
+      const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
+      const { message, applied } = await ingestEventDoc(eventId, file, gapKeys);
+      setDropMsg(message);
+      if (applied) setReload((r) => r + 1);
+    } catch (e: any) { setDropMsg(e?.message ?? String(e)); }
+    finally { setDropBusy(false); }
+  };
+  // Auto-dismiss the result toast a few seconds after it lands.
+  useEffect(() => {
+    if (!dropMsg) return;
+    const id = setTimeout(() => setDropMsg(null), 6000);
+    return () => clearTimeout(id);
+  }, [dropMsg]);
+  // Always clear the drag overlay once a drop ends anywhere — capture phase, so it fires even when
+  // an inner zone (completeness panel, budget area) stops the event from bubbling to the page.
+  useEffect(() => {
+    const reset = () => { dropDepth.current = 0; setDropOver(false); };
+    window.addEventListener("drop", reset, true);
+    window.addEventListener("dragend", reset, true);
+    return () => { window.removeEventListener("drop", reset, true); window.removeEventListener("dragend", reset, true); };
+  }, []);
+  const pageDrag = {
+    onDragEnter: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); dropDepth.current++; setDropOver(true); },
+    onDragOver: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); },
+    onDragLeave: (e: React.DragEvent) => { e.stopPropagation(); dropDepth.current = Math.max(0, dropDepth.current - 1); if (dropDepth.current === 0) setDropOver(false); },
+    onDrop: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); dropDepth.current = 0; setDropOver(false); const f = e.dataTransfer.files?.[0]; if (f) void onPageDrop(f); },
+  };
 
   // Refetch when the tab changes (or an auto-update applies) so the Overview and each
   // section reflect edits made on the others (every mutation writes to the DB).
@@ -2625,12 +3454,27 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   if (plan.isTemplate) return <TemplateView plan={plan} eventId={eventId} onExit={onBack} onOpenEvent={onOpenEvent} onReview={onReview} />;
 
   const headcount = plan.capacity != null ? `${plan.rsvp ?? 0} / ${plan.capacity} expected` : plan.rsvp != null ? `${plan.rsvp} expected` : "—";
+  // One "wrapped" concept: a settled event (backfill / post-event tail) OR a macro_stage Wrapped one.
+  const wrapped = plan.settleState === "settled" || plan.macroStage === "Wrapped";
 
   return (
-    <div>
+    <div {...pageDrag} className="relative">
+      {/* Dropping a file on an open event adds it as project knowledge for THIS event — not a new one. */}
+      {dropOver && (
+        <div className="fixed inset-0 z-[90] bg-primary/5 border-4 border-dashed border-primary/40 flex items-center justify-center pointer-events-none">
+          <span className="text-lg text-gray-700 bg-white/90 px-4 py-2 rounded-full inline-flex items-center gap-2">
+            <Paperclip className="w-5 h-5" /> Drop to add to “{plan.title}” as project context
+          </span>
+        </div>
+      )}
+      {(dropBusy || dropMsg) && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[95] inline-flex items-center gap-2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg">
+          {dropBusy ? <><Loader2 className="w-4 h-4 animate-spin" /> Adding to this event…</> : <><span>{dropMsg}</span><button onClick={() => setDropMsg(null)} className="text-gray-400 hover:text-white" aria-label="Dismiss"><X className="w-4 h-4" /></button></>}
+        </div>
+      )}
       {back}
 
-      <SourceMaterials items={plan.sourceMaterials} className="mb-6" />
+      <SourceMaterials items={plan.sourceMaterials} className="mb-6" onDelete={async (m) => { await deleteSourceMaterial(eventId, m.url).catch(() => {}); setReload((r) => r + 1); }} />
 
       {/* Header */}
       <div className="relative bg-white rounded-2xl border border-border p-8 mb-6">
@@ -2710,6 +3554,48 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         )}
       </div>
 
+      {wrapped && !reopened ? (
+        /* WRAPPED layout — a record + a pattern, not a workspace. Toggle replaces the tab row.
+           "Wrapped" = settled (backfill / post-event tail) OR macro_stage Wrapped — one concept. */
+        <>
+          <div className="border-b border-gray-200 mb-6 flex items-center justify-between gap-3">
+            <div className="inline-flex rounded-lg bg-gray-100 p-0.5 my-2">
+              {([["event", "This event"], ["template", "Template"]] as const).map(([k, label]) => (
+                <button key={k} onClick={() => setWrappedView(k)} className={`px-3 py-1 rounded-md text-sm transition-colors ${wrappedView === k ? "bg-white shadow-sm text-gray-900" : "text-gray-500 hover:text-gray-800"}`}>{label}</button>
+              ))}
+            </div>
+            <button onClick={() => setReopened(true)} className="text-[13px] text-gray-400 hover:text-gray-700">Reopen workspace</button>
+          </div>
+          {wrappedView === "template" ? (
+            <WrappedTemplate plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenEvent={onOpenEvent} />
+          ) : (
+            <div>
+              {/* Sub-tabs UNDER "This event" (People + Deliverables live here, not on par with Template). */}
+              <div className="flex items-center gap-4 mb-5 text-sm">
+                {([["record", "Summary"], ["deliverables", "Deliverables"], ["budget", "Budget"], ["people", "People"]] as const).map(([k, label]) => (
+                  <button key={k} onClick={() => setEventSubTab(k)} className={`pb-1 border-b-2 transition-colors ${eventSubTab === k ? "border-gray-900 text-gray-900 font-medium" : "border-transparent text-gray-500 hover:text-gray-800"}`}>{label}</button>
+                ))}
+              </div>
+              <div key={eventSubTab}>
+                {eventSubTab === "record" && (
+                  <div className="space-y-6">
+                    {/* gaps + drop-to-fill (budget, turnout, …) — what would make this record complete */}
+                    <CompletenessPanel plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
+                    <LockedRundown plan={plan} assignedTarget={plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null} onOpenPeople={() => setEventSubTab("people")} onApplied={() => setReload((r) => r + 1)} />
+                  </div>
+                )}
+                {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}
+                {eventSubTab === "budget" && (plan.budget
+                  ? <BudgetTracker budget={plan.budget} eventId={eventId} engagements={plan.engagements} />
+                  : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
+                {eventSubTab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+      <>
+      {reopened && <div className="mb-3"><button onClick={() => setReopened(false)} className="text-[13px] text-gray-500 hover:text-gray-900">← Back to wrapped view</button></div>}
       {/* Tabs — brand Tabs (line variant = underline-on-active). Content switch stays below. */}
       <div className="border-b border-gray-200 mb-6">
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
@@ -2723,16 +3609,16 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
 
       <div key={`${tab}-${version}`}>
         {tab === "overview" && (plan.setupComplete
-          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} />
+          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} />
           : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
         {tab === "budget" && (plan.budget
-          ? <BudgetTracker budget={plan.budget} eventId={eventId} />
+          ? <BudgetTracker budget={plan.budget} eventId={eventId} engagements={plan.engagements} />
           : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && (
           <div className="space-y-6">
-            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} />
+            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
           </div>
         )}
@@ -2746,9 +3632,13 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           </div>
         )}
       </div>
+      </>
+      )}
 
-      {/* Fixed lower-right pill that expands a Linear update composer — available on every tab. */}
-      <LinearUpdateBox eventId={eventId} linearSynced={!!plan.linearProjectId} onApplied={() => setReload((r) => r + 1)} variant="floating" />
+      {/* Linear update composer — workspace only; a wrapped record has no active worklist. */}
+      {!(wrapped && !reopened) && (
+        <LinearUpdateBox eventId={eventId} linearSynced={!!plan.linearProjectId} onApplied={() => setReload((r) => r + 1)} variant="floating" />
+      )}
     </div>
   );
 }

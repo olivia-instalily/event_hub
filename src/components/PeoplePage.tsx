@@ -667,11 +667,11 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
               placeholder="Search people…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-10 w-64 pl-10"
+              className="h-10 w-64 pl-10 text-sm"
             />
           </div>
           <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as string)} items={[{ value: "all", label: "All Types" }, ...PERSON_TYPES.map((t) => ({ value: t, label: t }))]}>
-            <SelectTrigger className="h-10 w-40"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-10 data-[size=default]:h-10 w-40 text-sm font-normal"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
               {PERSON_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
@@ -682,7 +682,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
             onValueChange={(v) => { if (v === "__create__") { setNewLabelOpen(true); return; } setLabelFilter(v as string); }}
             items={[{ value: "all", label: "All Labels" }, ...labels.map((l) => ({ value: l.id, label: l.name })), { value: "__create__", label: "+ Create label…" }]}
           >
-            <SelectTrigger className="h-10 w-44"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-10 data-[size=default]:h-10 w-44 text-sm font-normal"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Labels</SelectItem>
               {labels.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
@@ -705,7 +705,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
             <Select value={dateRange} onValueChange={(v) => setDateRange(v as typeof dateRange)} items={[
               { value: "all", label: "Any time" }, { value: "week", label: "Past week" }, { value: "month", label: "Past month" }, { value: "3months", label: "Past 3 months" }, { value: "year", label: "Past year" },
             ]}>
-              <SelectTrigger className="h-10 w-40"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-10 data-[size=default]:h-10 w-40 text-sm font-normal"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Any time</SelectItem>
                 <SelectItem value="week">Past week</SelectItem>

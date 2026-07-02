@@ -2,9 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, ExternalLink, Loader2, Send, X } from "lucide-react";
 import { Button } from "@instalily/ui/button";
 import {
-  detectUpdate, setDeliverableStatus, setEngagementStage, recordEventUpdate, syncEventToLinear,
+  detectUpdate, setDeliverableStatus, setAllDeliverablesStatus, getDeliverableCounts, setEngagementStage, recordEventUpdate, syncEventToLinear,
   getDeliverableLinear,
 } from "../lib/db";
+
+// A bulk "mark everything done" instruction — applies to ALL deliverables, not one. The single-match
+// detect-update path can't express "all", so catch it before triage. Requires a complete-ish verb
+// AND an everything-ish scope ("all", "every", "everything") so a single-task note isn't swept up.
+function isBulkComplete(t: string): boolean {
+  const s = t.toLowerCase();
+  const done = /\b(complete[d]?|finish(ed)?|done|close[d]?|mark(ed)?\s+(as\s+)?(done|complete))\b/.test(s);
+  const all = /\b(all|every(thing)?|each)\b/.test(s);
+  return done && all;
+}
 
 // Pull a Linear issue identifier (e.g. "EVT-12") out of its web url for a friendly label.
 function ticketLabel(url: string | null): string {
@@ -37,10 +47,12 @@ export function LinearUpdateBox({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // A bulk "mark everything done" is held here pending explicit confirmation (it moves many tickets).
+  const [pending, setPending] = useState<{ text: string; open: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   // Floating box: the result confirmation lingers; clicking outside the box (or Escape) dismisses it.
-  const close = () => { setOpen(false); setResult(null); setErr(null); };
+  const close = () => { setOpen(false); setResult(null); setErr(null); setPending(null); };
   useEffect(() => {
     if (variant !== "floating" || !open) return;
     const onDown = (e: MouseEvent) => { if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) close(); };
@@ -53,6 +65,17 @@ export function LinearUpdateBox({
   const submit = async () => {
     const t = text.trim();
     if (!t) return;
+    // Bulk "mark everything done" moves many tickets at once — don't act on it directly. Look up
+    // how many are still open and ask for explicit confirmation first (see the confirm bar below).
+    if (isBulkComplete(t)) {
+      setBusy(true); setErr(null); setResult(null);
+      try {
+        const { open: openCount } = await getDeliverableCounts(eventId);
+        setPending({ text: t, open: openCount });
+      } catch (e: any) { setErr(e?.message ?? String(e)); }
+      finally { setBusy(false); }
+      return;
+    }
     setBusy(true); setErr(null); setResult(null);
     try {
       const p = await detectUpdate(eventId, t, "linear", null);
@@ -90,16 +113,60 @@ export function LinearUpdateBox({
     }
   };
 
+  // Confirmed bulk close-out: mark ALL deliverables Done, then mirror the whole set to Linear
+  // (linear-sync pushes every deliverable's state) so no ticket is left open.
+  const confirmBulk = async () => {
+    if (!pending) return;
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const n = await setAllDeliverablesStatus(eventId, "Done");
+      await recordEventUpdate(eventId, { source: "linear", summary: "Marked all deliverables Done", detail: pending.text });
+      let note = "";
+      if (linearSynced) {
+        try { const r = await syncEventToLinear(eventId); note = r?.synced != null ? ` · ${r.synced} ticket${r.synced === 1 ? "" : "s"} moved in Linear` : ""; }
+        catch { note = " · couldn't reach Linear — tickets not updated"; }
+      }
+      setResult({ text: `Marked ${n} deliverable${n === 1 ? "" : "s"} Done${note}` });
+      setText("");
+      onApplied?.();
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setBusy(false); setPending(null);
+    }
+  };
+
   const composer = (
     <div className="space-y-2">
       <textarea
         value={text}
-        onChange={(e) => { setText(e.target.value); setResult(null); setErr(null); }}
+        onChange={(e) => { setText(e.target.value); setResult(null); setErr(null); setPending(null); }}
         onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit(); }}
         rows={variant === "floating" ? 3 : 2}
         placeholder="Drop a Linear update — e.g. “caterer contract signed”, “finished the run-of-show deck”…"
         className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 resize-y"
       />
+      {pending ? (
+        // Confirm bar for the bulk close-out — explicit, since it moves many tickets at once.
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="text-[13px] text-amber-900">
+            {pending.open === 0
+              ? "All deliverables are already marked Done — nothing to move."
+              : linearSynced
+                ? `Mark all ${pending.open} open deliverable${pending.open === 1 ? "" : "s"} Done and move their Linear ticket${pending.open === 1 ? "" : "s"} to completed?`
+                : `Mark all ${pending.open} open deliverable${pending.open === 1 ? "" : "s"} Done? (this event isn't synced to Linear)`}
+          </p>
+          <div className="flex items-center justify-end gap-2 mt-2">
+            <button onClick={() => setPending(null)} disabled={busy} className="px-3 py-1.5 text-[13px] text-gray-600 hover:text-gray-900">{pending.open === 0 ? "Dismiss" : "Cancel"}</button>
+            {pending.open > 0 && (
+              <Button size="sm" onClick={confirmBulk} disabled={busy}>
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
+                {linearSynced ? "Move all in Linear" : "Mark all Done"}
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : (
       <div className="flex items-center justify-between gap-2">
         <span className="text-[13px] min-w-0 truncate">
           {err ? (
@@ -123,6 +190,7 @@ export function LinearUpdateBox({
           Send
         </Button>
       </div>
+      )}
     </div>
   );
 

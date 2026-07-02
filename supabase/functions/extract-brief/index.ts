@@ -44,14 +44,28 @@ const SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          title: { type: "string", description: "a DEFINITE action item — an imperative task ('Book a coffee spot', 'Send the invite'), NOT a descriptive sentence" },
-          phase: { type: "string", description: "which phase name this belongs to; \"\" if unphased" },
+          title: { type: "string", description: "a DEFINITE action item — an imperative task ('Book a coffee spot', 'Send the invite'), NOT a descriptive sentence. In TEMPLATE MODE this is the GENERALIZED form (names/clients/specific case studies stripped)." },
+          phase: { type: "string", description: "which phase name this belongs to; \"\" if unphased. In TEMPLATE MODE assign by the task's FUNCTION (never dump everything in one phase)." },
           offsetStart: { type: ["number", "null"], description: "day offset relative to event day if a timing is stated (negative=before, 0=day-of, positive=after), else null" },
           offsetEnd: { type: ["number", "null"], description: "end of an offset range, else null" },
+          original: { type: "string", description: "TEMPLATE MODE ONLY: the ORIGINAL task text, when you generalized it (stripped a person/client/partner name or a specific case study). \"\" if unchanged, or for a concrete event." },
         },
-        required: ["title", "phase", "offsetStart", "offsetEnd"],
+        required: ["title", "phase", "offsetStart", "offsetEnd", "original"],
       },
       description: "every concrete to-do in the brief, especially from a plan/checklist section, WHETHER OR NOT it has a stated time.",
+    },
+    droppedForTemplate: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string", description: "the task that was removed" },
+          reason: { type: "string", description: "why it's too event-specific to keep in a reusable template" },
+        },
+        required: ["title", "reason"],
+      },
+      description: "TEMPLATE MODE ONLY: tasks removed because, once names are stripped, only a one-off remains (no reusable form). Empty for a concrete event.",
     },
     vendors: { type: "array", items: { type: "string" }, description: "vendor/venue categories implied (e.g. 'Coffee & pastries', 'Venue'). Empty if none." },
     staff: { type: "array", items: { type: "string" }, description: "staffing ROLES needed (the role, never a person's name). Empty if none." },
@@ -98,7 +112,7 @@ const SCHEMA = {
     },
     budgetTotal: { type: ["number", "null"], description: "total budget in USD if stated, else null" },
   },
-  required: ["title", "owner", "date", "startTime", "endTime", "location", "headcount", "audience", "format", "tag", "specificity", "overview", "guardrails", "heuristics", "phases", "deliverables", "vendors", "staff", "agenda", "walkthrough", "outreach", "budgetTotal"],
+  required: ["title", "owner", "date", "startTime", "endTime", "location", "headcount", "audience", "format", "tag", "specificity", "overview", "guardrails", "heuristics", "phases", "deliverables", "droppedForTemplate", "vendors", "staff", "agenda", "walkthrough", "outreach", "budgetTotal"],
 };
 
 const SYSTEM = `You extract structured planning data from an event brief for InstaLILY's internal
@@ -138,6 +152,46 @@ PHASES — name them from the brief's OWN section structure (e.g. "Plan it", "Ge
 there", "Run of show", "Say thanks", "Measure turnout"), in order. Do not impose a
 generic Planning/Day-of/Wrap scheme if the brief uses its own. Assign each deliverable
 to its phase by where it appears.
+
+TEMPLATE MODE — applies ONLY when you set specificity="template" (a reusable pattern, not a
+concrete dated instance). For specificity="event" DO NOT do any of this: keep person names, client
+and partner names, and specific case studies EXACTLY as written — they're correct for a real event.
+When (and only when) the output is a template, run TWO passes over the deliverables:
+
+  PASS 1 — PHASE ASSIGNMENT. Place each deliverable in the phase it belongs to BY FUNCTION; never
+  dump everything into one bucket like "Planning & coordination". Prefer the brief's own phase names;
+  if it has none, use functional buckets, e.g. for a co-hosted briefing:
+    • Setup & check-in — room/AV/bar setup, signage display, security/guest-list handoff, check-in
+    • Briefing & presentations — the content segments: case studies, demos, roundtable
+    • Social — post-event reception / rooftop / dinner
+    • Planning & coordination — GENUINE pre-event prep ONLY (finalize agenda, prep deck, print signage)
+  Assign by what the task DOES: "Set up AV for live demos" → Setup; "Run a case study with live demo"
+  → Briefing & presentations; "Serve rooftop pizza + drinks" → Social; only finalize/confirm/print/
+  assign prep stays in Planning & coordination. If you truly can't place one, put it in the closest
+  functional bucket — do not blanket-default.
+
+  PASS 2 — GENERALIZE. Transform each deliverable toward its most general REUSABLE form, and set
+  its "original" field to the pre-edit text whenever you change it:
+    1. Strip PERSON names → make it a role. "Set up check-in with Ayushi" → "Set up check-in station
+       (designated check-in lead)"; add "Check-in lead" to staff. The person leaves the task text; the
+       ROLE is captured in staff.
+    2. Strip CLIENT / PARTNER / COMPANY proper nouns → the type. "Deliver MDM playbook + Harrington
+       overview" → "Deliver the partner's playbook rollout + client overview". "Design InstaLILY × Bain
+       co-branded signage" → "Design co-branded signage (host × partner)". Keep the STRUCTURE, drop the
+       names.
+    3. Generalize a SPECIFIC case study → its reusable slot. "Run SRS sales case study with live demo"
+       → "Run a sales case study with live demo"; "Run Radwell Quote-to-Order case study" → "Run an
+       operations/supply-chain case study with demo". Capture "~2-3 themed case studies with demos",
+       not the accounts.
+    4. DROP if only meaningful for this one event. After stripping names, is a reusable task left, or
+       just a one-off? Reusable decisions stay ("Confirm whether photos are public or internal"); a
+       venue/date-specific quirk with no general form goes to droppedForTemplate with a short reason.
+       Bias: if generalizing leaves a vague/empty task, DROP it — a hollow template line is the failure
+       mode, a missing one is recoverable.
+  DO NOT strip generic proper nouns that are tools/categories (Slack, Luma, AV, HR) — only people,
+  clients, partners, and specific products/accounts. DO NOT over-strip: keep tasks actionable ("Run a
+  sales case study with live demo" is right; "Present something" is over-stripped). When unsure whether
+  a term is client-specific, prefer keep-but-generalize ("the partner's playbook") over drop.
 
 GUARDRAILS — only EXPLICIT stated principles/constraints/values, each a short standalone
 statement.
@@ -201,14 +255,28 @@ Deno.serve(async (req) => {
 
     const textBlock = (resp.content as any[]).find((b) => b.type === "text");
     if (!textBlock) return json({ error: "No extraction returned." }, 502);
-    let parsed: unknown;
+    let parsed: any;
     try { parsed = JSON.parse(textBlock.text); }
     catch { return json({ error: "Model returned invalid JSON.", raw: textBlock.text }, 502); }
+
+    // Deterministic backstop (templates only): strip an obvious trailing person reference the model
+    // may have left on a deliverable ("… with Ayushi", "(w/ Sam)"). Conservative — single capitalized
+    // token, not a known tool/category. Primary generalization is prompt-side; this is a net.
+    if (parsed?.specificity === "template" && Array.isArray(parsed.deliverables)) {
+      const GENERIC = new Set(["av", "slack", "luma", "hr", "it", "pr", "ai", "qa", "ceo", "cto", "vp", "us", "eu", "ui", "ux"]);
+      for (const d of parsed.deliverables) {
+        if (typeof d?.title !== "string") continue;
+        const m = d.title.match(/\s*\(?\s*(?:with|w\/)\s+([A-Z][a-zA-Z]+)\s*\)?\s*$/);
+        if (!m || GENERIC.has(m[1].toLowerCase())) continue;
+        const stripped = d.title.slice(0, m.index).replace(/[\s(]+$/, "").trim();
+        if (stripped) { if (!d.original) d.original = d.title; d.title = stripped; }
+      }
+    }
     return json(parsed);
   } catch (e) {
+    console.error(JSON.stringify({ fn: "extract-brief", error: String((e as Error)?.message ?? e) }));
     // Log the full exception — a schema-complexity 400 from the API would otherwise be
     // swallowed into a generic 500 and read as a silent fallback.
-    console.error("extract-brief failed:", e);
     return json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });

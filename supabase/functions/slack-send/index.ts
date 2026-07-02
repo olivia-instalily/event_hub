@@ -32,6 +32,7 @@ Deno.serve(async (req) => {
     if (!data.ok) return json({ error: `Slack: ${data.error ?? 'unknown error'}` }, 502);
     return json({ ok: true, channel: data.channel, ts: data.ts });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "slack-send", error: String((e as Error)?.message ?? e) }));
     return json({ error: String((e as Error).message ?? e) }, 500);
   }
 });

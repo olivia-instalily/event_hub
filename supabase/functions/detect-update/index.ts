@@ -141,6 +141,7 @@ Match the vendor primarily by SENDER DOMAIN against each engagement's "domains" 
     const out = JSON.parse(tb.text);
     return json({ ...out, engagementId: out.engagementId || null, deliverableId: out.deliverableId || null, matchedName: out.matchedName || null, status: out.status || null });
   } catch (e) {
+    console.error(JSON.stringify({ fn: "detect-update", error: String((e as Error)?.message ?? e) }));
     return json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });
