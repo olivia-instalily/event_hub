@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Paperclip, Loader2, Check, X, AlertCircle } from "lucide-react";
 import {
   extractForBackfill, listTemplates, backfillWrappedEvent, createTemplateFromExtract, applyTemplateAdditions,
-  uploadAttachment, setEventMaterials, type SourceMaterial,
+  uploadDocument, setEventMaterials, type SourceMaterial,
 } from "../lib/db";
 import {
   matchTemplates, completenessGaps, templateAdditions, hasAdditions,
@@ -83,7 +83,7 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles }:
       if (attachFiles.length) {
         const materials: SourceMaterial[] = [];
         for (const f of attachFiles) {
-          try { const url = await uploadAttachment(f); materials.push({ name: f.name, url, type: f.type || "text/plain" }); } catch { /* non-fatal */ }
+          try { const url = await uploadDocument(f); materials.push({ name: f.name, url, type: f.type || "text/plain" }); } catch { /* non-fatal */ }
         }
         if (materials.length) { try { await setEventMaterials(eventId, materials); } catch { /* non-fatal */ } }
       }

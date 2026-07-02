@@ -245,6 +245,9 @@ export async function createPlanningEvent(input: {
   isTemplate?: boolean;
   agenda?: { time: string; title: string }[]; staffRoles?: string[]; reflections?: string[];
   walkthrough?: WalkStep[]; heuristics?: string[]; outreach?: OutreachTemplate[];
+  // Deliverables carrying their assigned phase (preferred over template.progressCategories, which
+  // is title-only and would all default to "Planning"). Phase blank → falls back to first phase.
+  deliverables?: { title: string; phase?: string | null }[];
 }): Promise<string> {
   const eventId = newId('evt');
   // Snap the format to the closest existing one before storing (no near-duplicate formats).
@@ -273,11 +276,17 @@ export async function createPlanningEvent(input: {
   const startDate = new Date().toISOString().slice(0, 10);
   const base = input.date ? new Date(input.date + 'T00:00:00') : null;
   type DelRow = { id: string; event_id: string; title: string; phase: string; status: string; due_offset_days: number | null; offset_start: number | null; resolved_due_date: string | null; locked: boolean };
-  const deliverables: DelRow[] = input.template.progressCategories.map((p) => {
-    const offset = dueOffsetForTitle(p, input.date, startDate);
+  // Prefer phased deliverables (each keeps its assigned phase); else fall back to the title-only
+  // progressCategories (which have no phase → the first phase, or "Planning").
+  const firstPhase = (input.phases ?? []).slice().sort((a, b) => a.order - b.order)[0]?.name ?? 'Planning';
+  const delItems: { title: string; phase?: string | null }[] = input.deliverables?.length
+    ? input.deliverables
+    : input.template.progressCategories.map((p) => ({ title: p, phase: null }));
+  const deliverables: DelRow[] = delItems.filter((it) => it.title?.trim()).map(({ title, phase }) => {
+    const offset = dueOffsetForTitle(title, input.date, startDate);
     let resolved: string | null = null;
     if (base) { const due = new Date(base); due.setDate(due.getDate() + offset); resolved = due.toISOString().slice(0, 10); }
-    return { id: newId('del'), event_id: eventId, title: p, phase: 'Planning', status: 'Todo', due_offset_days: offset, offset_start: null, resolved_due_date: resolved, locked: false };
+    return { id: newId('del'), event_id: eventId, title, phase: (phase && phase.trim()) || firstPhase, status: 'Todo', due_offset_days: offset, offset_start: null, resolved_due_date: resolved, locked: false };
   });
 
   // Every event/template carries a non-deletable post-event post-mortem deliverable.
@@ -337,6 +346,38 @@ export async function uploadAttachment(file: File): Promise<string> {
   const { error } = await supabase.storage.from('attachments').upload(path, file, { contentType: file.type || undefined, upsert: false });
   if (error) throw error;
   return supabase.storage.from('attachments').getPublicUrl(path).data.publicUrl;
+}
+
+// ── Private document storage (sensitive dropped docs) ────────────────────────
+// Sensitive files (briefs/budgets/debriefs) go to the PRIVATE `documents` bucket. Upload
+// returns the object PATH (not a URL); callers store the path and it's turned into a
+// short-lived SIGNED URL only at read time (see signDocValues) — so the raw object is never
+// reachable by public URL. Cover images / avatars stay in the public `attachments` bucket.
+const DOC_BUCKET = 'documents';
+const SIGNED_TTL = 3600; // seconds
+
+export async function uploadDocument(file: File): Promise<string> {
+  const dot = file.name.lastIndexOf('.');
+  const ext = dot >= 0 ? file.name.slice(dot) : '';
+  const path = `${newId('doc')}${ext}`;
+  const { error } = await supabase.storage.from(DOC_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });
+  if (error) throw error;
+  return path; // stored as-is; signed on read
+}
+
+// A stored value is a private-doc PATH when it has no scheme (bare key). Full URLs — legacy
+// public `attachments` links or external URLs (Luma covers, etc.) — pass through unchanged.
+const isDocPath = (v: string | null | undefined): v is string => !!v && !/^[a-z]+:\/\//i.test(v) && !v.startsWith('data:');
+
+/** Batch-sign a set of stored values: doc paths → short-lived signed URLs; everything else
+ *  maps to itself. Returns original → resolved. */
+export async function signDocValues(values: (string | null | undefined)[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const paths = Array.from(new Set(values.filter(isDocPath)));
+  if (!paths.length) return out;
+  const { data } = await supabase.storage.from(DOC_BUCKET).createSignedUrls(paths, SIGNED_TTL);
+  for (const r of data ?? []) if (r.path && r.signedUrl) out.set(r.path, r.signedUrl);
+  return out;
 }
 
 // ── Event page ownership / dev round-trip (Assembly side) ────────────────────
@@ -886,8 +927,17 @@ export async function setSpeakerRole(eventId: string, attendeeId: string, isSpea
 }
 
 export async function reorderSpeakers(eventId: string, orderedAttendeeIds: string[]): Promise<void> {
-  await Promise.all(orderedAttendeeIds.map((aid, i) =>
-    supabase.from('attendee_event').update({ speaker_order: i }).eq('event_id', eventId).eq('attendee_id', aid)));
+  // Independent per-row updates (not a transaction — speaker order is cosmetic). Use allSettled
+  // so every update runs even if one fails, then surface a failure so the user can re-drag: a
+  // partial apply leaves duplicate speaker_order values that only a retry fixes.
+  const results = await Promise.allSettled(orderedAttendeeIds.map((aid, i) =>
+    supabase.from('attendee_event').update({ speaker_order: i }).eq('event_id', eventId).eq('attendee_id', aid)
+      .then(({ error }) => { if (error) throw error; })));
+  const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+  if (failed.length) {
+    console.error(`reorderSpeakers: ${failed.length}/${results.length} speaker_order updates failed`, failed.map((f) => f.reason));
+    throw new Error('Speaker reorder partially failed — please drag again to fix.');
+  }
 }
 
 export interface Speaker2 { attendeeId: string; name: string | null; title: string | null; org: string | null; photoUrl: string | null; linkedinUrl: string | null; }
@@ -1056,9 +1106,11 @@ export interface ExtractedBrief {
   vendors: string[]; staff: string[]; agenda: { time: string; title: string }[];
   walkthrough: WalkStep[]; outreach: OutreachTemplate[]; budgetTotal: number | null;
 }
-/** Extract a dropped brief into structured fields via Claude (server-side). */
-export async function extractBrief(text: string): Promise<ExtractedBrief> {
-  const { data, error } = await supabase.functions.invoke('extract-brief', { body: { text } });
+/** Extract a dropped brief into structured fields via Claude (server-side). Pass templateMode when
+ *  the result feeds a TEMPLATE (e.g. backfill) — forces phase-by-function + name generalization even
+ *  for a dated brief. */
+export async function extractBrief(text: string, opts?: { templateMode?: boolean }): Promise<ExtractedBrief> {
+  const { data, error } = await supabase.functions.invoke('extract-brief', { body: { text, templateMode: !!opts?.templateMode } });
   if (error) {
     const msg = (data as any)?.error ?? error.message ?? String(error);
     throw new Error(msg);
@@ -1108,8 +1160,10 @@ export async function proposeTagsFromDebrief(eventId: string, people: { name: st
 /** Merge a brief extraction (structure/pattern) + a debrief extraction (outcome/actuals) into
  *  the one shape the backfill flow needs. Runs both extractors; either may no-op. */
 export async function extractForBackfill(text: string): Promise<BackfillExtract> {
+  // A backfill feeds the reusable pattern → extract in TEMPLATE MODE: deliverables are phased by
+  // function (not dumped in one bucket) and generalized (person/company names stripped).
   const [b, d] = await Promise.all([
-    extractBrief(text).catch(() => null),
+    extractBrief(text, { templateMode: true }).catch(() => null),
     extractDebrief(text).catch(() => null),
   ]);
   if (!b && !d) throw new Error('Extraction failed — check the dropped file or paste the text.');
@@ -1130,12 +1184,19 @@ export async function extractForBackfill(text: string): Promise<BackfillExtract>
     turnoutActual: d?.outcome?.turnoutActual ?? checkedN,
     budgetTotal: b?.budgetTotal ?? null,
     verdict: d?.outcome?.verdict || '',
-    phases: b?.phases ?? [],
+    // Phase set = the brief's phases PLUS any distinct phase the deliverables were assigned to
+    // (so a functional bucket like "Setup & check-in" exists as a band even if it wasn't a heading).
+    phases: (() => {
+      const set = [...(b?.phases ?? [])];
+      for (const dl of b?.deliverables ?? []) if (dl.phase && !set.includes(dl.phase)) set.push(dl.phase);
+      return set;
+    })(),
     staffRoles: b?.staff ?? [],
     lessons: (d?.lessons ?? []).map((l) => l.proposedChange || l.text).filter(Boolean),
     heuristics: b?.heuristics ?? [],
     actuals: (d?.actuals ?? []).map((a) => ({ line: a.line, amount: a.amount })),
-    deliverables: (b?.deliverables ?? []).map((dl) => dl.title).filter(Boolean),
+    deliverables: (b?.deliverables ?? []).filter((dl) => dl.title?.trim()).map((dl) => ({ title: dl.title, phase: dl.phase || '', original: dl.original || undefined })),
+    droppedForTemplate: b?.droppedForTemplate ?? [],
     agenda: (b?.agenda ?? []).filter((a) => a.title?.trim()),
   };
 }
@@ -1155,14 +1216,18 @@ export async function listTemplates(): Promise<TemplateLite[]> {
 const backfillTemplateInput = (x: BackfillExtract): GeneratedTemplate => ({
   vendorCategories: [],
   budgetLines: x.actuals.filter((a) => a.line).map((a) => ({ label: a.line, estimate: a.amount ?? 0 })),
-  progressCategories: x.deliverables,
+  progressCategories: x.deliverables.map((d) => d.title), // titles only (phase carried separately below)
 });
+// Deliverables WITH their phase (assigned by function) → createPlanningEvent, so they land in the
+// right band instead of all defaulting to "Planning".
+const backfillDeliverables = (x: BackfillExtract) => x.deliverables.map((d) => ({ title: d.title, phase: d.phase }));
 
 /** Cold-start: create a NEW template (is_template event) from the dropped event's pattern. */
 export async function createTemplateFromExtract(x: BackfillExtract): Promise<string> {
   return createPlanningEvent({
     name: x.format ? `${x.format} template` : (x.name ? `${x.name} (template)` : 'Event template'),
     date: null, location: null, tags: x.tag ? [x.tag] : [], template: backfillTemplateInput(x),
+    deliverables: backfillDeliverables(x),
     format: x.format, phases: x.phases.map((name, order) => ({ name, order })),
     staffRoles: generalRoles(x.staffRoles), reflections: [...x.lessons, ...x.heuristics], isTemplate: true,
   });
@@ -1172,7 +1237,7 @@ export async function createTemplateFromExtract(x: BackfillExtract): Promise<str
 export async function backfillWrappedEvent(x: BackfillExtract, modeledOnTemplateId: string | null): Promise<string> {
   const eventId = await createPlanningEvent({
     name: x.name || 'Backfilled event', date: x.date, location: x.location, tags: x.tag ? [x.tag] : [],
-    template: backfillTemplateInput(x), format: x.format,
+    template: backfillTemplateInput(x), deliverables: backfillDeliverables(x), format: x.format,
     phases: x.phases.map((name, order) => ({ name, order })),
     staffRoles: x.staffRoles, reflections: [...x.lessons, ...x.heuristics],
     modeledOnEventId: modeledOnTemplateId, isTemplate: false,
@@ -1234,20 +1299,42 @@ export async function applyTemplateAdditions(templateId: string, add: TemplateAd
 export async function enrichEventFromExtract(eventId: string, x: BackfillExtract, fields: string[]): Promise<string[]> {
   const want = new Set(fields);
   const filled: string[] = []; // what actually changed → caller can report honestly
-  if (want.has('date') && x.date) { await setEventDate(eventId, x.date).catch(() => {}); filled.push('date'); }
+  // Best-effort per field: attempt each, keep going after a failure — but only report a field in
+  // `filled` if its write actually landed (push inside the try). A swallowed failure must NOT read
+  // back as success to the caller / user.
+  if (want.has('date') && x.date) {
+    try { await setEventDate(eventId, x.date); filled.push('date'); }
+    catch (e) { console.error('enrichEventFromExtract: date fill failed', String(e)); }
+  }
   const ev: Record<string, unknown> = {};
   if (want.has('location') && x.location) ev.location = x.location;
   if (want.has('turnout')) {
     if (x.headcount != null) ev.rsvp = x.headcount;
     if (x.turnoutActual != null) { ev.checked_in = x.turnoutActual; if (x.headcount == null) ev.headcount = x.turnoutActual; }
   }
-  if (Object.keys(ev).length) { await supabase.from('event').update(ev).eq('id', eventId).then(() => {}, () => {}); if ('location' in ev) filled.push('location'); if ('rsvp' in ev || 'checked_in' in ev || 'headcount' in ev) filled.push('turnout'); }
-  if (want.has('outcome') && x.verdict.trim()) { await setEventVerdict(eventId, x.verdict).catch(() => {}); filled.push('outcome'); }
-  if (want.has('agenda') && x.agenda?.length) { await setEventAgenda(eventId, x.agenda).catch(() => {}); filled.push('agenda'); }
-  if (want.has('roles') && x.staffRoles.length) { await setEventStaffRoles(eventId, x.staffRoles).catch(() => {}); filled.push('roles'); }
+  if (Object.keys(ev).length) {
+    try {
+      const { error } = await supabase.from('event').update(ev).eq('id', eventId);
+      if (error) throw error;
+      if ('location' in ev) filled.push('location');
+      if ('rsvp' in ev || 'checked_in' in ev || 'headcount' in ev) filled.push('turnout');
+    } catch (e) { console.error('enrichEventFromExtract: location/turnout fill failed', String(e)); }
+  }
+  if (want.has('outcome') && x.verdict.trim()) {
+    try { await setEventVerdict(eventId, x.verdict); filled.push('outcome'); }
+    catch (e) { console.error('enrichEventFromExtract: outcome fill failed', String(e)); }
+  }
+  if (want.has('agenda') && x.agenda?.length) {
+    try { await setEventAgenda(eventId, x.agenda); filled.push('agenda'); }
+    catch (e) { console.error('enrichEventFromExtract: agenda fill failed', String(e)); }
+  }
+  if (want.has('roles') && x.staffRoles.length) {
+    try { await setEventStaffRoles(eventId, x.staffRoles); filled.push('roles'); }
+    catch (e) { console.error('enrichEventFromExtract: roles fill failed', String(e)); }
+  }
   if (want.has('budget') && x.actuals.some((a) => a.line)) {
-    await addBudgetActuals(eventId, x.actuals.filter((a) => a.line).map((a) => ({ label: a.line, amount: a.amount }))).catch(() => {});
-    filled.push('budget');
+    try { await addBudgetActuals(eventId, x.actuals.filter((a) => a.line).map((a) => ({ label: a.line, amount: a.amount }))); filled.push('budget'); }
+    catch (e) { console.error('enrichEventFromExtract: budget fill failed', String(e)); }
   }
   // Lessons are always additive (a debrief's whole point) — append any not already recorded,
   // regardless of which gap fields were requested. Dedup case-insensitively against existing.
@@ -1258,7 +1345,10 @@ export async function enrichEventFromExtract(eventId: string, x: BackfillExtract
     const seen = new Set(cur.map(norm));
     const added: string[] = [];
     for (const l of x.lessons) { const t = (l ?? '').trim(); if (t && !seen.has(norm(t))) { seen.add(norm(t)); added.push(t); } }
-    if (added.length) { await setEventReflections(eventId, [...cur, ...added]).catch(() => {}); filled.push(`${added.length} lesson${added.length === 1 ? '' : 's'}`); }
+    if (added.length) {
+      try { await setEventReflections(eventId, [...cur, ...added]); filled.push(`${added.length} lesson${added.length === 1 ? '' : 's'}`); }
+      catch (e) { console.error('enrichEventFromExtract: lessons fill failed', String(e)); }
+    }
   }
   return filled;
 }
@@ -1323,10 +1413,13 @@ export async function addSourceMaterial(eventId: string, material: SourceMateria
  *  and any budget line that was merely TAGGED with such a vendor is untagged (the line itself stays,
  *  since it came from a different source). So removing a vendor sheet leaves the event with no
  *  vendors from it, without disturbing budget amounts. Returns what was cleaned up. */
-export async function deleteSourceMaterial(eventId: string, url: string): Promise<{ budgetLinesRemoved: number; vendorsRemoved: number }> {
-  const { data } = await supabase.from('event').select('source_materials').eq('id', eventId).maybeSingle();
-  const cur: SourceMaterial[] = Array.isArray((data as any)?.source_materials) ? (data as any).source_materials : [];
-  const next = cur.filter((m) => m.url !== url);
+export async function deleteSourceMaterial(eventId: string, key: string): Promise<{ budgetLinesRemoved: number; vendorsRemoved: number }> {
+  const cur = await getSourceMaterials(eventId);
+  // `key` is the material NAME or its stored value. (Displayed URLs are signed at read time, so
+  // callers pass the stable name; we resolve the STORED value here for the derived-data cascade.)
+  const target = cur.find((m) => m.name === key || m.url === key);
+  const url = target?.url ?? key; // stored value: a private-doc path or a legacy public URL
+  const next = cur.filter((m) => m !== target);
   const { error } = await supabase.from('event').update({ source_materials: next }).eq('id', eventId);
   if (error) throw error;
 
@@ -1647,6 +1740,10 @@ export async function getEventDetail(id: string): Promise<EventDetail | null> {
     }
   }
 
+  const sourceMaterials: SourceMaterial[] = Array.isArray((row as any).source_materials) ? (row as any).source_materials as SourceMaterial[] : [];
+  const sm = await signDocValues(sourceMaterials.map((m) => m.url));
+  for (const m of sourceMaterials) { const s = sm.get(m.url); if (s) m.url = s; }
+
   return {
     ...toListItem(row),
     description: (row as any).description ?? null,
@@ -1655,7 +1752,7 @@ export async function getEventDetail(id: string): Promise<EventDetail | null> {
     checkedIn: (row as any).checked_in ?? null,
     waitlistAdmitted: (row as any).waitlist_admitted ?? null,
     notes: (row as any).notes ?? [],
-    sourceMaterials: Array.isArray((row as any).source_materials) ? (row as any).source_materials as SourceMaterial[] : [],
+    sourceMaterials,
     speakers,
     attendees,
     reflections,
@@ -1682,21 +1779,34 @@ export async function exportEventsSummary(labelId: string): Promise<Record<strin
     .select('id, name, tag, event_date, location, office')
     .in('id', ids);
   if (error) throw error;
-  const rows = await Promise.all(
-    (data ?? []).map(async (e: any) => {
-      const s = await getEventPeopleStats(e.id);
-      return {
-        event: e.name,
-        tag: e.tag ?? '',
-        date: e.event_date ?? '',
-        location: e.location ?? e.office ?? '',
-        registered: s.registered,
-        checked_in: s.checkedIn,
-        total: s.total,
-      };
-    }),
-  );
-  return rows;
+
+  // One query for ALL attendee links across every event (avoids the N+1 of a per-event
+  // getEventPeopleStats call), then aggregate per event in JS with the shared tallyStats.
+  const { data: links, error: linkErr } = await supabase
+    .from('attendee_event')
+    .select('event_id, registration_status, checked_in')
+    .in('event_id', ids);
+  if (linkErr) throw linkErr;
+
+  const byEvent = new Map<string, { registrationStatus: string | null; checkedIn: boolean }[]>();
+  for (const r of links ?? []) {
+    const arr = byEvent.get((r as any).event_id) ?? [];
+    arr.push({ registrationStatus: (r as any).registration_status, checkedIn: (r as any).checked_in });
+    byEvent.set((r as any).event_id, arr);
+  }
+
+  return (data ?? []).map((e: any) => {
+    const s = tallyStats(byEvent.get(e.id) ?? []);
+    return {
+      event: e.name,
+      tag: e.tag ?? '',
+      date: e.event_date ?? '',
+      location: e.location ?? e.office ?? '',
+      registered: s.registered,
+      checked_in: s.checkedIn,
+      total: s.total,
+    };
+  });
 }
 
 /** One row per attendee across an events label, deduped by person. */
@@ -2013,6 +2123,13 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     locked: d.locked ?? false,
   }));
 
+  // Sensitive docs (source materials + budget provenance) live in the private bucket as paths —
+  // resolve them to short-lived signed URLs for display. Legacy public/external URLs pass through.
+  const sourceMaterials: SourceMaterial[] = Array.isArray((row as any).source_materials) ? (row as any).source_materials as SourceMaterial[] : [];
+  const signMap = await signDocValues([...sourceMaterials.map((m) => m.url), ...(budget?.lines ?? []).map((l) => l.docUrl)]);
+  for (const m of sourceMaterials) { const s = signMap.get(m.url); if (s) m.url = s; }
+  if (budget) for (const l of budget.lines) { if (l.docUrl) { const s = signMap.get(l.docUrl); if (s) l.docUrl = s; } }
+
   return {
     id: row.id,
     title: (row as any).name,
@@ -2028,7 +2145,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     walkthrough: Array.isArray((row as any).walkthrough) ? (row as any).walkthrough as WalkStep[] : [],
     heuristics: Array.isArray((row as any).heuristics) ? (row as any).heuristics as string[] : [],
     outreach: Array.isArray((row as any).outreach) ? (row as any).outreach as OutreachTemplate[] : [],
-    sourceMaterials: Array.isArray((row as any).source_materials) ? (row as any).source_materials as SourceMaterial[] : [],
+    sourceMaterials,
     isTemplate: (row as any).is_template ?? false,
     startTime: (row as any).start_time ?? null,
     endTime: (row as any).end_time ?? null,
@@ -2475,6 +2592,11 @@ export async function addDeliverable(eventId: string, fields: { title: string; p
 }
 export async function setDeliverableStatus(id: string, status: string): Promise<void> {
   const { error } = await supabase.from('deliverable').update({ status }).eq('id', id);
+  if (error) throw error;
+}
+/** Move a deliverable to a different phase/section (drag-and-drop). Doesn't touch its T-offsets. */
+export async function setDeliverablePhase(id: string, phase: string): Promise<void> {
+  const { error } = await supabase.from('deliverable').update({ phase }).eq('id', id);
   if (error) throw error;
 }
 /** Count an event's deliverables, total and not-yet-Done — used to phrase a bulk-action confirm. */

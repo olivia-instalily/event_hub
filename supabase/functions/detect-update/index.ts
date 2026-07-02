@@ -21,8 +21,8 @@ const SCHEMA = {
   properties: {
     kind: { type: "string", enum: ["contract", "complete", "status", "note"] },
     status: { type: "string", enum: ["Todo", "In Progress", "Done", ""], description: "target status when kind='status' (e.g. reopening → Todo, starting → In Progress); empty otherwise" },
-    engagementId: { type: "string", description: "matched engagement id, or empty string" },
-    deliverableId: { type: "string", description: "matched deliverable id, or empty string" },
+    engagementId: { type: ["string", "null"], description: "matched engagement id, or null if no match" },
+    deliverableId: { type: ["string", "null"], description: "matched deliverable id, or null if no match" },
     matchedName: { type: "string", description: "the vendor/category or task matched, or empty" },
     summary: { type: "string", description: "one-line activity summary" },
   },
@@ -77,7 +77,7 @@ function heuristic(text: string, source: string, from: string | null, engs: Eng[
   // A contract signing for a known vendor (only when it's not really a task status change).
   if (CONTRACT_RE.test(text) && vendor && target !== "Todo" && target !== "In Progress") {
     const name = vendor.names[0] ?? vendor.category ?? "vendor";
-    return { kind: "contract", status: "", engagementId: vendor.id, deliverableId: "", matchedName: name, summary: `Signed contract detected via ${source} — ${vendor.category ?? name} → Contracted` };
+    return { kind: "contract", status: "", engagementId: vendor.id, deliverableId: null, matchedName: name, summary: `Signed contract detected via ${source} — ${vendor.category ?? name} → Contracted` };
   }
 
   // A deliverable status change (Done / In Progress / Todo-reopen).
@@ -87,17 +87,17 @@ function heuristic(text: string, source: string, from: string | null, engs: Eng[
       return t.includes(d.title.toLowerCase()) || words.filter((w) => t.includes(w)).length >= Math.max(1, Math.ceil(words.length / 2));
     });
     if (d) {
-      if (target === "Done") return { kind: "complete", status: "", engagementId: "", deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" moved to completed via ${source}` };
-      return { kind: "status", status: target, engagementId: "", deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" → ${target} via ${source}` };
+      if (target === "Done") return { kind: "complete", status: "", engagementId: null, deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" moved to completed via ${source}` };
+      return { kind: "status", status: target, engagementId: null, deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" → ${target} via ${source}` };
     }
   }
 
   // Otherwise: if it's from a known vendor domain, file it as correspondence on that decision.
   if (vendor) {
     const name = vendor.names[0] ?? vendor.category ?? "vendor";
-    return { kind: "note", status: "", engagementId: vendor.id, deliverableId: "", matchedName: name, summary: `${source[0].toUpperCase()}${source.slice(1)} from ${vendor.category ?? name}: ${text.slice(0, 70)}${text.length > 70 ? "…" : ""}` };
+    return { kind: "note", status: "", engagementId: vendor.id, deliverableId: null, matchedName: name, summary: `${source[0].toUpperCase()}${source.slice(1)} from ${vendor.category ?? name}: ${text.slice(0, 70)}${text.length > 70 ? "…" : ""}` };
   }
-  return { kind: "note", status: "", engagementId: "", deliverableId: "", matchedName: "", summary: `${source[0].toUpperCase()}${source.slice(1)} note: ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}` };
+  return { kind: "note", status: "", engagementId: null, deliverableId: null, matchedName: "", summary: `${source[0].toUpperCase()}${source.slice(1)} note: ${text.slice(0, 80)}${text.length > 80 ? "…" : ""}` };
 }
 
 Deno.serve(async (req) => {
@@ -129,7 +129,7 @@ Deno.serve(async (req) => {
 - "complete": an action item is finished/done — set deliverableId to the matching task, status="Done".
 - "status": an action item should move to a DIFFERENT status without being completed — set deliverableId and set status to "Todo" (reopen / move back / not started / undo) or "In Progress" (started / working on / kicked off).
 - "note": just correspondence / nothing actionable.
-Match the vendor primarily by SENDER DOMAIN against each engagement's "domains" (any address at that domain is the same vendor), then by name in the text. Match deliverables by title words appearing in the note. If it's a note but clearly from a known vendor's domain, still set engagementId so it files as that vendor's correspondence. Use empty strings when nothing matches; set status="" unless kind="status". Write a concise one-line summary.`;
+Match the vendor primarily by SENDER DOMAIN against each engagement's "domains" (any address at that domain is the same vendor), then by name in the text. Match deliverables by title words appearing in the note. If it's a note but clearly from a known vendor's domain, still set engagementId so it files as that vendor's correspondence. Return null for engagementId/deliverableId when nothing matches; set status="" unless kind="status". Write a concise one-line summary.`;
     const payload = { note: text, senderDomain, engagements: engs, deliverables: dels };
     const resp = await (client.messages.create as any)({
       model: "claude-haiku-4-5", max_tokens: 1024, system: sys,

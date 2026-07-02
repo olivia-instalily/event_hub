@@ -286,6 +286,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
   const eventId = plan.id;
   const [draft, setDraft] = useState<PageDraft | null>(plan.pageDraft ? normalize(plan.pageDraft) : null);
   const [speakers, setSpeakers] = useState<Speaker2[]>([]);
+  const [speakerErr, setSpeakerErr] = useState<string | null>(null);
   const [mobile, setMobile] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -369,7 +370,13 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
     if (from < 0 || to < 0) return;
     const next = arrayMove(speakers, from, to);
     setSpeakers(next);
-    await reorderSpeakers(eventId, next.map((s) => s.attendeeId));
+    setSpeakerErr(null);
+    try {
+      await reorderSpeakers(eventId, next.map((s) => s.attendeeId));
+    } catch (e: any) {
+      // A partial failure leaves the saved order inconsistent — tell the user to re-drag.
+      setSpeakerErr(e?.message ?? "Couldn't save the speaker order — please drag again.");
+    }
   };
   // Edit a speaker's role (title) / company (org) inline. Update locally on change; persist on blur.
   const editSpeaker = (attendeeId: string, patch: Partial<Speaker2>) =>
@@ -459,6 +466,7 @@ export function EventPageBuilder({ plan }: { plan: EventPlanning }) {
               ))}
             </div>
             <p className="text-[15px] text-gray-400">Speakers are people tagged “Speaker” for this event (People tab → a person → Mark as speaker). Drag to reorder; headshots set there.</p>
+            {speakerErr && <p className="text-[15px] text-red-600">{speakerErr}</p>}
             {speakers.length === 0 ? <p className="text-sm text-gray-400">No speakers tagged yet.</p> : (
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onSpeakerDragEnd}>
                 <SortableContext items={speakers.map((s) => s.attendeeId)} strategy={verticalListSortingStrategy}>

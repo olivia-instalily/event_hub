@@ -7,7 +7,7 @@ import {
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
   Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2,
 } from "lucide-react";
-import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, closestCenter, closestCorners, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -15,12 +15,12 @@ import {
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
-  addDeliverable, setDeliverableStatus, setDeliverableDueDate, deleteDeliverable,
+  addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable,
   getPlanningSummary, saveOverviewSummary,
   getEventPeopleStats, listAttendeesForEvent, scheduleDebrief,
   extractDebrief, proposeTagsFromDebrief, upsertBudgetLines, type DebriefExtract,
   extractForBackfill, enrichEventFromExtract, addBudgetActuals, deriveTemplateFromEvent, applyTemplateAdditions, listTemplates, adoptTemplate,
-  uploadAttachment, addSourceMaterial, deleteSourceMaterial, getSourceMaterials,
+  uploadDocument, addSourceMaterial, deleteSourceMaterial, getSourceMaterials,
   setSettleState, setEventVerdict, saveDebriefNotes, settleEvent, setRoleAssignments, type SettleState,
   listEventTags, type EventPersonTag,
   type PersonView, type PeopleStats,
@@ -998,7 +998,7 @@ function BudgetTracker({ budget, eventId, engagements = [] }: { budget: Planning
             setDropFile(null); setImportNote(note);
             // Tag the imported sheet as a source material so it shows under the event's files
             // (dedupes by name, so re-importing the same file won't duplicate it).
-            if (f) { try { const url = await uploadAttachment(f); await addSourceMaterial(eventId, { name: f.name, url, type: f.type || "text/csv" }); } catch { /* non-fatal */ } }
+            if (f) { try { const url = await uploadDocument(f); await addSourceMaterial(eventId, { name: f.name, url, type: f.type || "text/csv" }); } catch { /* non-fatal */ } }
             setLines(await listBudgetLines(budget.id));
           }}
         />
@@ -1821,7 +1821,7 @@ async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): P
   const attachedMat = (await getSourceMaterials(eventId)).find((m) => m.name.trim().toLowerCase() === file.name.trim().toLowerCase());
   const ensureSource = async (type: string): Promise<string | null> => {
     if (attachedMat) return attachedMat.url;
-    try { const url = await uploadAttachment(file); await addSourceMaterial(eventId, { name: file.name, url, type: file.type || type }); return url; } catch { return null; }
+    try { const url = await uploadDocument(file); await addSourceMaterial(eventId, { name: file.name, url, type: file.type || type }); return url; } catch { return null; }
   };
 
   // PDFs: read via pdf.js (lazy-loaded). Table structure is lost in a PDF, so we DON'T run the
@@ -2125,17 +2125,41 @@ function WrappedTemplate({ plan, eventId, onApplied, onOpenEvent }: { plan: Even
 
 // Wrapped "Deliverables" tab: a read-only RECORD of what shipped (and who owned it), grouped by
 // phase. Everything's done by nature here — no statuses to change, no overdue, no worklist.
+// Droppable phase card + draggable row for moving a deliverable between sections on the record.
+function WrapDroppable({ id, children }: { id: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return <div ref={setNodeRef} className={`bg-white rounded-2xl border p-5 transition-shadow ${isOver ? "border-gray-400 ring-2 ring-gray-300" : "border-border"}`}>{children}</div>;
+}
+function WrapDraggable({ id, children }: { id: string; children: (h: { setNodeRef: (el: HTMLElement | null) => void; attributes: any; listeners: any; style: any; isDragging: boolean }) => React.ReactNode }) {
+  const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({ id });
+  const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50, position: "relative" as const } : undefined;
+  return <>{children({ setNodeRef, attributes, listeners, style, isDragging })}</>;
+}
+
 function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
   const nodeNames = plan.phases.map((p) => p.name);
+  const [dels, setDels] = useState<Deliverable[]>(plan.deliverables);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor));
   const byPhase = new Map<string, Deliverable[]>();
-  for (const d of plan.deliverables) { const k = canonicalPhaseFor(d.phase, nodeNames) || "Other"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(d); }
+  for (const d of dels) { const k = canonicalPhaseFor(d.phase, nodeNames) || "Other"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(d); }
   const order = new Map(nodeNames.map((n, i) => [n, i]));
   const phaseOrder = [...byPhase.keys()].sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
-  const done = plan.deliverables.filter((d) => d.status === "Done").length;
+  const done = dels.filter((d) => d.status === "Done").length;
   const whoFor = (d: Deliverable) => (d.ownerRole ? plan.roleAssignments[d.ownerRole] ?? d.ownerRole : null);
+  // Drag a deliverable onto a different phase card → move it there (keeps its T-offsets/status).
+  const onDragEnd = (e: DragEndEvent) => {
+    if (!e.over) return;
+    const id = String(e.active.id);
+    const toPhase = String(e.over.id);
+    const cur = dels.find((d) => d.id === id);
+    const fromPhase = cur ? (canonicalPhaseFor(cur.phase, nodeNames) || "Other") : null;
+    if (fromPhase === toPhase) return;
+    setDels((p) => p.map((d) => (d.id === id ? { ...d, phase: toPhase } : d)));
+    setDeliverablePhase(id, toPhase).catch(() => {});
+  };
   return (
     <section className="space-y-4">
-      <p className="text-[13px] text-gray-500">What shipped — {done}/{plan.deliverables.length} complete. A record; reopen the workspace to change anything.</p>
+      <p className="text-[13px] text-gray-500">What shipped — {done}/{dels.length} complete. Drag a task to move it to another section.</p>
       {/* Run of show — drop a schedule on the page to fill this; shows once recorded. */}
       <div className="bg-white rounded-2xl border border-border p-5">
         <h4 className="font-medium mb-2">Run of show</h4>
@@ -2149,21 +2173,28 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
           </ul>
         )}
       </div>
-      {plan.deliverables.length === 0 && <p className="text-sm text-gray-400">No deliverables on record.</p>}
+      {dels.length === 0 && <p className="text-sm text-gray-400">No deliverables on record.</p>}
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
       {phaseOrder.map((name) => (
-        <div key={name} className="bg-white rounded-2xl border border-border p-5">
+        <WrapDroppable key={name} id={name}>
           <h4 className="font-medium mb-2">{name}</h4>
           <ul className="divide-y divide-gray-100 text-sm">
             {byPhase.get(name)!.map((d) => (
-              <li key={d.id} className="flex items-center gap-3 py-2">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${d.status === "Done" ? "bg-green-500" : "bg-gray-300"}`} />
-                <span className="flex-1 min-w-0 truncate text-gray-800">{d.title}</span>
-                {whoFor(d) && <span className="text-[12px] text-gray-500 inline-flex items-center gap-1 shrink-0"><Users className="w-3 h-3" /> {whoFor(d)}</span>}
-              </li>
+              <WrapDraggable key={d.id} id={d.id}>
+                {({ setNodeRef, attributes, listeners, style, isDragging }) => (
+                  <li ref={setNodeRef} style={style} className={`flex items-center gap-2 py-2 ${isDragging ? "opacity-60 bg-white shadow" : ""}`}>
+                    <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to another section" title="Drag to move to another section"><GripVertical className="w-4 h-4" /></button>
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${d.status === "Done" ? "bg-green-500" : "bg-gray-300"}`} />
+                    <span className="flex-1 min-w-0 truncate text-gray-800">{d.title}</span>
+                    {whoFor(d) && <span className="text-[12px] text-gray-500 inline-flex items-center gap-1 shrink-0"><Users className="w-3 h-3" /> {whoFor(d)}</span>}
+                  </li>
+                )}
+              </WrapDraggable>
             ))}
           </ul>
-        </div>
+        </WrapDroppable>
       ))}
+      </DndContext>
     </section>
   );
 }
@@ -3474,7 +3505,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
       )}
       {back}
 
-      <SourceMaterials items={plan.sourceMaterials} className="mb-6" onDelete={async (m) => { await deleteSourceMaterial(eventId, m.url).catch(() => {}); setReload((r) => r + 1); }} />
+      <SourceMaterials items={plan.sourceMaterials} className="mb-6" onDelete={async (m) => { await deleteSourceMaterial(eventId, m.name).catch(() => {}); setReload((r) => r + 1); }} />
 
       {/* Header */}
       <div className="relative bg-white rounded-2xl border border-border p-8 mb-6">

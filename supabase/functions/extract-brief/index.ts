@@ -153,10 +153,11 @@ there", "Run of show", "Say thanks", "Measure turnout"), in order. Do not impose
 generic Planning/Day-of/Wrap scheme if the brief uses its own. Assign each deliverable
 to its phase by where it appears.
 
-TEMPLATE MODE — applies ONLY when you set specificity="template" (a reusable pattern, not a
-concrete dated instance). For specificity="event" DO NOT do any of this: keep person names, client
+TEMPLATE MODE — applies when you set specificity="template" (a reusable pattern), OR when the
+request forces it (see FORCED TEMPLATE MODE, if present, at the end of these instructions). When
+NEITHER holds (a plain specificity="event" create), DO NOT do any of this: keep person names, client
 and partner names, and specific case studies EXACTLY as written — they're correct for a real event.
-When (and only when) the output is a template, run TWO passes over the deliverables:
+When template mode is active, run TWO passes over the deliverables:
 
   PASS 1 — PHASE ASSIGNMENT. Place each deliverable in the phase it belongs to BY FUNCTION; never
   dump everything into one bucket like "Planning & coordination". Prefer the brief's own phase names;
@@ -175,10 +176,16 @@ When (and only when) the output is a template, run TWO passes over the deliverab
     1. Strip PERSON names → make it a role. "Set up check-in with Ayushi" → "Set up check-in station
        (designated check-in lead)"; add "Check-in lead" to staff. The person leaves the task text; the
        ROLE is captured in staff.
-    2. Strip CLIENT / PARTNER / COMPANY proper nouns → the type. "Deliver MDM playbook + Harrington
-       overview" → "Deliver the partner's playbook rollout + client overview". "Design InstaLILY × Bain
-       co-branded signage" → "Design co-branded signage (host × partner)". Keep the STRUCTURE, drop the
-       names.
+    2. Strip CLIENT / PARTNER / COMPANY proper nouns → the type. InstaLILY is the HOST org → "host"
+       / "our"; any OTHER named company (the co-host, the account being presented) → "client" (or
+       "partner" when it's clearly the co-host). Examples:
+         "Present Bain-covered content segment" → "Present the client-covered content segment"
+         "Give overview on Harrington, Radwell" → "Give the client overview"
+         "InstaLILY presentation, then Bain presentation" → "Host presentation, then client presentation"
+         "Deliver MDM playbook + Harrington overview" → "Deliver the partner's playbook rollout + client overview"
+         "Design InstaLILY × Bain co-branded signage" → "Design co-branded signage (host × partner)"
+       Keep the STRUCTURE, drop every company name. NO real company name (InstaLILY, Bain, Harrington,
+       Radwell, SRS, …) may remain in a template deliverable.
     3. Generalize a SPECIFIC case study → its reusable slot. "Run SRS sales case study with live demo"
        → "Run a sales case study with live demo"; "Run Radwell Quote-to-Order case study" → "Run an
        operations/supply-chain case study with demo". Capture "~2-3 themed case studies with demos",
@@ -232,11 +239,21 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
 
   try {
-    const { text } = await req.json();
+    const { text, templateMode } = await req.json();
     if (!text || !String(text).trim()) return json({ error: "text is required" }, 400);
+    const forceTemplate = !!templateMode; // caller (e.g. backfill → template) wants generalization even for a dated event
 
     const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
     if (!apiKey) return json({ error: "ANTHROPIC_API_KEY not configured on the server." }, 500);
+
+    const system = forceTemplate
+      ? SYSTEM + `\n\nFORCED TEMPLATE MODE: this brief is being turned into a REUSABLE template.
+Run BOTH template passes on every deliverable REGARDLESS of the specificity you assign — assign each
+to its phase by function (never all under one bucket), generalize away EVERY person and company name
+(host = "our"/"host"; any other company = "client"/"partner"; specific case studies → the reusable
+slot), set "original" whenever you change a task, and move un-generalizable one-offs to
+droppedForTemplate. No real name may survive in a deliverable.`
+      : SYSTEM;
 
     const client = new Anthropic({ apiKey });
     const resp = await (client.messages.create as any)({
@@ -245,7 +262,7 @@ Deno.serve(async (req) => {
       // a few thousand tokens; too low truncates the JSON mid-stream → parse fails → silent
       // regex fallback. Keep generous headroom.
       max_tokens: 16000,
-      system: SYSTEM,
+      system,
       messages: [{ role: "user", content: `Event brief:\n${text}` }],
       output_config: { format: { type: "json_schema", schema: SCHEMA } },
     });
@@ -262,7 +279,7 @@ Deno.serve(async (req) => {
     // Deterministic backstop (templates only): strip an obvious trailing person reference the model
     // may have left on a deliverable ("… with Ayushi", "(w/ Sam)"). Conservative — single capitalized
     // token, not a known tool/category. Primary generalization is prompt-side; this is a net.
-    if (parsed?.specificity === "template" && Array.isArray(parsed.deliverables)) {
+    if ((parsed?.specificity === "template" || forceTemplate) && Array.isArray(parsed.deliverables)) {
       const GENERIC = new Set(["av", "slack", "luma", "hr", "it", "pr", "ai", "qa", "ceo", "cto", "vp", "us", "eu", "ui", "ux"]);
       for (const d of parsed.deliverables) {
         if (typeof d?.title !== "string") continue;

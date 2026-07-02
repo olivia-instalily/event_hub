@@ -96,9 +96,11 @@ integration ids (`gcal_*`, `linear_*`, `luma_*`).
   **state-based navigation (no router)** — one `index.html`, no server-side routing needed.
   Build: `npm run build` → static assets in `dist/`.
 - **Backend: Supabase.** Postgres **17**, Supabase Auth, Supabase Storage, and **17 Deno
-  edge functions** (`supabase/functions/*`). DB schema is **53 SQL migrations**
-  (`supabase/migrations/`). One storage bucket: **`attachments`** (created by migration
-  `20260612000900_attachments_bucket.sql`; public-read).
+  edge functions** (`supabase/functions/*`). DB schema is **54 SQL migrations**
+  (`supabase/migrations/`). Two storage buckets, both created by migrations: **`attachments`**
+  (`20260612000900_…`; **public-read**, low-sensitivity — cover images / avatars) and
+  **`documents`** (`20260702000000_…`; **private**, sensitive dropped docs — briefs / budgets /
+  debriefs / vendor sheets — served only via short-lived **signed URLs**).
 - **Private dependency:** `@instalily/ui@^2.2.0` is pulled from **GitHub Packages**
   (`.npmrc`: `@instalily:registry=https://npm.pkg.github.com`). CI needs a GitHub token
   with `read:packages` to `npm install` (see §5).
@@ -120,8 +122,8 @@ integration ids (`gcal_*`, `linear_*`, `luma_*`).
    supabase db push                 # applies all migrations
    supabase functions deploy        # deploys all 17 functions
    ```
-3. **Storage:** the `attachments` bucket is created by a migration, so `db push` handles it.
-   Verify it exists and is public-read.
+3. **Storage:** both buckets are created by migrations, so `db push` handles them. Verify
+   **`attachments`** exists (public-read) and **`documents`** exists (private) after push.
 4. **Function secrets** — set via `supabase secrets set KEY=value` (see §4). Note:
    `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are **auto-injected** into cloud edge
    functions — do **not** set those manually.
@@ -205,7 +207,8 @@ Token needs `read:packages`. Provide it as a CI secret.
 - App loads and lists events (Supabase reachable, anon key correct).
 - Drop a CSV on an event → budget import works (Storage + functions reachable).
 - If enabled: "Add to Google Calendar" on an event, "Sync to Linear" on the Deliverables tab.
-- Confirm `attachments` bucket serves uploaded files over its public URL.
+- Confirm `attachments` serves cover/avatar files over its public URL, and that a dropped
+  brief/budget lands in the private `documents` bucket and previews via a signed URL.
 
 ## 8. Pre-deploy: what to alter / add (in priority order)
 
@@ -222,18 +225,21 @@ Token needs `read:packages`. Provide it as a CI secret.
      instalily.ai Workspace) **+ Supabase network/IP allowlist** so the Supabase API is only
      reachable from the app's egress. Mitigates the exposed-anon-key hole without an RLS rewrite.
    > Recommended: (c) to ship internally fast, with (a) as the durable follow-up.
-2. **Lock down the `attachments` bucket.** It's **public-read** and holds sensitive internal
-   docs (budgets, debriefs, briefs). Switch to a **private bucket + signed URLs**, or accept the
-   exposure knowingly. (`uploadAttachment` in `src/lib/db.ts` returns a public URL today — this
-   would change to a signed-URL fetch.)
+2. **Storage sensitivity — largely addressed.** Sensitive dropped docs (briefs, budgets,
+   debriefs, vendor sheets) now go to the **private `documents` bucket** and are served via
+   short-lived **signed URLs** (`uploadDocument` + `signDocValues` in `src/lib/db.ts`), so they're
+   **not** fetchable by raw URL. The **public `attachments`** bucket now holds only
+   low-sensitivity assets (cover images, avatars). Remaining check: confirm nothing sensitive is
+   still routed to `attachments`, and treat the public bucket's contents as world-readable.
 3. **Secrets hygiene.** Move all keys out of the local `.env` / `supabase/functions/.env` into
    managed secrets (Supabase function secrets + GCP Secret Manager for CI). Confirm the
    **service_role key is never** in the client bundle (it isn't today — keep it that way).
    Rotate any refresh tokens / keys that were shared during local setup.
 
 ### P1 — Make it run on GCP
-4. **Backend:** create the Supabase Cloud project → `supabase link` → `db push` (53 migrations,
-   incl. the `attachments` bucket) → `functions deploy` (17 functions). (Or self-host per P0-b.)
+4. **Backend:** create the Supabase Cloud project → `supabase link` → `db push` (54 migrations,
+   incl. the `attachments` + `documents` buckets) → `functions deploy` (17 functions). (Or
+   self-host per P0-b.)
 5. **Frontend:** build with `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (baked at build),
    host on Cloud Run / GCS+LB / Firebase, with SPA fallback to `index.html`.
 6. **CI:** provide the **GitHub Packages token** (`read:packages`) so `npm ci` can pull
@@ -306,10 +312,10 @@ directly. **IAP** in front of Cloud Run restricts access to the instalily.ai Wor
   and only reachable through the IAP-gated proxy. Anyone who *is* inside IAP has full data
   access (fine for an all-trusted internal team; revisit with real Auth + RLS = option (a) when
   you need per-user restrictions or wider access).
-- **The `attachments` bucket is still public on Supabase's own domain.** The app's links go
-  through the proxy (so they inherit IAP), but the objects remain fetchable directly on
-  `<ref>.supabase.co` if someone knows the URL. Do P0-2 (private bucket + signed URLs) to fully
-  close this.
+- **The public `attachments` bucket is still world-readable on Supabase's own domain** — but it
+  now holds only low-sensitivity assets (cover images / avatars). Sensitive docs already live in
+  the **private `documents` bucket** (signed URLs), so the earlier "budgets/debriefs are public"
+  hole is closed; just don't route anything sensitive back into `attachments`.
 
 ### Local dev is unchanged
 `.env.local` still sets `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` → the app talks to the

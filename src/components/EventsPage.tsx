@@ -2,7 +2,7 @@ import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, Chevr
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
@@ -951,17 +951,14 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
         id = await createPlanningEvent({ name, date: asTemplate ? null : (f.date || null), startTime: f.startTime || null, endTime: f.endTime || null, location: f.venue.trim() || null, tags: [ingest.tag], format: joinFormats(f.format), phases: ingest.phases, planningLeadTime: lead, agenda: ingest.agenda, staffRoles: ingest.staff, reflections: ingest.reflections, walkthrough: ingest.walkthrough, heuristics: ingest.heuristics, outreach: ingest.outreach, template, isTemplate: asTemplate, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
       }
       // Upload every dropped file once → attach as source materials for reference. Keep a
-      // file→URL map so the cover reuses its upload instead of uploading twice.
-      const uploaded = new Map<File, string>();
+      // Sensitive source docs → PRIVATE `documents` bucket (stored as paths, signed on read).
       const sourceMaterials: SourceMaterial[] = [];
       for (const m of ingest.materials) {
-        try { const url = await uploadAttachment(m.file); uploaded.set(m.file, url); sourceMaterials.push({ name: m.name, url, type: m.file.type || m.kind }); } catch { /* non-fatal */ }
+        try { const url = await uploadDocument(m.file); sourceMaterials.push({ name: m.name, url, type: m.file.type || m.kind }); } catch { /* non-fatal */ }
       }
       if (sourceMaterials.length) { try { await setEventMaterials(id, sourceMaterials); } catch { /* non-fatal */ } }
-      // Cover: reuse the uploaded URL if the cover is among the materials; else upload/fallback.
-      const coverUrl = ingest.coverFile ? uploaded.get(ingest.coverFile) ?? null : null;
-      if (coverUrl) { try { await updateEventCover(id, coverUrl); } catch { /* non-fatal */ } }
-      else if (ingest.coverFile) { try { await updateEventCover(id, await uploadAttachment(ingest.coverFile)); } catch { if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } } } }
+      // Cover image → PUBLIC `attachments` bucket (low-sensitivity; displayed directly).
+      if (ingest.coverFile) { try { await updateEventCover(id, await uploadAttachment(ingest.coverFile)); } catch { if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } } } }
       else if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } }
       if (ingest.owner) { try { const profs = await listProfiles(); const o = ingest.owner.toLowerCase(); const m = profs.find((p) => p.name.toLowerCase() === o) ?? profs.find((p) => p.name.toLowerCase().includes(o) || o.includes(p.name.toLowerCase())); if (m) await addEventOwner(id, m.id); } catch { /* non-fatal */ } }
       if (headNum != null && Number.isFinite(headNum)) { try { await setHeadcount(id, headNum); } catch { /* non-fatal */ } }
@@ -995,13 +992,11 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
     setCreating(true); setCreateError(null);
     try {
       const id = await spinUpFromTemplate(templateId, { name: f.name.trim() || 'Untitled event', date: f.date || null, location: f.venue.trim() || null, tags: ingest.tag ? [ingest.tag] : [] });
-      // Cover + source materials (upload once, reuse the cover's URL).
-      const uploaded = new Map<File, string>();
+      // Source docs → PRIVATE bucket (paths, signed on read); cover → PUBLIC bucket.
       const sourceMaterials: SourceMaterial[] = [];
-      for (const m of ingest.materials) { try { const url = await uploadAttachment(m.file); uploaded.set(m.file, url); sourceMaterials.push({ name: m.name, url, type: m.file.type || m.kind }); } catch { /* non-fatal */ } }
+      for (const m of ingest.materials) { try { const url = await uploadDocument(m.file); sourceMaterials.push({ name: m.name, url, type: m.file.type || m.kind }); } catch { /* non-fatal */ } }
       if (sourceMaterials.length) { try { await setEventMaterials(id, sourceMaterials); } catch { /* non-fatal */ } }
-      const coverUrl = ingest.coverFile ? uploaded.get(ingest.coverFile) ?? null : null;
-      if (coverUrl) { try { await updateEventCover(id, coverUrl); } catch { /* non-fatal */ } }
+      if (ingest.coverFile) { try { await updateEventCover(id, await uploadAttachment(ingest.coverFile)); } catch { if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } } } }
       else if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } }
       if (ingest.owner) { try { const profs = await listProfiles(); const o = ingest.owner.toLowerCase(); const m = profs.find((p) => p.name.toLowerCase() === o) ?? profs.find((p) => p.name.toLowerCase().includes(o) || o.includes(p.name.toLowerCase())); if (m) await addEventOwner(id, m.id); } catch { /* non-fatal */ } }
       if (headNum != null && Number.isFinite(headNum)) { try { await setHeadcount(id, headNum); } catch { /* non-fatal */ } }

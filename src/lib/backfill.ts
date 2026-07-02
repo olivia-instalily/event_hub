@@ -19,7 +19,10 @@ export interface BackfillExtract {
   lessons: string[];
   heuristics: string[];
   actuals: { line: string; amount: number | null }[];
-  deliverables: string[];
+  // Deliverables carry their PHASE (assigned by function) and, when generalized for a template,
+  // the pre-strip `original` text. Kept richer than a bare title so the phase survives to creation.
+  deliverables: { title: string; phase: string; original?: string }[];
+  droppedForTemplate?: { title: string; reason: string }[]; // template mode: too event-specific to keep
   agenda: { time: string; title: string }[]; // run-of-show rows from a brief, if any
 }
 

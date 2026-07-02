@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Rocket, Clock, CalendarRange, Users, Repeat, Sparkles, ChevronRight, ChevronLeft,
-  ListChecks, DollarSign, UserCircle, Mail, BookOpen, ArrowRight, X, ExternalLink, FileText, Plus, Pencil, Check,
+  ListChecks, DollarSign, UserCircle, Mail, BookOpen, ArrowRight, X, ExternalLink, FileText, Plus, Pencil, Check, GripVertical,
 } from "lucide-react";
-import { type EventPlanning, type Deliverable, type OutreachTemplate, type EngagementWithCandidates, eventsFromTemplate, spinUpFromTemplate, type TemplateChild, addDeliverable, deleteDeliverable, setEventStaffRoles, setEventOutreach, addEngagement, deleteEngagement } from "../lib/db";
+import { DndContext, closestCorners, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
+import { type EventPlanning, type Deliverable, type OutreachTemplate, type EngagementWithCandidates, eventsFromTemplate, spinUpFromTemplate, type TemplateChild, addDeliverable, deleteDeliverable, setDeliverablePhase, setEventStaffRoles, setEventOutreach, addEngagement, deleteEngagement } from "../lib/db";
 import { fundingFor } from "../lib/scoping";
 import { canonicalPhaseFor } from "../lib/phaseMerge";
 import { SourceMaterials } from "./SourceMaterials";
@@ -78,6 +79,8 @@ export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview }: {
     try { const d = await addDeliverable(eventId, { title, phase, ownerRole: null, dueDate: null, offsetStart: null, offsetEnd: null }); setDels((p) => [...p, d]); } catch { /* non-fatal */ }
   };
   const removeDel = (id: string) => { setDels((p) => p.filter((d) => d.id !== id)); deleteDeliverable(id).catch(() => {}); };
+  // Drag a deliverable into a different phase/section — updates its phase (keeps T-offsets).
+  const moveDel = (id: string, phase: string) => { setDels((p) => p.map((d) => (d.id === id ? { ...d, phase } : d))); setDeliverablePhase(id, phase).catch(() => {}); };
   const addCost = async (category: string) => {
     try { const e = await addEngagement(eventId, category); setEngagements((p) => [...p, e]); } catch { /* non-fatal */ }
   };
@@ -214,7 +217,7 @@ export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview }: {
             </div>
             <div className="p-6">
               {tab === "walkthrough" && <Walkthrough plan={plan} phases={phases} phaseRefs={phaseRefs} onJumpDeliverable={jumpToDeliverable} />}
-              {tab === "deliverables" && <Deliverables items={dels} phases={phases} jumpKey={jumpKey} onAdd={addDel} onRemove={removeDel} />}
+              {tab === "deliverables" && <Deliverables items={dels} phases={phases} jumpKey={jumpKey} onAdd={addDel} onRemove={removeDel} onMove={moveDel} />}
               {tab === "budget" && <Budget plan={plan} engagements={engagements} onAdd={addCost} onRemove={removeCost} />}
               {tab === "roles" && <Roles roles={roles} plan={plan} onAdd={addRole} />}
               {tab === "outreach" && <Outreach items={outreach} onAdd={addOutreach} onUpdate={updateOutreach} onRemove={removeOutreach} />}
@@ -464,11 +467,24 @@ function Walkthrough({ plan, phases, phaseRefs, onJumpDeliverable }: { plan: Eve
 }
 
 // ── Deliverables ─────────────────────────────────────────────────────────────
-function Deliverables({ items, phases, jumpKey, onAdd, onRemove }: { items: Deliverable[]; phases: Phase[]; jumpKey: string | null; onAdd: (title: string, phase: string) => void; onRemove: (id: string) => void }) {
+// A phase section that accepts a dropped deliverable (highlights while hovered).
+function DroppableSection({ id, children }: { id: string; children: ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return <div ref={setNodeRef} className={`rounded-lg transition-shadow ${isOver ? "ring-2 ring-gray-400" : ""}`}>{children}</div>;
+}
+// A draggable deliverable row (grip handle carries the drag listeners).
+function DraggableRow({ id, children }: { id: string; children: (h: { setNodeRef: (el: HTMLElement | null) => void; attributes: any; listeners: any; style: any; isDragging: boolean }) => ReactNode }) {
+  const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({ id });
+  const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50, position: "relative" as const } : undefined;
+  return <>{children({ setNodeRef, attributes, listeners, style, isDragging })}</>;
+}
+
+function Deliverables({ items, phases, jumpKey, onAdd, onRemove, onMove }: { items: Deliverable[]; phases: Phase[]; jumpKey: string | null; onAdd: (title: string, phase: string) => void; onRemove: (id: string) => void; onMove?: (id: string, phase: string) => void }) {
   const refs = useRef<Record<string, HTMLLIElement | null>>({});
   const [highlight, setHighlight] = useState<string | null>(null);
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
   const [title, setTitle] = useState("");
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor));
 
   // On a jump from the walkthrough, scroll to and highlight the matching deliverable.
   useEffect(() => {
@@ -493,28 +509,44 @@ function Deliverables({ items, phases, jumpKey, onAdd, onRemove }: { items: Deli
   const names = Array.from(new Set([...phases.map((p) => p.name), ...byPhase.keys()])).sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
   const submit = (phase: string) => { const t = title.trim(); if (!t) return; onAdd(t, phase); setTitle(""); setAdding(null); };
 
+  // Drop a deliverable onto a different section → move it there (over.id is the phase name).
+  const onDragEnd = (e: DragEndEvent) => {
+    if (!onMove || !e.over) return;
+    const id = String(e.active.id);
+    const toPhase = String(e.over.id);
+    const cur = items.find((d) => d.id === id);
+    const fromPhase = cur ? (canonicalPhaseFor(cur.phase, nodeNames) || "Unphased") : null;
+    if (fromPhase !== toPhase) onMove(id, toPhase);
+  };
+
   return (
+    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
     <div className="space-y-5">
       {names.map((name) => {
         const color = phases.find((p) => p.name === name)?.color ?? PHASE_COLORS[0];
         const group = byPhase.get(name) ?? [];
         return (
-          <div key={name}>
+          <DroppableSection key={name} id={name}>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2"><span className={`w-2.5 h-2.5 rounded-full ${color.dot}`} /><h3 className="text-sm font-medium text-gray-700">{name}</h3></div>
               <button onClick={() => { setAdding(adding === name ? null : name); setTitle(""); }} className="text-[15px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
             </div>
             <ul className="rounded-lg border border-gray-200 divide-y divide-gray-100">
-              {group.length === 0 && adding !== name && <li className="px-3 py-2 text-sm text-gray-400">None.</li>}
+              {group.length === 0 && adding !== name && <li className="px-3 py-2 text-sm text-gray-400">None. <span className="text-gray-300">Drag a deliverable here to move it.</span></li>}
               {group.map((d) => {
                 const key = normKey(d.title);
                 return (
-                  <li key={d.id} ref={(el) => { refs.current[key] = el; }} className={`group px-3 py-2 flex items-center gap-3 text-sm transition-colors ${highlight === key ? "bg-amber-50" : ""}`}>
-                    <span className="flex-1 text-gray-900">{d.title}</span>
-                    {d.ownerRole && <span className="text-[15px] text-gray-500 inline-flex items-center gap-1"><UserCircle className="w-3 h-3" /> {d.ownerRole}</span>}
-                    <span className={`text-[15px] rounded px-1.5 py-0.5 ${d.offsetStart == null ? "text-gray-400 bg-gray-50" : "text-gray-500 bg-gray-100"}`}>{tLabel(d.offsetStart, d.offsetEnd)}</span>
-                    <button onClick={() => onRemove(d.id)} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" aria-label="Remove deliverable"><X className="w-3.5 h-3.5" /></button>
-                  </li>
+                  <DraggableRow key={d.id} id={d.id}>
+                    {({ setNodeRef, attributes, listeners, style, isDragging }) => (
+                      <li ref={(el) => { refs.current[key] = el; setNodeRef(el); }} style={style} className={`group px-3 py-2 flex items-center gap-2 text-sm transition-colors ${isDragging ? "opacity-60 bg-white shadow" : ""} ${highlight === key ? "bg-amber-50" : ""}`}>
+                        <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to another section" title="Drag to move to another section"><GripVertical className="w-4 h-4" /></button>
+                        <span className="flex-1 text-gray-900">{d.title}</span>
+                        {d.ownerRole && <span className="text-[15px] text-gray-500 inline-flex items-center gap-1"><UserCircle className="w-3 h-3" /> {d.ownerRole}</span>}
+                        <span className={`text-[15px] rounded px-1.5 py-0.5 ${d.offsetStart == null ? "text-gray-400 bg-gray-50" : "text-gray-500 bg-gray-100"}`}>{tLabel(d.offsetStart, d.offsetEnd)}</span>
+                        <button onClick={() => onRemove(d.id)} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" aria-label="Remove deliverable"><X className="w-3.5 h-3.5" /></button>
+                      </li>
+                    )}
+                  </DraggableRow>
                 );
               })}
               {adding === name && (
@@ -524,10 +556,11 @@ function Deliverables({ items, phases, jumpKey, onAdd, onRemove }: { items: Deli
                 </li>
               )}
             </ul>
-          </div>
+          </DroppableSection>
         );
       })}
     </div>
+    </DndContext>
   );
 }
 
