@@ -82,8 +82,8 @@ const fmtMoney = (n: number | null | undefined) =>
 
 // Formatted summary posted to the budget channel on submit (manual paste in V0). Shared by the
 // full form and the glance card so both produce the same text.
-export function buildScopingSummary(opts: { title: string; date: string | null; tags: string[]; scoping: ScopingForm; roughTotal: number }): string {
-  const { title, date, tags, scoping, roughTotal } = opts;
+export function buildScopingSummary(opts: { title: string; date: string | null; tags: string[]; scoping: ScopingForm; roughTotal: number; link?: string }): string {
+  const { title, date, tags, scoping, roughTotal, link } = opts;
   const funding = fundingFor(tags);
   const lead = leadTimeCheck(date);
   const headNum = Number(scoping.headcount) || null;
@@ -105,6 +105,9 @@ export function buildScopingSummary(opts: { title: string; date: string | null; 
     scoping.strategicJustification || "—",
     ``,
     `*Requested budget:*  ${fmtMoney(roughTotal)}${perPerson != null ? `  (≈ ${fmtMoney(perPerson)}/person)` : ""}`,
-    `_Reply in thread with the approved budget + any notes; the owner enters it in EventHub to lock the target._`,
+    ``,
+    // Deep link back into EventHub, opened straight to this event's budget form to assign.
+    link ? `*<${link}|Review & assign budget →>*` : null,
+    `_Opens the scoping form in EventHub — enter the approved amount there to lock the target (or reply in thread)._`,
   ].filter((l) => l !== null).join("\n");
 }

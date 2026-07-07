@@ -1216,18 +1216,21 @@ export async function listTemplates(): Promise<TemplateLite[]> {
 const backfillTemplateInput = (x: BackfillExtract): GeneratedTemplate => ({
   vendorCategories: [],
   budgetLines: x.actuals.filter((a) => a.line).map((a) => ({ label: a.line, estimate: a.amount ?? 0 })),
-  progressCategories: x.deliverables.map((d) => d.title), // titles only (phase carried separately below)
+  progressCategories: x.deliverables.map((d) => d.title), // fallback only; deliverables[] is passed with phases
 });
-// Deliverables WITH their phase (assigned by function) → createPlanningEvent, so they land in the
-// right band instead of all defaulting to "Planning".
-const backfillDeliverables = (x: BackfillExtract) => x.deliverables.map((d) => ({ title: d.title, phase: d.phase }));
+// Backfill extracts in TEMPLATE MODE, so each deliverable carries BOTH the generalized `title` and
+// the pre-strip `original`. Both variants keep the phase (assigned by function).
+//  • the EVENT record keeps the SPECIFIC text (names/clients are correct for a real past event)
+//  • the TEMPLATE gets the GENERALIZED text (no person/company names)
+const eventDeliverables = (x: BackfillExtract) => x.deliverables.map((d) => ({ title: (d.original?.trim() || d.title), phase: d.phase }));
+const templateDeliverables = (x: BackfillExtract) => x.deliverables.map((d) => ({ title: d.title, phase: d.phase }));
 
 /** Cold-start: create a NEW template (is_template event) from the dropped event's pattern. */
 export async function createTemplateFromExtract(x: BackfillExtract): Promise<string> {
   return createPlanningEvent({
     name: x.format ? `${x.format} template` : (x.name ? `${x.name} (template)` : 'Event template'),
     date: null, location: null, tags: x.tag ? [x.tag] : [], template: backfillTemplateInput(x),
-    deliverables: backfillDeliverables(x),
+    deliverables: templateDeliverables(x), // generalized — no names in the template
     format: x.format, phases: x.phases.map((name, order) => ({ name, order })),
     staffRoles: generalRoles(x.staffRoles), reflections: [...x.lessons, ...x.heuristics], isTemplate: true,
   });
@@ -1237,7 +1240,7 @@ export async function createTemplateFromExtract(x: BackfillExtract): Promise<str
 export async function backfillWrappedEvent(x: BackfillExtract, modeledOnTemplateId: string | null): Promise<string> {
   const eventId = await createPlanningEvent({
     name: x.name || 'Backfilled event', date: x.date, location: x.location, tags: x.tag ? [x.tag] : [],
-    template: backfillTemplateInput(x), deliverables: backfillDeliverables(x), format: x.format,
+    template: backfillTemplateInput(x), deliverables: eventDeliverables(x), format: x.format, // specific text — the real event keeps names
     phases: x.phases.map((name, order) => ({ name, order })),
     staffRoles: x.staffRoles, reflections: [...x.lessons, ...x.heuristics],
     modeledOnEventId: modeledOnTemplateId, isTemplate: false,

@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Home, Calendar, Users, Briefcase, DollarSign, Plus } from 'lucide-react';
 import { filesFromDrop } from './lib/drop';
 import { looksLikeBackfill } from './lib/backfill';
+import { parseDeepLink, setPendingScopingBudget } from './lib/deepLink';
 import { EventsPage } from './components/EventsPage';
 import { HomePage } from './components/HomePage';
 import { PeoplePage } from './components/PeoplePage';
@@ -15,9 +16,13 @@ export type PeopleStatusFilter = 'all' | 'registered' | 'checkedIn' | 'waitliste
 export type EventFilter = { id: string; name: string; tag?: string | null; status?: PeopleStatusFilter };
 
 export default function Component() {
-  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget'>('home');
+  // Deep link from a Slack scoping request (?event=<id>&view=budget) — resolved once on load so
+  // a cold click lands on that event. Parsed synchronously here so the initial nav state below
+  // opens straight to the event (no flash of Home first).
+  const [deepLink] = useState(() => (typeof window !== 'undefined' ? parseDeepLink(window.location.search) : null));
+  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget'>(deepLink ? 'events' : 'home');
   // Lifted so navigation can leave the Events page and return to the same event detail.
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(deepLink?.eventId ?? null);
   // When set (and on the People page), People is scoped to this event with a Back button.
   const [peopleEventFilter, setPeopleEventFilter] = useState<EventFilter | null>(null);
   // Bumped on home/Events nav so EventsPage remounts and resets its filters.
@@ -102,6 +107,16 @@ export default function Component() {
     setCreateOnEvents(true);
     setActivePage('events');
   };
+
+  // Finish resolving the deep link after mount: register the "open the scoping/budget form"
+  // intent (the event's Overview consumes it once it mounts, after its data loads), then strip
+  // the params so a later refresh or revisit doesn't re-open the form. Nav state above already
+  // opened the event; clearing the URL doesn't touch it.
+  useEffect(() => {
+    if (!deepLink) return;
+    if (deepLink.view === 'budget') setPendingScopingBudget(deepLink.eventId);
+    try { window.history.replaceState(null, '', window.location.pathname); } catch { /* ignore */ }
+  }, [deepLink]);
 
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
   return (

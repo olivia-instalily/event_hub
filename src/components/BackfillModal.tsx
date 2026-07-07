@@ -8,6 +8,7 @@ import {
   matchTemplates, completenessGaps, templateAdditions, hasAdditions,
   type BackfillExtract, type TemplateLite, type TemplateMatch, type Gap, type TemplateAdditions,
 } from "../lib/backfill";
+import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
 
 // Backfill a past event by dropping its debrief/brief. Extract → classify + match a template
 // (propose, don't auto-merge) → completeness prompt (not a block) → create the wrapped record,
@@ -32,7 +33,18 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles }:
   const [fills, setFills] = useState<{ date: string; turnout: string; budget: string; outcome: string }>({ date: "", turnout: "", budget: "", outcome: "" });
 
   const fileRef = useRef<HTMLInputElement>(null);
-  const readFile = async (file?: File | null) => { if (!file) return; try { setText(await file.text()); setAttachFiles([file]); } catch { setErr("Couldn't read that file — paste the text instead."); } };
+  const readFile = async (file?: File | null) => {
+    if (!file) return;
+    const bad = unsupportedFileMessage(file);
+    if (bad) { setErr(bad); return; }
+    try {
+      // Workbooks (.xlsx/.ods): flatten every tab into one labeled text blob for the extractor.
+      const content = isWorkbookFile(file)
+        ? await (await import("../lib/workbook")).readWorkbookAsText(file)
+        : await file.text();
+      setText(content); setAttachFiles([file]);
+    } catch { setErr("Couldn't read that file — paste the text instead."); }
+  };
 
   // Handed text from the create flow (a dropped past-event brief) → process it straight away.
   useEffect(() => { if (initialText?.trim()) void run(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);

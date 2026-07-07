@@ -46,25 +46,64 @@ function parseAmount(s: string): number | null {
   return Number.isNaN(n) ? null : (neg ? -n : n);
 }
 
-const isTotalLabel = (s: string) => /\b(total|subtotal|sum|grand\s*total)\b/i.test(s);
+// Rows that name a roll-up / derived figure, not a spend line — skip them so a subtotal or a
+// "per person" metric never lands as its own budget line (which double-counts the money).
+const isTotalLabel = (s: string) =>
+  /\b(total|subtotal|sum|grand\s*total)\b/i.test(s) || /\bper\s*(person|head|guest|attendee|capita)\b/i.test(s);
+
+// Header keywords. A real spend sheet usually has an itemized "Actual/Final/Spent" column next to a
+// "Pitched/Budget/Estimate" one — we want the ACTUAL (final spend), not the projection.
+const ACTUAL_HDR = /\b(actual|final|spent|paid)\b/i;
+const MONEY_HDR = /\b(amount|cost|price|total|spend|budget|expense)\b/i;
+const PITCHED_HDR = /\b(pitched|planned|estimate|estimated|projected|proposed|forecast|budget|proj)\b/i;
+const LABEL_HDR = /\b(item|line\s*item|category|description|name|expense|detail)\b/i;
 
 type Line = { label: string; amount: number | null };
 
-/** One-shot budget parse (no UI): delimiter-detect, pick the amount column (most parseable
- *  numbers), label = first other column, skip header + total rows. Shared with the drop ingest
- *  so dropping a CSV anywhere parses it the same way as the import modal. */
+// Share of a column's non-empty cells that parse as an amount (used to locate the amount/label
+// columns when there's no usable header, e.g. a pasted "Venue, 5000" list).
+const numericDensity = (grid: string[][], c: number): number => {
+  const vals = grid.map((r) => (r[c] ?? "").trim()).filter(Boolean);
+  return vals.length ? vals.filter((v) => parseAmount(v) != null).length / vals.length : 0;
+};
+
+/** One-shot budget parse (no UI): delimiter-detect, then pick the label + amount columns. When the
+ *  sheet has a header we map columns by name — crucially choosing the "Actual/Final" money column
+ *  over "Pitched/Budget" so a dropped sheet records FINAL SPEND, and using the named item column as
+ *  the label rather than a leading "#" index. Falls back to numeric density for headerless pastes.
+ *  Skips title/subtitle rows above the table plus section/subtotal/total/per-person rows. Shared
+ *  with the drop ingest so dropping a CSV parses the same way as the import modal. */
 export function parseBudgetText(text: string): Line[] {
   const grid = parseDelimited(text);
   if (grid.length === 0) return [];
   const cols = Math.max(...grid.map((r) => r.length));
-  let amtCol = 1, best = -1;
-  for (let c = 0; c < cols; c++) {
-    const score = grid.filter((r) => parseAmount(r[c] ?? "") != null).length;
-    if (score > best) { best = score; amtCol = c; }
+
+  // Locate the header row: the first row naming a label or money column. Sheets often carry a
+  // title/subtitle band above the table, so row 0 isn't necessarily the header.
+  let headerRow = -1;
+  for (let i = 0; i < grid.length; i++) {
+    const cells = grid[i].map((c) => (c ?? "").trim());
+    if (cells.some((c) => LABEL_HDR.test(c)) || cells.some((c) => ACTUAL_HDR.test(c) || MONEY_HDR.test(c))) { headerRow = i; break; }
   }
-  const labelCol = amtCol === 0 ? 1 : 0;
-  const hasHeader = parseAmount(grid[0][amtCol] ?? "") == null; // first row's amount cell isn't a number → header
-  const body = hasHeader ? grid.slice(1) : grid;
+
+  let amtCol = -1, labelCol = -1;
+  if (headerRow >= 0) {
+    const hdr = grid[headerRow].map((c) => (c ?? "").trim());
+    // Amount column: prefer Actual/Final/Spent, then a generic money column, then Pitched last.
+    const rank = (h: string) => (ACTUAL_HDR.test(h) ? 3 : MONEY_HDR.test(h) && !PITCHED_HDR.test(h) ? 2 : PITCHED_HDR.test(h) || MONEY_HDR.test(h) ? 1 : 0);
+    let bestRank = 0;
+    for (let c = 0; c < cols; c++) { const r = rank(hdr[c] ?? ""); if (r > bestRank) { bestRank = r; amtCol = c; } } // tie → leftmost of a rank; Actual(3) beats Pitched(1)
+    // Label column: the named item/category column; else the first non-amount text column.
+    labelCol = hdr.findIndex((h) => LABEL_HDR.test(h));
+    if (labelCol < 0) for (let c = 0; c < cols; c++) { if (c !== amtCol && numericDensity(grid.slice(headerRow + 1), c) < 0.5) { labelCol = c; break; } }
+  }
+  // No usable header (or none of its columns resolved) → density heuristic: amount = most-numeric
+  // column, label = the most-textual other column.
+  if (amtCol < 0) { let best = -1; for (let c = 0; c < cols; c++) { const d = numericDensity(grid, c); if (d > best) { best = d; amtCol = c; } } }
+  if (labelCol < 0) { let least = 2; for (let c = 0; c < cols; c++) { if (c === amtCol) continue; const d = numericDensity(grid, c); if (d < least) { least = d; labelCol = c; } } }
+  if (labelCol < 0) labelCol = amtCol === 0 ? 1 : 0;
+
+  const body = headerRow >= 0 ? grid.slice(headerRow + 1) : grid;
   const out: Line[] = [];
   for (const r of body) {
     const label = (r[labelCol] ?? "").trim();

@@ -1873,6 +1873,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     // Events we're actively planning (macro_stage set) open the planning view;
     // everything else opens the post-hoc recap view.
     const sel = events.find((e) => e.id === selectedEventId);
+    // On a cold deep-link load (Slack link → app), the id is set before the events list has
+    // loaded. Wait for it so we pick the right view instead of flashing the recap view; once
+    // loaded, a still-missing event falls through to the recap view's "Event not found".
+    if (!sel && loading) return <div><p className="text-gray-500 py-12 text-center">Loading…</p></div>;
     // If this event was just generated from a brief, Back returns to its review/generation
     // page (reopened from cache — no reprocessing); otherwise Back goes to the list.
     const onBack = () => {

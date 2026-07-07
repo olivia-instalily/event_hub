@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy, MessageSquare } from "lucide-react";
 import { parseFormats } from "./FormatPicker";
 import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as ScopingData } from "../lib/scoping";
+import { buildEventDeepLink } from "../lib/deepLink";
 import { slackSend, type EventPlanning } from "../lib/db";
 import { Button } from "@instalily/ui/button";
 
@@ -83,7 +84,11 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
   // Submit = post the summary to Slack for approval; only mark submitted once it actually sends.
   const doSubmit = async () => {
     setSubmitBusy(true); setSubmitErr(null);
-    const summary = buildScopingSummary({ title: plan.title, date: plan.date, tags: plan.tags, scoping, roughTotal });
+    // Deep link back to THIS event's budget form. window.location.origin is the app's real
+    // origin — the IAP-fronted host in prod, localhost in dev — so the link is never a dead
+    // localhost when it matters. Only the event id travels in the URL (no token); IAP gates it.
+    const link = typeof window !== "undefined" ? buildEventDeepLink(window.location.origin, plan.id) : undefined;
+    const summary = buildScopingSummary({ title: plan.title, date: plan.date, tags: plan.tags, scoping, roughTotal, link });
     try {
       await slackSend(slackChannel.trim(), summary);
       try { localStorage.setItem("slack_budget_channel", slackChannel.trim()); } catch { /* ignore */ }

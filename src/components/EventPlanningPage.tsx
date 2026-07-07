@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { TemplateView, PhaseRail, enrichPhases, tLabel as railLabel } from "./TemplateView";
+import { TemplateView, PhaseRail, enrichPhases, PHASE_COLORS, tLabel as railLabel } from "./TemplateView";
 import { SourceMaterials } from "./SourceMaterials";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
   Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2,
 } from "lucide-react";
-import { DndContext, closestCenter, closestCorners, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -53,10 +53,12 @@ import { LinearUpdateBox } from "./LinearUpdateBox";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
 import { parseVendors } from "../lib/vendorImport";
+import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
 import { EventSetup } from "./EventSetup";
 import { ScopingForm } from "./ScopingForm";
 import { PeoplePage } from "./PeoplePage";
 import { loadScoping, saveScoping, fundingFor, type ScopingForm as ScopingData } from "../lib/scoping";
+import { takePendingScopingBudget } from "../lib/deepLink";
 import { eventFocus, FOCUS_LABEL } from "../lib/eventFocus";
 import { templateAdditions, hasAdditions, matchTemplates, type TemplateMatch } from "../lib/backfill";
 import { canonicalPhaseFor } from "../lib/phaseMerge";
@@ -1126,6 +1128,14 @@ function SortableRow({ id, children }: { id: string; children: (h: RowHandle) =>
   return <>{children({ setNodeRef: s.setNodeRef, style, attributes: s.attributes, listeners: s.listeners, isDragging: s.isDragging })}</>;
 }
 
+// Whole-phase drop target — lets a deliverable be dragged INTO a category (incl. an empty one),
+// not just reordered within its own. id is prefixed so onDragEnd can tell it from a row id.
+const PHASE_ZONE = "phaseZone::";
+function PhaseDropZone({ phase, children }: { phase: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${PHASE_ZONE}${phase}` });
+  return <div ref={setNodeRef} className={`rounded-lg transition-shadow ${isOver ? "ring-2 ring-primary/50" : ""}`}>{children}</div>;
+}
+
 function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
   const [items, setItems] = useState(initial);
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
@@ -1217,17 +1227,40 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
   );
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
-    if (!over || active.id === over.id) return;
+    if (!over) return;
     const a = items.find((d) => d.id === active.id);
-    const o = items.find((d) => d.id === over.id);
-    if (!a || !o || a.phase !== o.phase) return; // within a phase only
+    if (!a) return;
+    // Target phase = the phase drop-zone dropped onto, or the phase of the row dropped onto.
+    const overId = String(over.id);
+    const targetPhase = overId.startsWith(PHASE_ZONE)
+      ? overId.slice(PHASE_ZONE.length)
+      : items.find((d) => d.id === over.id)?.phase;
+    if (targetPhase == null) return;
+
+    if (targetPhase === a.phase) {
+      // Reorder within the same phase (T-offsets don't change — manual arrangement only).
+      if (active.id === over.id) return;
+      setItems((prev) => {
+        const ids = prev.filter((d) => d.phase === a.phase).map((d) => d.id);
+        const overIdx = ids.indexOf(overId);
+        if (overIdx === -1) return prev; // dropped on the zone, not a row → no reorder
+        const reordered = arrayMove(ids, ids.indexOf(a.id), overIdx);
+        const byId = new Map(prev.map((d) => [d.id, d]));
+        const q = [...reordered];
+        return prev.map((d) => (d.phase === a.phase ? byId.get(q.shift()!)! : d));
+      });
+      return;
+    }
+
+    // Cross-phase: move the deliverable into the new category and persist the phase change.
     setItems((prev) => {
-      const ids = prev.filter((d) => d.phase === a.phase).map((d) => d.id);
-      const reordered = arrayMove(ids, ids.indexOf(a.id), ids.indexOf(o.id));
-      const byId = new Map(prev.map((d) => [d.id, d]));
-      const q = [...reordered];
-      return prev.map((d) => (d.phase === a.phase ? byId.get(q.shift()!)! : d)); // refill phase slots in the new order
+      const item = { ...prev.find((d) => d.id === a.id)!, phase: targetPhase };
+      const rest = prev.filter((d) => d.id !== a.id);
+      const overRowIdx = rest.findIndex((d) => d.id === overId); // dropped onto a row → land before it
+      if (overRowIdx >= 0) { rest.splice(overRowIdx, 0, item); return rest; }
+      return [...rest, item]; // dropped on the zone / empty group → append to that phase
     });
+    setDeliverablePhase(a.id, targetPhase).catch(() => {});
   };
 
   return (
@@ -1278,7 +1311,7 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
         )}
       </div>
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
       <div className="space-y-5">
         {phaseGroups.map((phase) => {
           const group = items.filter((d) => d.phase === phase);
@@ -1302,8 +1335,9 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
                   <button onClick={() => { setAdding(adding === phase ? null : phase); setTitle(""); setOwner(""); setDueInput(""); }} className="text-[15px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
                 </div>
               </div>
-              <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
-                {group.length === 0 && adding !== phase && <p className="px-3 py-2 text-sm text-gray-400">None.</p>}
+              <PhaseDropZone phase={phase}>
+              <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 min-h-[2.5rem]">
+                {group.length === 0 && adding !== phase && <p className="px-3 py-2 text-sm text-gray-400">None — drag a task here.</p>}
                 <SortableContext items={group.map((d) => d.id)} strategy={verticalListSortingStrategy}>
                 {group.map((d) => {
                   const overdue = d.dueDate && d.dueDate < today() && d.status !== "Done";
@@ -1311,7 +1345,7 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
                     <SortableRow key={d.id} id={d.id}>
                       {({ setNodeRef, style, attributes, listeners, isDragging }) => (
                     <div ref={(el) => { rowRefs.current[d.id] = el; setNodeRef(el); }} style={style} className={`px-3 py-2 flex items-center gap-3 text-sm group scroll-mt-24 transition-colors ${isDragging ? "opacity-60" : ""} ${highlight === d.id ? "bg-amber-50" : selected.has(d.id) ? "bg-gray-50" : ""}`}>
-                      <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to retime" title="Drag to retime — dropping between two tasks sets the time in between"><GripVertical className="w-4 h-4" /></button>
+                      <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to reorder or move phase" title="Drag to reorder within a phase, or drop on another phase to move it there"><GripVertical className="w-4 h-4" /></button>
                       <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSel(d.id)} className="rounded border-gray-300 shrink-0" aria-label={`Select ${d.title}`} />
                       <div className="flex-1 min-w-0">
                         <p className={`inline-flex items-center gap-1.5 ${d.status === "Done" ? "line-through text-gray-400" : ""}`}>
@@ -1361,6 +1395,7 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
                   </div>
                 )}
               </div>
+              </PhaseDropZone>
             </div>
           );
         })}
@@ -1819,9 +1854,14 @@ async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): P
   // budget and run-of-show paths are idempotent, so we always let them RECONCILE: re-dropping a
   // sheet updates / back-fills lines (e.g. a line that a prior parse missed) without doubling.
   const attachedMat = (await getSourceMaterials(eventId)).find((m) => m.name.trim().toLowerCase() === file.name.trim().toLowerCase());
-  const ensureSource = async (type: string): Promise<string | null> => {
-    if (attachedMat) return attachedMat.url;
-    try { const url = await uploadDocument(file); await addSourceMaterial(eventId, { name: file.name, url, type: file.type || type }); return url; } catch { return null; }
+  // Memoized: safe to call from every tab of a workbook — the file uploads at most once.
+  let sourcePromise: Promise<string | null> | null = null;
+  const ensureSource = (type: string): Promise<string | null> => {
+    if (attachedMat) return Promise.resolve(attachedMat.url);
+    if (!sourcePromise) sourcePromise = (async () => {
+      try { const url = await uploadDocument(file); await addSourceMaterial(eventId, { name: file.name, url, type: file.type || type }); return url; } catch { return null; }
+    })();
+    return sourcePromise;
   };
 
   // PDFs: read via pdf.js (lazy-loaded). Table structure is lost in a PDF, so we DON'T run the
@@ -1849,9 +1889,77 @@ async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): P
       : { message: "Added the PDF to project context — nothing new to fill in for this event.", applied: true };
   }
 
+  // A multi-tab workbook (.xlsx/.ods/…): parse each tab to CSV and route it INDEPENDENTLY through
+  // the same detection as a standalone drop — a Budget tab fills lines, a Vendors tab makes
+  // engagements, an Agenda tab fills run-of-show. Leftover prose tabs get one combined LLM pass.
+  if (isWorkbookFile(file)) {
+    let sheets;
+    try { const { readWorkbook } = await import("../lib/workbook"); sheets = await readWorkbook(file); }
+    catch { return { message: "Couldn't read that workbook — re-save it as .xlsx, or export each tab as .csv.", applied: false }; }
+    if (!sheets.length) return { message: "That workbook has no data in any tab.", applied: false };
+    await ensureSource(file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const parts: string[] = [];
+    const prose: string[] = [];
+    let applied = false;
+    for (const sheet of sheets) {
+      const r = await routeStructured(eventId, sheet.csv, gapKeys, ensureSource, true);
+      if (r.matched) { parts.push(`${sheet.name}: ${r.summary}`); applied = applied || r.applied; }
+      else prose.push(`# ${sheet.name}\n${sheet.csv}`);
+    }
+    // One extraction over the tabs no structured parser claimed (avoids an LLM call per tab).
+    if (prose.length && !attachedMat) {
+      const x = await extractForBackfill(prose.join("\n\n"));
+      const filled = await enrichEventFromExtract(eventId, x, gapKeys);
+      if (filled.length) { parts.push(`other tabs: ${filled.join(", ")}`); applied = true; }
+    }
+    return parts.length
+      ? { message: `From ${sheets.length} tab${sheets.length === 1 ? "" : "s"} — ${parts.join(" · ")}.`, applied }
+      : { message: `Read ${sheets.length} tab${sheets.length === 1 ? "" : "s"}, but found nothing to import (no budget, vendor, or schedule rows).`, applied: false };
+  }
+
+  // Reject Office/iWork binaries (.docx et al.) before file.text() turns them into garbage.
+  const unsupported = unsupportedFileMessage(file);
+  if (unsupported) return { message: unsupported, applied: false };
+
   const text = await file.text();
   if (!text.trim()) return { message: "Couldn't read any text from that file — try a .txt, .md, or .csv (or paste the text).", applied: false };
 
+  const isSheet = /\.csv$/i.test(file.name) || /csv|spreadsheet|excel/i.test(file.type);
+  const routed = await routeStructured(eventId, text, gapKeys, ensureSource, isSheet);
+  if (routed.matched) return { message: routed.summary, applied: routed.applied };
+
+  // Prose / LLM path: NOT idempotent (re-extraction re-adds lessons etc.), so skip if already here.
+  if (attachedMat) return { message: `“${file.name}” is already added — nothing new to extract. Remove it first to re-process.`, applied: false };
+  await ensureSource("text/plain"); // keep the doc as project context, then extract what it can fill
+  const x = await extractForBackfill(text);
+  const filled = await enrichEventFromExtract(eventId, x, gapKeys);
+  if (filled.length) return { message: `Updated: ${filled.join(", ")}.`, applied: true };
+  return { message: "Saved as project context — nothing new to fill in for this event.", applied: true };
+}
+
+// A pull-summary reads "<lead>: a, b, c" or "<lead> — a · b · c". When there are several pulls
+// that's a blocky run-on, so split it into a lead line + one bullet per pull. Returns null for
+// plain prose (no lead delimiter, or a single pull) so those stay a normal paragraph.
+function splitPullMessage(msg: string): { lead: string; items: string[] } | null {
+  const body = msg.replace(/\.$/, "").trim();
+  const m = body.match(/^(.*?[:—])\s*(.+)$/);
+  if (!m) return null;
+  const rest = m[2];
+  const sep = rest.includes(" · ") ? " · " : ", ";
+  const items = rest.split(sep).map((s) => s.trim()).filter(Boolean);
+  return items.length >= 2 ? { lead: m[1].trim(), items } : null;
+}
+
+// Route ONE blob of text (a dropped file, or a single workbook tab) to the structured parser it
+// matches — vendors → budget → run-of-show. `matched: false` means it's prose; the caller decides
+// how to handle that (LLM extraction). `summary` is a one-line, tab-embeddable result.
+async function routeStructured(
+  eventId: string,
+  text: string,
+  gapKeys: string[],
+  ensureSource: (type: string) => Promise<string | null>,
+  isSheet: boolean,
+): Promise<{ matched: boolean; applied: boolean; summary: string }> {
   // A VENDOR list (header names a Vendor column) → engagements + candidates, each paired to a
   // budget line. Checked before budget so a vendor sheet with amounts doesn't land as bare budget.
   const vendorRows = parseVendors(text);
@@ -1860,17 +1968,16 @@ async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): P
     const r = await importVendors(eventId, vendorRows, docUrl);
     const bits = [`${r.vendors} vendor${r.vendors === 1 ? "" : "s"}`, `${r.tagged} budget line${r.tagged === 1 ? "" : "s"} tagged`];
     if (r.skipped) bits.push(`${r.skipped} tax/fee row${r.skipped === 1 ? "" : "s"} skipped`);
-    return { message: `Recorded ${bits.join(", ")}. (Existing budget lines were tagged, not re-priced.)`, applied: r.vendors > 0 || r.tagged > 0 };
+    return { matched: true, applied: r.vendors > 0 || r.tagged > 0, summary: `Recorded ${bits.join(", ")}. (Existing budget lines were tagged, not re-priced.)` };
   }
 
-  const isSheet = /\.csv$/i.test(file.name) || /csv|spreadsheet|excel/i.test(file.type);
   const nonEmptyLines = text.split(/\r?\n/).filter((l) => l.trim()).length || 1;
   const parsed = parseBudgetText(text).filter((l) => l.label.trim() && l.label !== "Untitled" && l.amount != null);
   const budgetLines = (isSheet || (parsed.length >= 2 && parsed.length / nonEmptyLines >= 0.4)) ? parsed : [];
   if (budgetLines.length) {
     const docUrl = await ensureSource("text/csv");
     const n = await addBudgetActuals(eventId, budgetLines, docUrl);
-    return { message: n ? `Recorded ${n} budget line${n === 1 ? "" : "s"} (final spend) from the sheet — matching lines were updated, not duplicated.` : "No budget rows found in that file.", applied: n > 0 };
+    return { matched: n > 0, applied: n > 0, summary: n ? `${n} budget line${n === 1 ? "" : "s"} (final spend) — matching lines updated, not duplicated.` : "No budget rows found." };
   }
   // A run-of-show is a schedule, not prose — the brief extractor won't reliably pull it. Parse
   // time-prefixed rows directly and fill the agenda when it's a gap.
@@ -1878,15 +1985,9 @@ async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): P
   if (gapKeys.includes("agenda") && ros.length >= 2) {
     await ensureSource("text/plain");
     await setEventAgenda(eventId, ros);
-    return { message: `Recorded ${ros.length} run-of-show items.`, applied: true };
+    return { matched: true, applied: true, summary: `${ros.length} run-of-show items.` };
   }
-  // Prose / LLM path: NOT idempotent (re-extraction re-adds lessons etc.), so skip if already here.
-  if (attachedMat) return { message: `“${file.name}” is already added — nothing new to extract. Remove it first to re-process.`, applied: false };
-  await ensureSource("text/plain"); // keep the doc as project context, then extract what it can fill
-  const x = await extractForBackfill(text);
-  const filled = await enrichEventFromExtract(eventId, x, gapKeys);
-  if (filled.length) return { message: `Updated: ${filled.join(", ")}.`, applied: true };
-  return { message: "Saved as project context — nothing new to fill in for this event.", applied: true };
+  return { matched: false, applied: false, summary: "" };
 }
 
 // Pull run-of-show rows out of a dropped schedule: lines that begin with a time (9:00, 9:00 AM,
@@ -1972,7 +2073,23 @@ function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; 
       ) : (
         <p className="text-[12px] text-amber-700">This record looks complete. Drop or click to add or correct anything.</p>
       )}
-      {msg && <p className="text-[12px] text-amber-800 mt-2">{msg}</p>}
+      {msg && (() => {
+        const split = splitPullMessage(msg);
+        if (!split) return <p className="text-[12px] text-amber-800 mt-2">{msg}</p>;
+        return (
+          <div className="text-[12px] text-amber-800 mt-2">
+            <p>{split.lead}</p>
+            <ul className="mt-1 space-y-0.5">
+              {split.items.map((it, i) => (
+                <li key={i} className="flex items-start gap-1.5">
+                  <span className="w-1 h-1 rounded-full bg-amber-500 shrink-0 mt-1.5" />
+                  <span>{it}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })()}
 
       {/* Post-event reflections & insights — shown until the record is complete (then auto-checks). */}
       {reflOpen && !complete && (
@@ -2140,10 +2257,21 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
   const nodeNames = plan.phases.map((p) => p.name);
   const [dels, setDels] = useState<Deliverable[]>(plan.deliverables);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor));
+  // Bucket a deliverable to a phase CARD. If its phase is EXACTLY one of the event's phases, use
+  // that — do NOT run canonicalPhaseFor, which aliases by role and can collapse distinct buckets
+  // (e.g. "Setup & check-in" → "Planning & coordination"), stranding the target as always-empty and
+  // making a drop there bounce straight back. Only fall back to aliasing for a foreign phase name.
+  const bucketOf = (phase: string | null | undefined) =>
+    (phase && nodeNames.includes(phase)) ? phase : (canonicalPhaseFor(phase ?? "", nodeNames) || "Other");
   const byPhase = new Map<string, Deliverable[]>();
-  for (const d of dels) { const k = canonicalPhaseFor(d.phase, nodeNames) || "Other"; if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(d); }
+  for (const n of nodeNames) byPhase.set(n, []); // seed EVERY phase so empty ones still render as a drop target
+  for (const d of dels) { const k = bucketOf(d.phase); if (!byPhase.has(k)) byPhase.set(k, []); byPhase.get(k)!.push(d); }
   const order = new Map(nodeNames.map((n, i) => [n, i]));
   const phaseOrder = [...byPhase.keys()].sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
+  // Per-phase colors (same palette as the timeline/template), so section + task dots match the
+  // rest of the app instead of being flat gray. Unknown phases fall back by position.
+  const colorByName = new Map(enrichPhases({ phases: plan.phases, walkthrough: plan.walkthrough, deliverables: dels }, DELIVERABLE_PHASES).map((p) => [p.name, p.color]));
+  const colorFor = (name: string, i: number) => colorByName.get(name) ?? PHASE_COLORS[i % PHASE_COLORS.length];
   const done = dels.filter((d) => d.status === "Done").length;
   const whoFor = (d: Deliverable) => (d.ownerRole ? plan.roleAssignments[d.ownerRole] ?? d.ownerRole : null);
   // Drag a deliverable onto a different phase card → move it there (keeps its T-offsets/status).
@@ -2152,7 +2280,7 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
     const id = String(e.active.id);
     const toPhase = String(e.over.id);
     const cur = dels.find((d) => d.id === id);
-    const fromPhase = cur ? (canonicalPhaseFor(cur.phase, nodeNames) || "Other") : null;
+    const fromPhase = cur ? bucketOf(cur.phase) : null;
     if (fromPhase === toPhase) return;
     setDels((p) => p.map((d) => (d.id === id ? { ...d, phase: toPhase } : d)));
     setDeliverablePhase(id, toPhase).catch(() => {});
@@ -2174,17 +2302,22 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
         )}
       </div>
       {dels.length === 0 && <p className="text-sm text-gray-400">No deliverables on record.</p>}
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
-      {phaseOrder.map((name) => (
+      {/* pointerWithin: the drop resolves to whichever phase CARD the pointer is over — reliable for
+          dropping a small row onto a large card (closestCorners would keep matching the origin card). */}
+      <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={onDragEnd}>
+      {phaseOrder.map((name, i) => {
+        const color = colorFor(name, i);
+        return (
         <WrapDroppable key={name} id={name}>
-          <h4 className="font-medium mb-2">{name}</h4>
+          <h4 className="font-medium mb-2 flex items-center gap-2"><span className={`w-2.5 h-2.5 rounded-full shrink-0 ${color.dot}`} />{name}</h4>
+          {byPhase.get(name)!.length === 0 && <p className="text-sm text-gray-400 py-2">Empty — drag a task here.</p>}
           <ul className="divide-y divide-gray-100 text-sm">
             {byPhase.get(name)!.map((d) => (
               <WrapDraggable key={d.id} id={d.id}>
                 {({ setNodeRef, attributes, listeners, style, isDragging }) => (
                   <li ref={setNodeRef} style={style} className={`flex items-center gap-2 py-2 ${isDragging ? "opacity-60 bg-white shadow" : ""}`}>
                     <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to another section" title="Drag to move to another section"><GripVertical className="w-4 h-4" /></button>
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${d.status === "Done" ? "bg-green-500" : "bg-gray-300"}`} />
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${color.dot} ${d.status === "Done" ? "" : "opacity-40"}`} title={d.status === "Done" ? "Done" : d.status ?? "Todo"} />
                     <span className="flex-1 min-w-0 truncate text-gray-800">{d.title}</span>
                     {whoFor(d) && <span className="text-[12px] text-gray-500 inline-flex items-center gap-1 shrink-0"><Users className="w-3 h-3" /> {whoFor(d)}</span>}
                   </li>
@@ -2193,7 +2326,8 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
             ))}
           </ul>
         </WrapDroppable>
-      ))}
+        );
+      })}
       </DndContext>
     </section>
   );
@@ -2202,7 +2336,7 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
 // Locked rundown: a settled event is a read-only record. No phase navigation, no editing —
 // just the summarized info (outcome, the numbers, what shipped, lessons, who filled which role,
 // who mattered, the debrief notes).
-function LockedRundown({ plan, assignedTarget, onOpenPeople, onApplied }: { plan: EventPlanning; assignedTarget: number | null; onOpenPeople: () => void; onApplied?: () => void }) {
+function LockedRundown({ plan, assignedTarget, onOpenPeople, onOpenBudget, onApplied }: { plan: EventPlanning; assignedTarget: number | null; onOpenPeople: () => void; onOpenBudget?: () => void; onApplied?: () => void }) {
   const [stats, setStats] = useState<PeopleStats | null>(null);
   const [tags, setTags] = useState<EventPersonTag[]>([]);
   const [lessons, setLessons] = useState<string[]>(plan.reflections ?? []);
@@ -2237,13 +2371,20 @@ function LockedRundown({ plan, assignedTarget, onOpenPeople, onApplied }: { plan
     const cur = tagged.get(t.attendeeId) ?? { name: t.name, starred: false };
     cur.starred = cur.starred || t.priority; tagged.set(t.attendeeId, cur);
   }
-  const Tile = ({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) => (
-    <div className="bg-gradient-to-b from-primary/5 to-white to-60% rounded-2xl border border-border p-5">
-      <p className="text-[13px] text-gray-500 mb-1">{label}</p>
-      <p className="text-2xl font-semibold text-gray-900">{value}</p>
-      {hint && <p className="text-[11px] text-gray-400">{hint}</p>}
-    </div>
-  );
+  // A tile becomes a button (with a chevron affordance) when it links somewhere.
+  const Tile = ({ label, value, hint, onClick }: { label: string; value: React.ReactNode; hint?: string; onClick?: () => void }) => {
+    const cls = "bg-gradient-to-b from-primary/5 to-white to-60% rounded-2xl border border-border p-5";
+    const body = (
+      <>
+        <p className="text-[13px] text-gray-500 mb-1 inline-flex items-center gap-1">{label}{onClick && <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}</p>
+        <p className="text-2xl font-semibold text-gray-900">{value}</p>
+        {hint && <p className="text-[11px] text-gray-400">{hint}</p>}
+      </>
+    );
+    return onClick
+      ? <button onClick={onClick} className={`${cls} w-full text-left hover:bg-gray-50/80 transition-colors`}>{body}</button>
+      : <div className={cls}>{body}</div>;
+  };
 
   return (
     <div className="space-y-6">
@@ -2260,19 +2401,19 @@ function LockedRundown({ plan, assignedTarget, onOpenPeople, onApplied }: { plan
 
       {/* the numbers */}
       <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${focus === "neither" ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>
-        {/* Turnout (the people card): general turnout counted/estimated, with known-people floating. */}
-        <div className="relative bg-gradient-to-b from-primary/5 to-white to-60% rounded-2xl border border-border p-5">
+        {/* Turnout (the people card): general turnout counted/estimated, with known-people floating. Links to People. */}
+        <button onClick={onOpenPeople} className="relative w-full text-left bg-gradient-to-b from-primary/5 to-white to-60% rounded-2xl border border-border p-5 hover:bg-gray-50/80 transition-colors">
           {known != null && known !== counted && (
             <span className="absolute top-2 right-3 text-[11px] text-gray-400" title="people we have records for (by name/email)">{known} known</span>
           )}
-          <p className="text-[13px] text-gray-500 mb-1">Turnout</p>
+          <p className="text-[13px] text-gray-500 mb-1 inline-flex items-center gap-1">Turnout <ChevronRight className="w-3.5 h-3.5 text-gray-400" /></p>
           <p className="text-2xl font-semibold text-gray-900">{counted ?? estimated ?? "—"}{estimated != null && counted != null && <span className="text-base text-gray-400"> / {estimated}</span>}</p>
           <p className="text-[11px] text-gray-400">{showPct != null ? `${showPct}% show rate` : counted != null ? "counted" : "RSVPs"}</p>
-        </div>
-        <Tile label="Final spend" value={<>{money(spent)}{target != null && <span className="text-base text-gray-400"> / {money(target)}</span>}</>} hint={target != null ? (spent > target ? `${money(spent - target)} over` : `${money(target - spent)} under`) : "paid"} />
-        <Tile label="Cost per head" value={perHead != null ? money(perHead) : "—"} hint="spend ÷ counted" />
-        {focus === "hiring" && <Tile label="Candidates flagged" value={attendeesFlagged(tags) || "—"} hint="tagged candidate" />}
-        {focus === "client" && <Tile label="Clients & partners" value={[...tagged.values()].length || "—"} hint="tagged" />}
+        </button>
+        <Tile label="Final spend" value={<>{money(spent)}{target != null && <span className="text-base text-gray-400"> / {money(target)}</span>}</>} hint={target != null ? (spent > target ? `${money(spent - target)} over` : `${money(target - spent)} under`) : "paid"} onClick={onOpenBudget} />
+        <Tile label="Cost per head" value={perHead != null ? money(perHead) : "—"} hint="spend ÷ counted" onClick={onOpenBudget} />
+        {focus === "hiring" && <Tile label="Candidates flagged" value={attendeesFlagged(tags) || "—"} hint="tagged candidate" onClick={onOpenPeople} />}
+        {focus === "client" && <Tile label="Clients & partners" value={[...tagged.values()].length || "—"} hint="tagged" onClick={onOpenPeople} />}
       </div>
 
       {/* Learnings — full width. Same data as reflections, the post-event framing. */}
@@ -3115,6 +3256,11 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
   // Scoping (client-side). The full form opens as a modal from the budget flow / glance card.
   const [scoping, setScoping] = useState<ScopingData>(() => loadScoping(eventId));
   const [scopingOpen, setScopingOpen] = useState(false);
+  // Open straight to the scoping/budget form when arrived here via a Slack deep link
+  // (?event=<id>&view=budget). Consumed in an effect, not a state initializer: React StrictMode
+  // double-invokes initializers, which would swallow this one-shot (it clears on read).
+  // Consuming clears it, so a later revisit to the same event won't re-open the form.
+  useEffect(() => { if (takePendingScopingBudget(eventId)) setScopingOpen(true); }, [eventId]);
   const updateScoping = (s: ScopingData) => { setScoping(s); saveScoping(eventId, s); };
   // Rough cost counts whatever's filled per line — a real amount, or the per-category target
   // when a sheet was imported into the setup's "Review budget" step (which fills targets).
@@ -3145,6 +3291,10 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
   if (plan.staffRoles.length) synth.push(`${plan.staffRoles.length} open role${plan.staffRoles.length === 1 ? "" : "s"}`);
   const synthDigest = synth.join(" · ");
 
+  // Scoping is the gate for planning: nag until it's submitted (skip past/locked events).
+  const scopingSubmitted = scoping.status !== "draft";
+  const showScopingNag = !scopingSubmitted && !locked && temporal !== "past";
+
   const expectedTurnout = plan.rsvp ?? plan.headcount ?? null;
   const showRate = plan.heuristics.find((h) => /show|rsvp|turn ?out|%/.test(h.toLowerCase())) ?? null;
   const committed = facts.budget?.committed ?? 0;
@@ -3162,6 +3312,17 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
 
       {/* Status digest — synthesized one-liner by default; Claude bullets after Resync. */}
       <div className="bg-white rounded-2xl border border-border p-4">
+        {/* Mandatory gate: scoping must be submitted before planning can really start. */}
+        {showScopingNag && (
+          <button
+            onClick={() => setScopingOpen(true)}
+            className="w-full mb-3 flex items-start gap-2 text-left rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 hover:bg-amber-100"
+          >
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span className="flex-1 text-sm font-medium">Scoping form not submitted — submit it first to unlock budget and planning.</span>
+            <ChevronRight className="w-4 h-4 mt-0.5 shrink-0" />
+          </button>
+        )}
         <div className="flex items-start justify-between gap-3">
           {summaryBullets.length > 0 ? (
             <ul className="flex-1 list-disc pl-5 space-y-1 text-gray-700 leading-relaxed">
@@ -3182,7 +3343,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
 
       {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
       {locked ? (
-        <LockedRundown plan={plan} assignedTarget={tgt} onOpenPeople={onOpenPeople} onApplied={onApplied} />
+        <LockedRundown plan={plan} assignedTarget={tgt} onOpenPeople={onOpenPeople} onOpenBudget={onOpenBudget} onApplied={onApplied} />
       ) : selectedView === "day-before" ? (
         <DayBeforeView plan={plan} temporal={temporal} />
       ) : selectedView === "day-of" ? (
@@ -3612,7 +3773,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                   <div className="space-y-6">
                     {/* gaps + drop-to-fill (budget, turnout, …) — what would make this record complete */}
                     <CompletenessPanel plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
-                    <LockedRundown plan={plan} assignedTarget={plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null} onOpenPeople={() => setEventSubTab("people")} onApplied={() => setReload((r) => r + 1)} />
+                    <LockedRundown plan={plan} assignedTarget={plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null} onOpenPeople={() => setEventSubTab("people")} onOpenBudget={() => setEventSubTab("budget")} onApplied={() => setReload((r) => r + 1)} />
                   </div>
                 )}
                 {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}

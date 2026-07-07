@@ -5,3 +5,7 @@ dist-ssr
 .env
 .DS_Store
 .vite
+
+# Build artifacts / caches that shouldn't be tracked
+*.tsbuildinfo
+*.zip

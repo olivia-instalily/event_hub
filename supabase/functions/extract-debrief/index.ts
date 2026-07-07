@@ -84,7 +84,7 @@ const SCHEMA = {
         additionalProperties: false,
         properties: {
           line: { type: "string", description: "budget category/line the correction applies to (e.g. 'Catering', 'A/V')" },
-          amount: { type: ["number", "null"], description: "the actual/corrected amount in dollars if stated; else null" },
+          amount: { type: ["number", "null"], description: "the ACTUAL amount spent, in dollars, if stated; else null. If the line lists BOTH a planned figure (pitched/proposed/budgeted/estimated/target) and an actual one (actual/final/spent/paid), always take the ACTUAL — never the pitched/planned figure." },
           note: { type: "string", description: "context for the correction; \"\" if none" },
         },
         required: ["line", "amount", "note"],
@@ -134,7 +134,10 @@ OUTCOME — verdict (one line on how it went), worthRepeating (yes/no/unsure/nul
 number if stated), turnoutNote (reconciliation vs expectation, e.g. "44 of 80 RSVPs, ~55%").
 
 ACTUALS — budget corrections stated in the debrief: line (category) + amount (dollars, null if not
-stated) + note.
+stated) + note. amount is what was ACTUALLY SPENT. A dropped budget sheet often has two columns per
+line — a planned figure (pitched / proposed / budgeted / estimated / target) and the real one
+(actual / final / spent / paid). ALWAYS take the actual/spent column; never the pitched/planned one.
+Put the pitched-vs-actual delta in note if it's worth recording (e.g. "pitched $5k, spent $6.2k").
 
 FOCUS — classify what the event was for from the transcript: hiring / client / community / unclear.
 This gates peopleTags (see above).
