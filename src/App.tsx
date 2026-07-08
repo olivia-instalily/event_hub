@@ -42,10 +42,14 @@ export default function Component() {
     if (!files.length) return;
     // Light sniff: a dropped debrief/recap is a BACKFILL, not a create. If it looks past, hand
     // EventsPage a flag so it asks (past vs in-process) instead of barreling into the create flow.
+    // Read EVERY text-like file, not just the first — on a folder drop the brief (which carries the
+    // date) may sort after an attendee/budget file, and a future date in ANY file means "not a
+    // backfill". Combining the texts lets looksLikeBackfill see that date regardless of ordering.
     let suspect = false;
     try {
-      const texty = files.find((f) => /text|json|csv|markdown|plain/i.test(f.type) || /\.(txt|md|vtt|srt|csv|json)$/i.test(f.name)) ?? files[0];
-      suspect = looksLikeBackfill(await texty.text());
+      const texty = files.filter((f) => /text|json|csv|markdown|plain/i.test(f.type) || /\.(txt|md|vtt|srt|csv|json)$/i.test(f.name));
+      const texts = await Promise.all((texty.length ? texty : files.slice(0, 1)).map((f) => f.text().catch(() => '')));
+      suspect = looksLikeBackfill(texts.join('\n\n'));
     } catch { /* unreadable — treat as create */ }
     setDroppedFiles(files);
     setDroppedLooksPast(suspect);
@@ -107,6 +111,14 @@ export default function Component() {
     setCreateOnEvents(true);
     setActivePage('events');
   };
+
+  // Background Luma sync — fire and forget on mount. The user never waits for it and never sees
+  // an error: if it fails, existing data is still shown. Caddy strips /functions/v1, so that
+  // prefix is required (a bare /functions/luma-sync would 404). The function itself throttles, so
+  // firing on every mount is cheap.
+  useEffect(() => {
+    fetch('/functions/v1/luma-sync', { method: 'POST' }).catch(() => {});
+  }, []);
 
   // Finish resolving the deep link after mount: register the "open the scoping/budget form"
   // intent (the event's Overview consumes it once it mounts, after its data loads), then strip

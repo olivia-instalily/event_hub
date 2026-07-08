@@ -145,11 +145,15 @@ function statusFromDate(date: string | null | undefined): EventStatus {
   return date < today ? 'past' : 'future';
 }
 
-// An event being planned (macro_stage set) is in-process by nature — except 'Wrap',
-// which is the post-event wind-down.
+// An event being planned (macro_stage set) is in-process by nature — with two ends:
+//  • 'Concept' is the pre-work stage (e.g. just drawn from Luma, essentials not yet confirmed) → future.
+//  • 'Wrap'/'Wrapped' is the post-event wind-down → past.
+// Everything in between (Planning / Week-of / Live) is active → in-process.
 function statusFromMacroStage(stage: string): EventStatus {
   const k = stage.toLowerCase();
-  return k === 'wrap' || k === 'wrapped' ? 'past' : 'in-process';
+  if (k === 'concept') return 'future';
+  if (k === 'wrap' || k === 'wrapped') return 'past';
+  return 'in-process';
 }
 
 // Resolve an event's coarse status: a manual override wins, then macro_stage, then
@@ -1488,6 +1492,20 @@ export async function attachLuma(
   return data as any;
 }
 
+/** Manual, add-only Luma re-pull for a single (wrapped/past) event — pulls in late guest additions
+ *  only, never overwriting or removing existing attendees. Hits the luma-sync cloud function with an
+ *  eventId (same endpoint the background sync uses; App fires it prefix-and-all). */
+export async function resyncLumaEvent(eventId: string): Promise<{ added: number; linked: number }> {
+  const res = await fetch('/functions/v1/luma-sync', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ eventId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.error ?? `Resync failed (${res.status}).`);
+  return { added: (data as any).added ?? 0, linked: (data as any).linked ?? 0 };
+}
+
 /** Create a brand-new Luma event from this event's info (name, date, start/end, location,
  *  description) via the Luma API, then attach it. Server-side — holds the Luma key. */
 export async function createLumaEvent(
@@ -2511,6 +2529,12 @@ export async function setEventBudgetTarget(eventId: string, target: number | nul
 export async function saveSetupState(eventId: string, progress: string[], complete: boolean): Promise<void> {
   const { error } = await supabase.from('event').update({ setup_progress: progress, setup_complete: complete }).eq('id', eventId);
   if (error) throw error;
+  // Finishing the essentials flow graduates a freshly-drawn event from 'Concept' (→ future) to
+  // 'Planning' (→ in-process). Scoped to macro_stage = 'Concept' so it never pulls an event that's
+  // already further along (Week-of / Live / Wrap) backward.
+  if (complete) {
+    await supabase.from('event').update({ macro_stage: 'Planning' }).eq('id', eventId).eq('macro_stage', 'Concept');
+  }
 }
 /** Setup step 3: kick off outreach for a vendor category and record the inbox-watch intent. */
 export async function startOutreach(engagementId: string, watchInbox: boolean): Promise<void> {

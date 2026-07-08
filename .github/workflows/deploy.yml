@@ -62,6 +62,7 @@ jobs:
           POSTGREST_SERVICE_JWT=eventhub-service-jwt:latest,\
           ANTHROPIC_API_KEY=eventhub-anthropic-key:latest,\
           LINEAR_API_KEY=eventhub-linear-key:latest,\
+          LINEAR_TEAM_ID=eventhub-linear-team-id:latest,\
           LUMA_API_KEY=eventhub-luma-key:latest,\
           SLACK_BOT_TOKEN=eventhub-slack-token:latest,\
           GREENHOUSE_API_KEY=eventhub-greenhouse-key:latest,\

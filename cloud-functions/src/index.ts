@@ -1,4 +1,4 @@
-// EventHub functions server — Express app serving all 17 edge functions as HTTP routes.
+// EventHub functions server — Express app serving all 18 edge functions as HTTP routes.
 // Caddy proxies /functions/v1/* here (stripping the /functions/v1 prefix).
 // The DB client points at the internal Caddy port (9000) which routes /rest/v1/* to PostgREST.
 
@@ -19,6 +19,7 @@ import { handler as gmailSync }              from './functions/gmail-sync.js';
 import { handler as greenhouseSync }         from './functions/greenhouse-sync.js';
 import { handler as linearSync }             from './functions/linear-sync.js';
 import { handler as lumaImport }             from './functions/luma-import.js';
+import { handler as lumaSync }               from './functions/luma-sync.js';
 import { handler as planningSummary }        from './functions/planning-summary.js';
 import { handler as slackSend }              from './functions/slack-send.js';
 import { handler as summarizeCorrespondence} from './functions/summarize-correspondence.js';
@@ -47,6 +48,7 @@ app.post('/gmail-sync',               gmailSync);
 app.post('/greenhouse-sync',          greenhouseSync);
 app.post('/linear-sync',              linearSync);
 app.post('/luma-import',              lumaImport);
+app.post('/luma-sync',                lumaSync);
 app.post('/planning-summary',         planningSummary);
 app.post('/slack-send',               slackSend);
 app.post('/summarize-correspondence', summarizeCorrespondence);

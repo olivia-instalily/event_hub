@@ -128,8 +128,48 @@ export function templateAdditions(t: TemplateLite, x: BackfillExtract): Template
 export const hasAdditions = (a: TemplateAdditions) => a.phases.length + a.roles.length + a.lessons.length > 0;
 
 // Cheap client-side signal that a dropped doc is a PAST event (a backfill), not a forward brief.
-// Used only to PROMPT the user (past vs in-process) — false positives are harmless, they pick.
+// Used only to PROMPT the user (past vs in-process). Keyword hits alone are noisy — a forward brief
+// often has an agenda line like "Wrap-up" or "post-event survey" — so an explicit FUTURE date in the
+// doc overrides them: a future date means it's a plan, not a recap.
 const PAST_SIGNALS = /\b(debrief|recap|retro(spective)?|post[- ]?mortem|post[- ]?event|wrap[- ]?up|turnout (was|came)|showed up|attendance was|lessons learned|what (went|worked)|already happened|last (week|month|quarter|year))\b/i;
-export function looksLikeBackfill(text: string): boolean {
-  return !!text && PAST_SIGNALS.test(text);
+
+const MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+// Pull candidate calendar dates out of free text. Handles ISO (2026-08-08), month-name
+// ("August 8", "Aug 8, 2026", "8 August 2026", ordinal-tolerant), and US numeric (8/8/2026, 8/8/26).
+// When a year is absent we assume the current one — deliberately NOT rolling forward, so a bare
+// "August 8" only counts as future when this year's occurrence hasn't passed yet.
+function extractDates(text: string, now: Date): Date[] {
+  const out: Date[] = [];
+  const curYear = now.getFullYear();
+  const push = (y: number, mo: number, d: number) => {
+    if (mo < 0 || mo > 11 || d < 1 || d > 31) return;
+    out.push(new Date(y, mo, d));
+  };
+  const mo3 = (s: string) => MONTHS[s.toLowerCase().slice(0, 3)];
+
+  for (const m of text.matchAll(/\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/g))
+    push(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
+  for (const m of text.matchAll(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/gi))
+    push(m[3] ? Number(m[3]) : curYear, mo3(m[1]), Number(m[2]));
+
+  for (const m of text.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:,?\s*(\d{4}))?\b/gi))
+    push(m[3] ? Number(m[3]) : curYear, mo3(m[2]), Number(m[1]));
+
+  for (const m of text.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/g)) {
+    const y = Number(m[3]);
+    push(y < 100 ? 2000 + y : y, Number(m[1]) - 1, Number(m[2]));
+  }
+  return out;
+}
+
+export function looksLikeBackfill(text: string, now: Date = new Date()): boolean {
+  if (!text) return false;
+  // A future (or today) date wins: this is a plan, not a backfill — regardless of stray keywords.
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (extractDates(text, now).some((d) => d.getTime() >= startOfToday)) return false;
+  return PAST_SIGNALS.test(text);
 }

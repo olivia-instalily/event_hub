@@ -11,7 +11,7 @@ import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, createLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
@@ -54,6 +54,7 @@ import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
 import { parseVendors } from "../lib/vendorImport";
 import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
+import { filesFromDrop } from "../lib/drop";
 import { EventSetup } from "./EventSetup";
 import { ScopingForm } from "./ScopingForm";
 import { PeoplePage } from "./PeoplePage";
@@ -222,6 +223,32 @@ function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: str
       <button onClick={() => setMode("menu")} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-700"><Link2 className="w-4 h-4" /> Attach / Create Luma</button>
       {mode === "create" && <CreateLumaModal eventId={eventId} draft={draft} descriptions={descriptions} onClose={() => setMode("idle")} onCreated={(u) => { setUrl(u); setMode("idle"); }} />}
     </>
+  );
+}
+
+// Manual, add-only Luma re-pull — shown on PAST (wrapped) events, which the background sync leaves
+// frozen. For when guests were added on Luma after the event; never overwrites or removes existing
+// attendees, only inserts what's new. Reloads the page on any change so turnout reflects it.
+function LumaResync({ eventId, onDone }: { eventId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const { added, linked } = await resyncLumaEvent(eventId);
+      const changed = added + linked;
+      setMsg(changed ? `Added ${added} new attendee${added === 1 ? "" : "s"}.` : "Up to date — nothing new on Luma.");
+      if (changed) onDone();
+    } catch (e: any) { setMsg(e?.message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <button onClick={run} disabled={busy} title="Pull late Luma additions (add-only — never overwrites)" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-700 disabled:opacity-50">
+        <RefreshCw className={`w-4 h-4 ${busy ? "animate-spin" : ""}`} /> {busy ? "Resyncing…" : "Resync Luma"}
+      </button>
+      {msg && <span className="text-[12px] text-gray-400">{msg}</span>}
+    </span>
   );
 }
 
@@ -2018,8 +2045,9 @@ function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; 
 
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [results, setResults] = useState<{ name: string | null; message: string }[] | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
 
   // The non-deletable "Post-event reflections & insights" to-do. Auto-checks off (disappears) once
   // the record is complete; otherwise the owner can tick it manually (with a heads-up).
@@ -2035,16 +2063,30 @@ function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; 
   }, [complete, reflDeliv?.id, reflDeliv?.status]);
   const checkOffRefl = async () => { if (reflDeliv) await setDeliverableStatus(reflDeliv.id, "Done").catch(() => {}); setConfirmRefl(false); onApplied(); };
 
-  const onDropDoc = async (file?: File | null) => {
+  // Accepts one file, several files, or a whole folder (dropped or picked). Each file runs through
+  // the same gap-filling ingest; junk (dotfiles like .DS_Store, empty files) is skipped. Results are
+  // reported per file so a folder drop reads as a checklist, not one blurred paragraph.
+  const ingestFiles = async (files: File[]) => {
     setOver(false);
-    if (!file) return;
-    setBusy(true); setMsg(null);
-    try {
-      const { message, applied } = await ingestEventDoc(eventId, file, gaps.map((g) => g.key));
-      setMsg(message);
-      if (applied) onApplied();
-    } catch (e: any) { setMsg(e?.message ?? String(e)); }
-    finally { setBusy(false); }
+    const list = files.filter((f) => f && f.name && !f.name.startsWith(".") && f.size > 0);
+    if (!list.length) return;
+    setBusy(true); setResults(null);
+    const gapKeys = gaps.map((g) => g.key);
+    const multi = list.length > 1;
+    const out: { name: string | null; message: string }[] = [];
+    let anyApplied = false;
+    for (const f of list) {
+      try {
+        const { message, applied } = await ingestEventDoc(eventId, f, gapKeys);
+        out.push({ name: multi ? f.name : null, message });
+        anyApplied = anyApplied || applied;
+      } catch (e: any) {
+        out.push({ name: multi ? f.name : null, message: e?.message ?? String(e) });
+      }
+    }
+    setResults(out);
+    if (anyApplied) onApplied();
+    setBusy(false);
   };
 
   const drag = {
@@ -2052,12 +2094,14 @@ function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; 
     onDragEnter: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setOver(true); },
     onDragOver: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setOver(true); },
     onDragLeave: (e: React.DragEvent) => { e.stopPropagation(); setOver(false); },
-    onDrop: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); void onDropDoc(e.dataTransfer.files?.[0]); },
+    // filesFromDrop descends into a dropped folder; falls back to the flat file list.
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); void filesFromDrop(e.dataTransfer).then(ingestFiles); },
   };
 
   return (
     <div {...drag} className={`rounded-2xl border-2 border-dashed px-4 py-3 cursor-pointer transition-colors ${over ? "border-amber-500 bg-amber-100" : "border-amber-200 bg-amber-50 hover:bg-amber-100/60"}`}>
-      <input ref={fileRef} type="file" hidden onChange={(e) => { void onDropDoc(e.target.files?.[0]); e.currentTarget.value = ""; }} />
+      <input ref={fileRef} type="file" multiple hidden onChange={(e) => { void ingestFiles(Array.from(e.target.files ?? [])); e.currentTarget.value = ""; }} />
+      <input ref={folderRef} type="file" hidden {...({ webkitdirectory: "", directory: "" } as any)} onChange={(e) => { void ingestFiles(Array.from(e.target.files ?? [])); e.currentTarget.value = ""; }} />
       <div className="flex items-center gap-2 mb-1">
         <Paperclip className="w-4 h-4 text-amber-700" />
         <h3 className="text-[15px] font-medium text-amber-900">{!complete ? "What would make this a complete record" : "Add further info"}</h3>
@@ -2065,17 +2109,17 @@ function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; 
       </div>
       {!complete ? (
         <>
-          <p className="text-[12px] text-amber-700 mb-2">Still missing for a complete {focus === "neither" ? "community" : focus} record — drop or click to add a doc (debrief, budget sheet, brief); only the gaps fill in.</p>
+          <p className="text-[12px] text-amber-700 mb-2">Still missing for a complete {focus === "neither" ? "community" : focus} record — drop or click to add docs or a whole folder (debrief, budget sheet, brief); only the gaps fill in. <button onClick={(e) => { e.stopPropagation(); folderRef.current?.click(); }} className="underline hover:text-amber-900">Choose a folder</button></p>
           <ul className="space-y-1">
             {gaps.map((g) => <li key={g.key} className="flex items-center gap-2 text-[13px] text-amber-900"><span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />{g.label}</li>)}
           </ul>
         </>
       ) : (
-        <p className="text-[12px] text-amber-700">This record looks complete. Drop or click to add or correct anything.</p>
+        <p className="text-[12px] text-amber-700">This record looks complete. Drop or click to add docs or a folder, or correct anything. <button onClick={(e) => { e.stopPropagation(); folderRef.current?.click(); }} className="underline hover:text-amber-900">Choose a folder</button></p>
       )}
-      {msg && (() => {
-        const split = splitPullMessage(msg);
-        if (!split) return <p className="text-[12px] text-amber-800 mt-2">{msg}</p>;
+      {results && (results.length === 1 && !results[0].name ? (() => {
+        const split = splitPullMessage(results[0].message);
+        if (!split) return <p className="text-[12px] text-amber-800 mt-2">{results[0].message}</p>;
         return (
           <div className="text-[12px] text-amber-800 mt-2">
             <p>{split.lead}</p>
@@ -2089,7 +2133,19 @@ function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; 
             </ul>
           </div>
         );
-      })()}
+      })() : (
+        <div className="text-[12px] text-amber-800 mt-2">
+          <p>{results.length} file{results.length === 1 ? "" : "s"} processed</p>
+          <ul className="mt-1 space-y-0.5">
+            {results.map((r, i) => (
+              <li key={i} className="flex items-start gap-1.5">
+                <span className="w-1 h-1 rounded-full bg-amber-500 shrink-0 mt-1.5" />
+                <span>{r.name && <span className="font-medium">{r.name}</span>}{r.name ? " — " : ""}{r.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
 
       {/* Post-event reflections & insights — shown until the record is complete (then auto-checks). */}
       {reflOpen && !complete && (
@@ -3679,6 +3735,8 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             <div className="mb-4 flex items-center gap-4 flex-wrap">
               <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
               <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || loadScoping(eventId).strategicJustification || "" }} />
+              {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
+              {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 text-gray-600">
               <div className="flex items-center gap-2">

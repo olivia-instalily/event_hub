@@ -1,53 +1,63 @@
 #!/usr/bin/env node
-// Luma → Assembly guest-list sync. Runs SERVER-SIDE with the service-role key.
-// Host-only guest emails never touch the browser. Dedupes attendees by email.
+// Luma → EventHub guest-list sync. Runs SERVER-SIDE with direct Postgres connection.
+// Connects via Cloud SQL Proxy on localhost:9470.
 //
-// Secrets come from .env (gitignored, NO VITE_ prefix so Vite can't bundle them):
+// Secrets come from .env (gitignored):
 //   LUMA_API_KEY=...
-//   SUPABASE_URL=http://127.0.0.1:54321        (optional; this is the default)
-//   SUPABASE_SERVICE_KEY=...                    (from `supabase status` -> SERVICE_ROLE_KEY)
+//   DB_PASSWORD=...    (from GCP Secret Manager: eventhub-db-password)
+//
+// Make sure Cloud SQL Proxy is running first:
+//   gcloud sql connect eventhub-db --user=postgres --project=event-499220
+//   (or run the proxy directly on port 9470)
 //
 // Usage:
-//   node scripts/luma-sync.mjs list                       # list your Luma events (id + name)
+//   node scripts/luma-sync.mjs list                       # list your Luma events
+//   node scripts/luma-sync.mjs import-events              # import Luma events into DB
 //   node scripts/luma-sync.mjs link <eventId> <lumaId>    # store the mapping
-//   node scripts/luma-sync.mjs inspect <eventId>          # dump 1 raw guest (lock field paths)
-//   node scripts/luma-sync.mjs sync [eventId]             # pull guests -> upsert attendees+links
-//   node scripts/luma-sync.mjs sync --drop-aggregate      # also remove the 20-30 placeholder pool
+//   node scripts/luma-sync.mjs inspect <eventId>          # dump 1 raw guest
+//   node scripts/luma-sync.mjs sync [eventId]             # pull guests -> upsert attendees
+//   node scripts/luma-sync.mjs sync --drop-aggregate      # also remove placeholder pool
 
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { createClient } from '@supabase/supabase-js';
+import pg from 'pg';
 
-// ── tiny .env loader (avoids a dotenv dep; only sets vars not already in the env) ──
+// ── .env loader — MUST run before pool init so DB_PASSWORD is available ──
 try {
   for (const line of readFileSync(new URL('../.env', import.meta.url), 'utf8').split('\n')) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
   }
-} catch { /* no .env file — rely on the shell environment */ }
+} catch { /* no .env file — rely on shell environment */ }
+
+const pool = new pg.Pool({
+  host: '127.0.0.1',
+  port: 9470,
+  database: 'postgres',
+  user: 'postgres',
+  password: process.env.DB_PASSWORD,
+});
 
 const LUMA_API_KEY = process.env.LUMA_API_KEY;
-const SUPABASE_URL = process.env.SUPABASE_URL || 'http://127.0.0.1:54321';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const LUMA_BASE = 'https://public-api.luma.com/v1';
 
 function need(v, name) {
-  if (!v) { console.error(`Missing ${name}. Put it in .env (see comment at top of this file).`); process.exit(1); }
+  if (!v) { console.error(`Missing ${name}. Put it in .env`); process.exit(1); }
   return v;
 }
+
+// ── Luma API helpers (unchanged) ──────────────────────────────────────────────
 
 async function luma(path, params = {}) {
   need(LUMA_API_KEY, 'LUMA_API_KEY');
   const url = new URL(LUMA_BASE + path);
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
   const res = await fetch(url, { headers: { 'x-luma-api-key': LUMA_API_KEY, accept: 'application/json' } });
-  // Throw (don't process.exit) so callers can isolate a single event's failure and keep going.
   if (res.status === 429) throw new Error(`Luma rate limit (300/min) hit on ${path} — wait a minute and retry.`);
   if (!res.ok) throw new Error(`Luma ${path} -> ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
-// Page through any Luma list endpoint that uses entries + has_more + next_cursor.
 async function lumaAll(path, params = {}) {
   const out = [];
   let cursor = undefined;
@@ -59,14 +69,6 @@ async function lumaAll(path, params = {}) {
   return out;
 }
 
-function db() {
-  need(SUPABASE_SERVICE_KEY, 'SUPABASE_SERVICE_KEY');
-  return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { auth: { persistSession: false } });
-}
-
-// Defensive field extraction — the live shape gets confirmed via `inspect` before we trust it.
-// Pull profile fields out of Luma's free-form registration_answers (labels vary per
-// event, so match on keywords). LinkedIn is rarely asked — captured only if present.
 function extractProfile(answers) {
   const p = { title: null, org: null, school: null, city: null, industry: null, linkedin: null };
   for (const a of answers ?? []) {
@@ -95,7 +97,8 @@ function readGuest(entry) {
 
 const idFromEmail = (email) => 'att-' + createHash('sha1').update(email).digest('hex').slice(0, 16);
 
-// ── commands ────────────────────────────────────────────────────────────────
+// ── commands ──────────────────────────────────────────────────────────────────
+
 async function cmdList() {
   const events = await lumaAll('/calendar/list-events');
   if (!events.length) return console.log('No Luma events returned for this key.');
@@ -106,100 +109,140 @@ async function cmdList() {
 }
 
 async function cmdImportEvents() {
-  const sb = db();
-  const { data: existing } = await sb.from('event').select('luma_event_id');
-  const linked = new Set((existing ?? []).map((r) => r.luma_event_id).filter(Boolean));
+  need(process.env.DB_PASSWORD, 'DB_PASSWORD');
+
+  const { rows: existing } = await pool.query('SELECT luma_event_id FROM event WHERE luma_event_id IS NOT NULL');
+  const linked = new Set(existing.map(r => r.luma_event_id));
+  const today = new Date().toISOString().slice(0, 10);
 
   const events = await lumaAll('/calendar/list-events');
-  const rows = [];
+  // Policy (mirrors cloud-functions/src/functions/luma-sync.ts):
+  //   • Past events (start_at < today)  → SKIP. They're wrapped; never re-import or touch.
+  //   • Future events already linked    → REFRESH the Luma-owned fields in place.
+  //   • Future events not yet linked     → ADD (with macro_stage 'Planning' so they route to the
+  //     full planning view). macro_stage is only ever set on insert, never on refresh.
+  let imported = 0, updated = 0;
   for (const entry of events) {
     const ev = entry.event ?? entry;
     const apiId = ev.api_id ?? ev.id;
-    if (!apiId || linked.has(apiId)) continue; // skip events already in the DB
+    if (!apiId) continue;
+    const eventDate = ev.start_at ? ev.start_at.slice(0, 10) : null;
+    if (eventDate && eventDate < today) continue; // skip past — leave wrapped events frozen
     let location = null;
     try {
       const g = typeof ev.geo_address_json === 'string' ? JSON.parse(ev.geo_address_json) : ev.geo_address_json;
       location = g?.city || g?.address || g?.full_address || null;
     } catch { /* no geo */ }
-    rows.push({
-      id: 'evt-luma-' + apiId.replace(/^evt-/, ''),
-      name: ev.name,
-      luma_event_id: apiId,
-      luma_url: ev.url ?? null,
-      cover_image_url: ev.cover_url ?? null,
-      event_date: ev.start_at ? ev.start_at.slice(0, 10) : null,
-      location,
-    });
+
+    if (linked.has(apiId)) {
+      // Refresh Luma-owned fields only; match on luma_event_id so a custom-id attach updates its row.
+      await pool.query(
+        `UPDATE event SET name = $1, luma_url = $2, cover_image_url = $3, event_date = $4, location = $5
+         WHERE luma_event_id = $6`,
+        [ev.name, ev.url ?? null, ev.cover_url ?? null, eventDate, location, apiId]
+      );
+      updated++;
+    } else {
+      // New future event → 'Concept' (untouched, status "future"); graduates to 'Planning' once
+      // someone completes setup. Mirrors cloud-functions/src/functions/luma-sync.ts.
+      await pool.query(
+        `INSERT INTO event (id, name, luma_event_id, luma_url, cover_image_url, event_date, location, macro_stage)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Concept')`,
+        ['evt-luma-' + apiId.replace(/^evt-/, ''), ev.name, apiId, ev.url ?? null, ev.cover_url ?? null, eventDate, location]
+      );
+      imported++;
+    }
   }
-  if (!rows.length) return console.log('Nothing new to import — all Luma events already in the DB.');
-  const { error } = await sb.from('event').upsert(rows, { onConflict: 'id' });
-  if (error) { console.error(error); process.exit(1); }
-  console.log(`Imported ${rows.length} Luma events.`);
+  console.log(`Import complete: ${imported} added, ${updated} refreshed (past events skipped).`);
 }
 
 async function cmdLink(eventId, lumaId) {
   if (!eventId || !lumaId) { console.error('usage: link <eventId> <lumaId>'); process.exit(1); }
-  const { error } = await db().from('event').update({ luma_event_id: lumaId }).eq('id', eventId);
-  if (error) { console.error(error); process.exit(1); }
+  need(process.env.DB_PASSWORD, 'DB_PASSWORD');
+  await pool.query('UPDATE event SET luma_event_id = $1 WHERE id = $2', [lumaId, eventId]);
   console.log(`Linked ${eventId} -> ${lumaId}`);
 }
 
 async function cmdInspect(eventId) {
-  const { data: ev } = await db().from('event').select('id, luma_event_id').eq('id', eventId).maybeSingle();
+  need(process.env.DB_PASSWORD, 'DB_PASSWORD');
+  const { rows } = await pool.query('SELECT id, luma_event_id FROM event WHERE id = $1 LIMIT 1', [eventId]);
+  const ev = rows[0];
   if (!ev?.luma_event_id) { console.error(`${eventId} has no luma_event_id — run \`link\` first.`); process.exit(1); }
   const data = await luma('/event/get-guests', { event_api_id: ev.luma_event_id, pagination_limit: 1 });
   console.log(JSON.stringify(data, null, 2));
 }
 
 async function cmdSync(only, dropAggregate) {
-  const sb = db();
-  let q = sb.from('event').select('id, name, luma_event_id').not('luma_event_id', 'is', null);
-  if (only) q = q.eq('id', only);
-  const { data: events, error } = await q;
-  if (error) { console.error(error); process.exit(1); }
-  if (!events?.length) return console.log('No linked events to sync. Run `link` first.');
+  need(process.env.DB_PASSWORD, 'DB_PASSWORD');
 
-  // Per-event isolation: one event's API/DB failure is logged and skipped, not fatal to the run.
+  let query = 'SELECT id, name, luma_event_id, event_date FROM event WHERE luma_event_id IS NOT NULL';
+  const params = [];
+  if (only) { query += ' AND id = $1'; params.push(only); }
+  const { rows: events } = await pool.query(query, params);
+
+  if (!events.length) return console.log('No linked events to sync. Run `link` first.');
+
+  // On a full run, skip past events — their guest lists are wrapped, don't re-pull/overwrite.
+  // An explicit `sync <eventId>` still runs (manual override for a specific past event).
+  const today = new Date().toISOString().slice(0, 10);
   let ok = 0, failed = 0, totalGuests = 0;
   for (const ev of events) {
+    if (!only && ev.event_date && ev.event_date < today) continue;
     try {
       const raw = await lumaAll('/event/get-guests', { event_api_id: ev.luma_event_id });
-      const guests = raw.map(readGuest).filter((g) => g.email);
+      const guests = raw.map(readGuest).filter(g => g.email);
       const skipped = raw.length - guests.length;
 
-      // Preserve existing type (don't clobber Partner/Hire) — only set type on brand-new rows.
-      const emails = guests.map((g) => g.email);
-      const { data: existing } = await sb.from('attendee').select('email').in('email', emails);
-      const known = new Set((existing ?? []).map((r) => r.email));
+      // Find existing attendees to preserve their type
+      const emails = guests.map(g => g.email);
+      const { rows: existing } = await pool.query(
+        'SELECT email FROM attendee WHERE email = ANY($1)',
+        [emails]
+      );
+      const known = new Set(existing.map(r => r.email));
 
-      const attendees = guests.map((g) => {
-        const row = {
-          id: idFromEmail(g.email),
-          email: g.email,
-          name: g.name,
-          title: g.profile.title,
-          org: g.profile.org,
-          school: g.profile.school,
-          city: g.profile.city,
-          industry: g.profile.industry,
-        };
-        if (!known.has(g.email)) row.type = 'Unknown'; // Luma can't tell us Client/Hire/Partner
-        if (g.profile.linkedin) row.linkedin_url = g.profile.linkedin; // never overwrite a manual one with null
-        return row;
-      });
-      const links = guests.map((g) => ({
-        id: `ae-${idFromEmail(g.email)}-${ev.id}`,
-        attendee_id: idFromEmail(g.email),
-        event_id: ev.id,
-        role_at_event: 'attendee',
-        registration_status: g.approval ?? null,
-        checked_in: g.checkedIn,
-      }));
+      // Upsert attendees
+      for (const g of guests) {
+        const isNew = !known.has(g.email);
+        await pool.query(
+          `INSERT INTO attendee (id, email, name, title, org, school, city, industry, linkedin_url, type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (email) DO UPDATE SET
+             name = EXCLUDED.name,
+             title = EXCLUDED.title,
+             org = EXCLUDED.org,
+             school = EXCLUDED.school,
+             city = EXCLUDED.city,
+             industry = EXCLUDED.industry,
+             linkedin_url = COALESCE(EXCLUDED.linkedin_url, attendee.linkedin_url)`,
+          [
+            idFromEmail(g.email),
+            g.email,
+            g.name,
+            g.profile.title,
+            g.profile.org,
+            g.profile.school,
+            g.profile.city,
+            g.profile.industry,
+            g.profile.linkedin,
+            isNew ? 'Unknown' : null, // type: set for new rows only, ignored in UPDATE SET
+          ]
+        );
+      }
 
-      const e1 = (await sb.from('attendee').upsert(attendees, { onConflict: 'email' })).error;
-      if (e1) throw new Error(`attendee upsert failed: ${e1.message}`);
-      const e2 = (await sb.from('attendee_event').upsert(links, { onConflict: 'attendee_id,event_id' })).error;
-      if (e2) throw new Error(`attendee_event upsert failed: ${e2.message}`);
+      // Upsert attendee_event links
+      for (const g of guests) {
+        const attendeeId = idFromEmail(g.email);
+        const linkId = `ae-${attendeeId}-${ev.id}`;
+        await pool.query(
+          `INSERT INTO attendee_event (id, attendee_id, event_id, role_at_event, registration_status, checked_in)
+           VALUES ($1, $2, $3, 'attendee', $4, $5)
+           ON CONFLICT (attendee_id, event_id) DO UPDATE SET
+             registration_status = EXCLUDED.registration_status,
+             checked_in = EXCLUDED.checked_in`,
+          [linkId, attendeeId, ev.id, g.approval ?? null, g.checkedIn]
+        );
+      }
 
       ok++; totalGuests += guests.length;
       console.log(`ok  ${ev.id} (${ev.name}): ${guests.length} guests upserted${skipped ? `, ${skipped} skipped (no email)` : ''}.`);
@@ -208,13 +251,13 @@ async function cmdSync(only, dropAggregate) {
       console.error(`FAIL ${ev.id} (${ev.name}): ${err?.message ?? err}`);
     }
   }
+
   console.log(`Sync complete: ${ok}/${events.length} events ok, ${failed} failed, ${totalGuests} guests upserted.`);
-  if (failed) process.exitCode = 1; // signal partial failure to the caller / cron
+  if (failed) process.exitCode = 1;
 
   if (dropAggregate) {
-    const sb2 = db();
-    await sb2.from('attendee_event').delete().eq('attendee_id', 'att-candidates-pool');
-    await sb2.from('attendee').delete().eq('id', 'att-candidates-pool');
+    await pool.query(`DELETE FROM attendee_event WHERE attendee_id = 'att-candidates-pool'`);
+    await pool.query(`DELETE FROM attendee WHERE id = 'att-candidates-pool'`);
     console.log('Dropped the aggregate candidate pool (att-candidates-pool).');
   }
 }
@@ -222,19 +265,21 @@ async function cmdSync(only, dropAggregate) {
 // ── dispatch ──────────────────────────────────────────────────────────────────
 const [cmd, ...rest] = process.argv.slice(2);
 const dropAggregate = rest.includes('--drop-aggregate');
-const positional = rest.filter((a) => !a.startsWith('--'));
+const positional = rest.filter(a => !a.startsWith('--'));
 
 try {
   switch (cmd) {
-    case 'list': await cmdList(); break;
+    case 'list':          await cmdList(); break;
     case 'import-events': await cmdImportEvents(); break;
-    case 'link': await cmdLink(positional[0], positional[1]); break;
-    case 'inspect': await cmdInspect(positional[0]); break;
-    case 'sync': await cmdSync(positional[0], dropAggregate); break;
+    case 'link':          await cmdLink(positional[0], positional[1]); break;
+    case 'inspect':       await cmdInspect(positional[0]); break;
+    case 'sync':          await cmdSync(positional[0], dropAggregate); break;
     default:
-      console.log('commands: list | link <eventId> <lumaId> | inspect <eventId> | sync [eventId] [--drop-aggregate]');
+      console.log('commands: list | import-events | link <eventId> <lumaId> | inspect <eventId> | sync [eventId] [--drop-aggregate]');
   }
 } catch (err) {
   console.error(`luma-sync ${cmd ?? ''} failed: ${err?.message ?? err}`);
   process.exit(1);
+} finally {
+  await pool.end();
 }
