@@ -9,7 +9,7 @@
 #   GITHUB_PACKAGES_TOKEN  - read:packages token for @instalily/ui
 
 # ── Stage 1: build the SPA ────────────────────────────────────────────────────
-FROM node:20-alpine AS spa-build
+FROM node:22-alpine AS spa-build
 WORKDIR /app
 
 ARG GITHUB_PACKAGES_TOKEN
@@ -22,7 +22,7 @@ COPY . .
 RUN npm run build
 
 # ── Stage 2: build the Node.js functions ─────────────────────────────────────
-FROM node:20-alpine AS functions-build
+FROM node:22-alpine AS functions-build
 WORKDIR /functions
 
 COPY cloud-functions/package*.json ./
@@ -32,7 +32,7 @@ COPY cloud-functions/ ./
 RUN npm run build
 
 # ── Stage 3: final runtime image ─────────────────────────────────────────────
-FROM node:20-alpine
+FROM node:22-alpine
 
 # Install Caddy
 RUN apk add --no-cache caddy
