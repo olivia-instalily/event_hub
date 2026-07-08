@@ -1,39 +1,45 @@
-# Reverse-proxy for the EventHub SPA (Cloud Run, behind IAP).
+# EventHub — Cloud Run: Caddy routes for PostgREST + Node.js functions + SPA.
 #
-# Serves the static build AND proxies the Supabase data/functions/storage APIs through this
-# same origin — injecting the anon key server-side so it NEVER ships in the client bundle and
-# the browser never talks to Supabase directly. Combined with IAP on the Cloud Run service,
-# this is the interim "(c)" access model: only instalily.ai Workspace users reach the app, and
-# there's no full-access key sitting in the front-end for anyone to lift.
-#
-# Env (set on the Cloud Run service):
-#   PORT                 - provided by Cloud Run (default 8080)
-#   SUPABASE_UPSTREAM    - https://<project-ref>.supabase.co
-#   SUPABASE_HOST        - <project-ref>.supabase.co   (Host header / SNI)
-#   SUPABASE_ANON_KEY    - the real anon key (a SECRET on the service; not in the bundle)
+# Env vars (set on Cloud Run service via Secret Manager):
+#   PORT                  - provided by Cloud Run (default 8080)
+#   POSTGREST_ANON_JWT    - anon HS256 JWT for PostgREST (injected for browser requests)
 
 {
 	admin off
 	auto_https off
 }
 
+# ── Public server (browser traffic) ───────────────────────────────────────────
 :{$PORT:8080} {
 	encode gzip
 
-	# Supabase API surface used by the app (no realtime/login in this app).
-	@supabase path /rest/* /storage/* /functions/* /auth/*
-	handle @supabase {
-		reverse_proxy {$SUPABASE_UPSTREAM} {
-			header_up Host {$SUPABASE_HOST}
-			header_up apikey {$SUPABASE_ANON_KEY}
-			header_up Authorization "Bearer {$SUPABASE_ANON_KEY}"
+	# PostgREST REST API  →  strip /rest/v1 prefix, inject anon JWT
+	handle /rest/* {
+		uri strip_prefix /rest/v1
+		reverse_proxy localhost:3000 {
+			header_up Authorization "Bearer {$POSTGREST_ANON_JWT}"
+			header_up apikey "{$POSTGREST_ANON_JWT}"
 		}
 	}
 
-	# Static SPA with history fallback (state-based nav → everything falls back to index.html).
+	# Node.js edge functions  →  strip /functions/v1 prefix
+	handle /functions/* {
+		uri strip_prefix /functions/v1
+		reverse_proxy localhost:3001
+	}
+
+	# SPA static files with history-mode fallback
 	handle {
 		root * /srv
 		try_files {path} /index.html
 		file_server
+	}
+}
+
+# ── Internal server (functions → PostgREST, service-role JWT passes through) ──
+:9000 {
+	handle /rest/* {
+		uri strip_prefix /rest/v1
+		reverse_proxy localhost:3000
 	}
 }

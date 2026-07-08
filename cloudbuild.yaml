@@ -1,0 +1,19 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - '--build-arg'
+      - 'GITHUB_PACKAGES_TOKEN=${_GITHUB_PACKAGES_TOKEN}'
+      - '-t'
+      - '${_IMAGE}'
+      - '.'
+
+substitutions:
+  _IMAGE: 'us-central1-docker.pkg.dev/event-499220/eventhub/app:latest'
+
+images:
+  - '${_IMAGE}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
