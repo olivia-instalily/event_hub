@@ -119,8 +119,10 @@ async function cmdImportEvents() {
   // Policy (mirrors cloud-functions/src/functions/luma-sync.ts):
   //   • Past events (start_at < today)  → SKIP. They're wrapped; never re-import or touch.
   //   • Future events already linked    → REFRESH the Luma-owned fields in place.
-  //   • Future events not yet linked     → ADD (with macro_stage 'Planning' so they route to the
-  //     full planning view). macro_stage is only ever set on insert, never on refresh.
+  //   • Future events not yet linked     → ADD with macro_stage 'Concept' (→ status "future"): a
+  //     drawn-but-untouched event. It graduates to 'Planning' (→ "in-process") once someone works on
+  //     it — adds planning content, fills an essentials field, or marks it in-process (see
+  //     graduateFromConcept in src/lib/db.ts). macro_stage is only ever set on insert, never on refresh.
   let imported = 0, updated = 0;
   for (const entry of events) {
     const ev = entry.event ?? entry;

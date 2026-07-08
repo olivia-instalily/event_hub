@@ -225,6 +225,23 @@ export async function updateEventOwner(eventId: string, owner: string | null): P
 export async function updateEventStatus(eventId: string, status: EventStatus): Promise<void> {
   const { error } = await supabase.from('event').update({ status }).eq('id', eventId);
   if (error) throw error;
+  // Marking an event in-process is an explicit "I'm working on this" — graduate it out of 'Concept'
+  // so the planning view stops opening on the setup steps and its stage matches its status.
+  if (status === 'in-process') await graduateFromConcept(eventId);
+}
+
+/** A freshly-drawn event (Luma import → 'Concept', i.e. status "future") sits untouched until
+ *  someone actually works on it: adds planning content, fills an essentials field on the site, or
+ *  explicitly marks it in-process. Any of those graduates it to 'Planning' (→ "in-process").
+ *  Scoped to macro_stage='Concept' so it never drags an event that's already further along
+ *  (Week-of/Live/Wrap) backward, and is a no-op for events that were never Concept. Best-effort:
+ *  a graduation failure must never break the primary action that triggered it. The Luma sync writes
+ *  raw (bypassing these app-layer setters), so a Luma-populated date/location/name never trips this
+ *  — only on-site edits do. */
+async function graduateFromConcept(eventId: string): Promise<void> {
+  try {
+    await supabase.from('event').update({ macro_stage: 'Planning' }).eq('id', eventId).eq('macro_stage', 'Concept');
+  } catch { /* best-effort — the event still resolves its status correctly from other signals */ }
 }
 
 /** Permanently delete an event. FKs cascade (engagements, budget+lines, deliverables,
@@ -907,6 +924,7 @@ export async function addAttendee(eventId: string, fields: { name: string; title
     id: newId('ae'), attendee_id: id, event_id: eventId, role_at_event: fields.isSpeaker ? 'speaker' : 'attendee',
   });
   if (lErr) throw lErr;
+  await graduateFromConcept(eventId);
   const internalId = await labelInternalIfInstalily(id, fields.email ?? null);
   return {
     id, name: fields.name, email: fields.email ?? null, title: fields.title ?? null, org: fields.org ?? null,
@@ -1413,6 +1431,7 @@ export async function addSourceMaterial(eventId: string, material: SourceMateria
   if (cur.some((m) => m.url === material.url || m.name === material.name)) return;
   const { error } = await supabase.from('event').update({ source_materials: [...cur, material] }).eq('id', eventId);
   if (error) throw error;
+  await graduateFromConcept(eventId);
 }
 
 /** Remove a source doc from project context. CASCADES everything derived SOLELY from it: budget
@@ -2269,6 +2288,7 @@ export async function addEngagement(eventId: string, category: string, estimate:
   const id = genId('eng');
   const { error } = await supabase.from('engagement').insert({ id, event_id: eventId, category, stage: 'Sourced' });
   if (error) throw error;
+  await graduateFromConcept(eventId);
   // A vendor decision is a cost → mirror it as a linked budget line so it shows on the Budget page.
   try {
     const { data: b } = await supabase.from('budget').select('id').eq('event_id', eventId).maybeSingle();
@@ -2503,6 +2523,7 @@ export async function setEventDate(eventId: string, date: string | null): Promis
   const { error } = await supabase.from('event').update({ event_date: date }).eq('id', eventId);
   if (error) throw error;
   if (!date) return;
+  await graduateFromConcept(eventId); // setting a date on-site is essentials work (Luma writes raw, not here)
   // Resolve each deliverable's due date = event date + its day offset. Prefer the scaffold's
   // due_offset_days; fall back to offset_start (the start of a drop-ingest/template range) so
   // template-derived deliverables land on the timeline too.
@@ -2520,21 +2541,20 @@ export async function setEventDate(eventId: string, date: string | null): Promis
 export async function setHeadcount(eventId: string, headcount: number | null): Promise<void> {
   const { error } = await supabase.from('event').update({ headcount }).eq('id', eventId);
   if (error) throw error;
+  if (headcount != null) await graduateFromConcept(eventId);
 }
 export async function setEventBudgetTarget(eventId: string, target: number | null): Promise<void> {
   const { error } = await supabase.from('event').update({ event_budget_target: target }).eq('id', eventId);
   if (error) throw error;
+  if (target != null) await graduateFromConcept(eventId);
 }
 /** Persist setup progress (completed step keys) and the overall complete flag together. */
 export async function saveSetupState(eventId: string, progress: string[], complete: boolean): Promise<void> {
   const { error } = await supabase.from('event').update({ setup_progress: progress, setup_complete: complete }).eq('id', eventId);
   if (error) throw error;
-  // Finishing the essentials flow graduates a freshly-drawn event from 'Concept' (→ future) to
-  // 'Planning' (→ in-process). Scoped to macro_stage = 'Concept' so it never pulls an event that's
-  // already further along (Week-of / Live / Wrap) backward.
-  if (complete) {
-    await supabase.from('event').update({ macro_stage: 'Planning' }).eq('id', eventId).eq('macro_stage', 'Concept');
-  }
+  // Finishing the essentials flow also graduates a freshly-drawn event out of 'Concept' (→ future)
+  // to 'Planning' (→ in-process) — same graduation as any incremental "add" (see graduateFromConcept).
+  if (complete) await graduateFromConcept(eventId);
 }
 /** Setup step 3: kick off outreach for a vendor category and record the inbox-watch intent. */
 export async function startOutreach(engagementId: string, watchInbox: boolean): Promise<void> {
@@ -2615,6 +2635,7 @@ export async function addDeliverable(eventId: string, fields: { title: string; p
     offset_start: fields.offsetStart ?? null, offset_end: fields.offsetEnd ?? null, locked: fields.locked ?? false,
   });
   if (error) throw error;
+  await graduateFromConcept(eventId);
   return { id, title: fields.title, phase: fields.phase, ownerRole: fields.ownerRole, dueDate: fields.dueDate, offsetStart: fields.offsetStart ?? null, offsetEnd: fields.offsetEnd ?? null, status: 'Todo', linearIssueId: null, linearIssueUrl: null, locked: fields.locked ?? false };
 }
 export async function setDeliverableStatus(id: string, status: string): Promise<void> {
