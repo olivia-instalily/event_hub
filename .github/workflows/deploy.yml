@@ -1,0 +1,71 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+
+env:
+  PROJECT: event-499220
+  REGION: us-central1
+  SERVICE: eventhub
+  IMAGE: us-central1-docker.pkg.dev/event-499220/eventhub/app
+  SQL_INSTANCE: event-499220:us-central1:eventhub-db
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: event-499220
+
+      - name: Build image via Cloud Build
+        run: |
+          gcloud builds submit \
+            --project "$PROJECT" \
+            --region "$REGION" \
+            --substitutions "_GITHUB_PACKAGES_TOKEN=${{ secrets.GH_PACKAGES_TOKEN }}" \
+            --config cloudbuild.yaml \
+            .
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT" \
+            --region "$REGION" \
+            --image "$IMAGE:latest" \
+            --platform managed \
+            --allow-unauthenticated \
+            --add-cloudsql-instances "$SQL_INSTANCE" \
+            --memory 512Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 4 \
+            --timeout 60 \
+            --set-env-vars "CLOUD_SQL_CONNECTION_NAME=$SQL_INSTANCE" \
+            --set-secrets "\
+          DB_PASSWORD=eventhub-db-password:latest,\
+          POSTGREST_JWT_SECRET=eventhub-jwt-secret:latest,\
+          POSTGREST_ANON_JWT=eventhub-anon-jwt:latest,\
+          POSTGREST_SERVICE_JWT=eventhub-service-jwt:latest,\
+          ANTHROPIC_API_KEY=eventhub-anthropic-key:latest,\
+          LINEAR_API_KEY=eventhub-linear-key:latest,\
+          LUMA_API_KEY=eventhub-luma-key:latest,\
+          SLACK_BOT_TOKEN=eventhub-slack-token:latest,\
+          GREENHOUSE_API_KEY=eventhub-greenhouse-key:latest,\
+          GOOGLE_CLIENT_ID=eventhub-google-client-id:latest,\
+          GOOGLE_CLIENT_SECRET=eventhub-google-client-secret:latest,\
+          GOOGLE_REFRESH_TOKEN=eventhub-google-refresh-token:latest,\
+          GMAIL_REFRESH_TOKEN=eventhub-gmail-refresh-token:latest"
