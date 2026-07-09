@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/generate-page-style.ts
 // Edge function: infer visual STYLE TOKENS from a design reference image (a Figma mock,
 // screenshot, or template). Claude (vision) returns a structured theme — fonts, accent,
 // heading treatment, colors, agenda layout — which the builder merges into the page draft.

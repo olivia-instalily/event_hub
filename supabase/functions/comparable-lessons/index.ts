@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/comparable-lessons.ts
 // Edge function: carried lessons for an in-process event.
 // Finds reflections from *comparable past events* — events of overlapping tags /
 // similar theme — and returns them as read-only lessons. Uses Claude to judge

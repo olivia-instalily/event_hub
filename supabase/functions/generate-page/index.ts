@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/generate-page.ts
 // Edge function: draft landing-page copy from an event's PUBLIC fields only.
 // Claude writes a headline, subhead, and about blurb; falls back to template-fill
 // when no API key is set. Sends only public fields (keeps the field boundary).

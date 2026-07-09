@@ -1,10 +1,12 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/summarize-correspondence/index.ts
 import { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { getServiceClient } from '../db.js';
 
 const SCHEMA = {
   type: 'object', additionalProperties: false,
-  properties: { summary: { type: 'string' } },
+  properties: { summary: { type: 'string', description: '2–3 sentence digest of the vendor correspondence' } },
   required: ['summary'],
 };
 
@@ -41,6 +43,6 @@ export async function handler(req: Request, res: Response) {
     res.json({ summary: tb ? JSON.parse(tb.text).summary : null });
   } catch (e) {
     console.error(JSON.stringify({ fn: 'summarize-correspondence', error: String((e as Error)?.message ?? e) }));
-    res.status(500).json({ error: String((e as Error)?.message ?? e) });
+    res.json({ summary: null, error: String((e as Error)?.message ?? e) });
   }
 }

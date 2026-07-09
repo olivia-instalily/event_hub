@@ -50,6 +50,7 @@ import { OwnerPicker } from "./OwnerPicker";
 import { GCalSync } from "./GCalSync";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
+import { OpenInLinear } from "./OpenInLinear";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
 import { parseVendors } from "../lib/vendorImport";
@@ -3798,9 +3799,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           />
         </div>
         {plan.linearProjectUrl && (
-          <a href={plan.linearProjectUrl} target="_blank" rel="noreferrer" title="Open this event's project in Linear" className="absolute bottom-4 right-6 inline-flex items-center gap-1 text-[15px] text-purple-600 hover:text-purple-800">
-            <Activity className="w-4 h-4" /> Open in Linear <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+          <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} className="absolute bottom-4 right-6" />
         )}
       </div>
 

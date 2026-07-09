@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/greenhouse-sync.ts
 // Edge function: read-back a THIN application-status flag from Greenhouse, matched by email.
 // READ-ONLY against Greenhouse (read-scoped Harvest key, server-side) — never writes there,
 // and returns only a collapsed status enum, never applications/stages/notes.

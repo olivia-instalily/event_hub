@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/planning-summary.ts
 // Edge function: a short at-a-glance status digest for an event's planning home tab.
 // The client passes already-computed facts; Claude phrases them into 2–3 sentences.
 // Returns { summary: null } when no API key is set so the client can fall back to its

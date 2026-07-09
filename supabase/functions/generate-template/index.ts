@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/generate-template.ts
 // Edge function: turn a free-text event description into a starter planning template
 // via the Claude API. Runs server-side so the ANTHROPIC_API_KEY never reaches the browser.
 //

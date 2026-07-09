@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/generate-page/index.ts
 import { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { getServiceClient } from '../db.js';
@@ -7,9 +9,9 @@ const PUBLIC_FIELDS = 'name, event_date, location, tags, description, format, au
 const SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
-    headline:  { type: 'string' },
-    subhead:   { type: 'string' },
-    aboutBody: { type: 'string' },
+    headline:  { type: 'string', description: 'short punchy hero headline' },
+    subhead:   { type: 'string', description: 'one-line supporting subhead' },
+    aboutBody: { type: 'string', description: '2–4 sentence about paragraph' },
   },
   required: ['headline', 'subhead', 'aboutBody'],
 };

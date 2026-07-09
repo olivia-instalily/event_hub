@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/greenhouse-sync/index.ts
 import { Request, Response } from 'express';
 
 type Status = 'applied' | 'in_pipeline' | 'hired' | 'none';

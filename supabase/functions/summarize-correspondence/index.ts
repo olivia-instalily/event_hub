@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/summarize-correspondence.ts
 // Edge function: Claude-summarize the correspondence (synced emails + notes) on one
 // vendor decision into a short "where things stand" digest. Returns { summary: null }
 // when no API key is set so the client can show a hint.

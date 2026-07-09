@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/comparable-lessons/index.ts
 import { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { getServiceClient } from '../db.js';
@@ -10,9 +12,9 @@ const SCHEMA = {
       items: {
         type: 'object', additionalProperties: false,
         properties: {
-          body:            { type: 'string' },
-          sourceEventName: { type: 'string' },
-          why:             { type: 'string' },
+          body:            { type: 'string', description: "the lesson text, copied verbatim from the source" },
+          sourceEventName: { type: 'string', description: "the source series/event the lesson came from" },
+          why:             { type: 'string', description: "one short phrase on why it's applicable to this event" },
         },
         required: ['body', 'sourceEventName', 'why'],
       },
@@ -21,7 +23,7 @@ const SCHEMA = {
   required: ['lessons'],
 };
 
-const SYSTEM = `You curate "carried lessons" for an internal event-planning tool. Given a NEW event being planned and a list of CANDIDATE sources (past events/series, each with tags and a set of reflection notes), pick the reflections that are POTENTIALLY APPLICABLE to the new event — overlapping tags or a similar theme/format. Copy each chosen reflection's text verbatim into "body", set "sourceEventName" to its source, and give a short "why". Omit reflections that aren't relevant. Return an empty list if none apply.`;
+const SYSTEM = `You curate "carried lessons" for an internal event-planning tool. Given a NEW event being planned and a list of CANDIDATE sources (past events/series, each with tags and a set of reflection notes), pick the reflections that are POTENTIALLY APPLICABLE to the new event — overlapping tags or a similar theme/format. It does NOT need to be an exact match, just plausibly useful. Copy each chosen reflection's text verbatim into "body", set "sourceEventName" to its source, and give a short "why". Omit reflections that aren't relevant. Return an empty list if none apply.`;
 
 type Candidate = { seriesId: string; source: string; tags: string[]; reflections: string[] };
 

@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/slack-send/index.ts
 import { Request, Response } from 'express';
 
 export async function handler(req: Request, res: Response) {

@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/detect-update/index.ts
 import { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { getServiceClient } from '../db.js';
@@ -42,7 +44,7 @@ function heuristic(text: string, source: string, from: string | null, engs: Eng[
 
   if (CONTRACT_RE.test(text) && vendor && target !== 'Todo' && target !== 'In Progress') {
     const name = vendor.names[0] ?? vendor.category ?? 'vendor';
-    return { kind: 'contract', status: '', engagementId: vendor.id, deliverableId: '', matchedName: name, summary: `Signed contract detected via ${source} — ${vendor.category ?? name} → Contracted` };
+    return { kind: 'contract', status: '', engagementId: vendor.id, deliverableId: null, matchedName: name, summary: `Signed contract detected via ${source} — ${vendor.category ?? name} → Contracted` };
   }
   if (target) {
     const d = dels.find((d) => {
@@ -50,26 +52,26 @@ function heuristic(text: string, source: string, from: string | null, engs: Eng[
       return t.includes(d.title.toLowerCase()) || words.filter((w) => t.includes(w)).length >= Math.max(1, Math.ceil(words.length / 2));
     });
     if (d) {
-      if (target === 'Done') return { kind: 'complete', status: '', engagementId: '', deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" moved to completed via ${source}` };
-      return { kind: 'status', status: target, engagementId: '', deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" → ${target} via ${source}` };
+      if (target === 'Done') return { kind: 'complete', status: '', engagementId: null, deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" moved to completed via ${source}` };
+      return { kind: 'status', status: target, engagementId: null, deliverableId: d.id, matchedName: d.title, summary: `"${d.title}" → ${target} via ${source}` };
     }
   }
   if (vendor) {
     const name = vendor.names[0] ?? vendor.category ?? 'vendor';
-    return { kind: 'note', status: '', engagementId: vendor.id, deliverableId: '', matchedName: name, summary: `${source[0].toUpperCase()}${source.slice(1)} from ${vendor.category ?? name}: ${text.slice(0, 70)}${text.length > 70 ? '…' : ''}` };
+    return { kind: 'note', status: '', engagementId: vendor.id, deliverableId: null, matchedName: name, summary: `${source[0].toUpperCase()}${source.slice(1)} from ${vendor.category ?? name}: ${text.slice(0, 70)}${text.length > 70 ? '…' : ''}` };
   }
-  return { kind: 'note', status: '', engagementId: '', deliverableId: '', matchedName: '', summary: `${source[0].toUpperCase()}${source.slice(1)} note: ${text.slice(0, 80)}${text.length > 80 ? '…' : ''}` };
+  return { kind: 'note', status: '', engagementId: null, deliverableId: null, matchedName: '', summary: `${source[0].toUpperCase()}${source.slice(1)} note: ${text.slice(0, 80)}${text.length > 80 ? '…' : ''}` };
 }
 
 const SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
     kind:          { type: 'string', enum: ['contract', 'complete', 'status', 'note'] },
-    status:        { type: 'string', enum: ['Todo', 'In Progress', 'Done', ''] },
-    engagementId:  { type: 'string' },
-    deliverableId: { type: 'string' },
-    matchedName:   { type: 'string' },
-    summary:       { type: 'string' },
+    status:        { type: 'string', enum: ['Todo', 'In Progress', 'Done', ''], description: "target status when kind='status' (e.g. reopening → Todo, starting → In Progress); empty otherwise" },
+    engagementId:  { type: ['string', 'null'], description: 'matched engagement id, or null if no match' },
+    deliverableId: { type: ['string', 'null'], description: 'matched deliverable id, or null if no match' },
+    matchedName:   { type: 'string', description: 'the vendor/category or task matched, or empty' },
+    summary:       { type: 'string', description: 'one-line activity summary' },
   },
   required: ['kind', 'status', 'engagementId', 'deliverableId', 'matchedName', 'summary'],
 };
@@ -96,7 +98,12 @@ export async function handler(req: Request, res: Response) {
 
     const client = new Anthropic({ apiKey });
     const senderDomain = emailDomain(from);
-    const sys = `You triage an inbound ${source} note for an event-planning tool. Pick one kind:\n- "contract": a vendor contract was signed — set engagementId to the matching decision.\n- "complete": an action item is finished/done — set deliverableId to the matching task, status="Done".\n- "status": an action item should move to a DIFFERENT status — set deliverableId and status to "Todo" (reopen) or "In Progress" (started).\n- "note": just correspondence.\nMatch vendor by sender domain first, then name. Match deliverables by title words. Set status="" unless kind="status". Write a concise one-line summary.`;
+    const sys = `You triage an inbound ${source} note for an event-planning tool. Pick one kind:
+- "contract": a vendor contract was signed — set engagementId to the matching decision.
+- "complete": an action item is finished/done — set deliverableId to the matching task, status="Done".
+- "status": an action item should move to a DIFFERENT status without being completed — set deliverableId and set status to "Todo" (reopen / move back / not started / undo) or "In Progress" (started / working on / kicked off).
+- "note": just correspondence / nothing actionable.
+Match the vendor primarily by SENDER DOMAIN against each engagement's "domains" (any address at that domain is the same vendor), then by name in the text. Match deliverables by title words appearing in the note. If it's a note but clearly from a known vendor's domain, still set engagementId so it files as that vendor's correspondence. Return null for engagementId/deliverableId when nothing matches; set status="" unless kind="status". Write a concise one-line summary.`;
     const payload = { note: text, senderDomain, engagements: engs, deliverables: dels };
     const resp = await (client.messages.create as any)({
       model: 'claude-haiku-4-5', max_tokens: 1024, system: sys,

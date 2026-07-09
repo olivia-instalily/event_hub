@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/slack-send.ts
 // Edge function: post a message to Slack via chat.postMessage. Runs server-side — holds the
 // bot token; the browser never sees it.
 //

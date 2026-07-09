@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/luma-import.ts
 // Edge function: import Luma guests onto EventHub events as attendees (+ attendee_event links).
 // Server-side (Luma key + Supabase service role from env). One-shot backfill for past linked
 // events, or a single event. People are de-duped by email; links de-duped by (attendee,event).

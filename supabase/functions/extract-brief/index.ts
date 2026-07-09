@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/extract-brief.ts
 // Edge function: extract a dropped event brief into structured fields via Claude.
 // Runs server-side so ANTHROPIC_API_KEY never reaches the browser. The client falls
 // back to its local regex parser if this fails or isn't configured.

@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/attach-luma.ts
 // Edge function: attach a Luma event to an Assembly event from a pasted public link.
 // Runs server-side — holds the Luma key, writes with the service role. The browser
 // never sees the Luma key and can't write the DB directly.

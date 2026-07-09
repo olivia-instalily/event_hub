@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/gmail-sync.ts
 // Edge function: pull recent Gmail messages from an event's vendor domains and file
 // them as correspondence on the matching vendor decision. Single-mailbox model — uses
 // one stored refresh token. Read-only on Gmail; it never changes a vendor's stage

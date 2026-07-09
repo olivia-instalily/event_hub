@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/extract-debrief.ts
 // Edge function: extract a POST-EVENT DEBRIEF transcript into structured fields via Claude.
 // Sibling to extract-brief — but a debrief is a DIFFERENT document: backward-looking, producing
 // lessons (changes to make), follow-ups (actions), people who mattered (tags), an outcome

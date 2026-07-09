@@ -42,6 +42,20 @@ function pickStateId(states: { id: string; type: string }[], status: string | nu
   return byType(want) ?? byType('unstarted') ?? byType('backlog') ?? states[0]?.id;
 }
 
+// Does this Linear project still exist? Deleting a project in Linear makes `project(id)` throw an
+// "Entity not found" error (its issues go with it), so we treat any failure as "gone". Archived
+// projects still resolve here — they open fine, so they're not "deleted".
+async function projectExists(id: string): Promise<{ exists: boolean; url: string | null }> {
+  try {
+    const d = await gql<{ project: { id: string; url: string } | null }>(
+      `query($p:String!){ project(id:$p){ id url } }`, { p: id },
+    );
+    return d.project ? { exists: true, url: d.project.url } : { exists: false, url: null };
+  } catch {
+    return { exists: false, url: null };
+  }
+}
+
 async function findUserIdByEmail(email: string): Promise<string | null> {
   try {
     const r = await gql<{ users: { nodes: { id: string }[] } }>(
@@ -90,6 +104,15 @@ export async function handler(req: Request, res: Response) {
       .eq('id', eventId).single();
     if (error || !ev) { res.status(404).json({ error: 'event not found' }); return; }
 
+    // Existence check — powers the "Open in Linear" button, which verifies the project is still there
+    // before navigating so a deleted project offers a re-sync instead of a dead page.
+    if (direction === 'check') {
+      if (!(ev as any).linear_project_id) { res.json({ ok: true, linked: false, exists: false, url: null }); return; }
+      const chk = await projectExists((ev as any).linear_project_id);
+      res.json({ ok: true, linked: true, exists: chk.exists, url: chk.exists ? (chk.url ?? (ev as any).linear_project_url) : null });
+      return;
+    }
+
     const { data: dels } = await sb.from('deliverable')
       .select('id, title, phase, owner_role, resolved_due_date, status, linear_issue_id')
       .eq('event_id', eventId).order('resolved_due_date', { nullsFirst: false });
@@ -113,6 +136,24 @@ export async function handler(req: Request, res: Response) {
         pulled++;
       }
       res.json({ ok: true, direction: 'pull', pulled, total: deliverables.length }); return;
+    }
+
+    // Self-heal a deleted project before pushing. If the stored project is gone from Linear (deleted
+    // there) — or the caller explicitly asked to recreate — wipe the stale linkage so ensureProject
+    // builds a fresh project below. The deleted project took its issues with it, so every
+    // deliverable's linear_issue_id is dead too; clear those or issueUpdate would target ghost ids.
+    const recreate = !!req.body.recreate;
+    let recreated = false;
+    if ((ev as any).linear_project_id) {
+      const chk = recreate ? { exists: false } : await projectExists((ev as any).linear_project_id);
+      if (!chk.exists) {
+        await sb.from('event').update({ linear_project_id: null, linear_project_url: null }).eq('id', eventId);
+        await sb.from('deliverable').update({ linear_issue_id: null, linear_issue_url: null }).eq('event_id', eventId);
+        (ev as any).linear_project_id = null;
+        (ev as any).linear_project_url = null;
+        for (const d of deliverables) (d as any).linear_issue_id = null;
+        recreated = true;
+      }
     }
 
     const teamId  = await ensureTeam(sb);
@@ -143,7 +184,7 @@ export async function handler(req: Request, res: Response) {
       synced++;
     }
 
-    res.json({ ok: true, teamId, projectId: project.id, projectUrl: project.url, synced, total: deliverables.length });
+    res.json({ ok: true, teamId, projectId: project.id, projectUrl: project.url, synced, total: deliverables.length, recreated });
   } catch (e) {
     console.error(JSON.stringify({ fn: 'linear-sync', error: String((e as Error)?.message ?? e) }));
     res.status(500).json({ error: (e as Error).message ?? String(e) });

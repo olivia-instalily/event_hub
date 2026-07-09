@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/gcal-sync.ts
 // Edge function: push one EventHub event onto a single, toggleable Google Calendar that lives
 // under the company calendar account (calendar@instalily.ai). All events land on that one
 // secondary calendar, so in Google Calendar it's a single checkbox you can show/hide.

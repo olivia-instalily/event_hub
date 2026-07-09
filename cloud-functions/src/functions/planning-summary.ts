@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/planning-summary/index.ts
 import { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 

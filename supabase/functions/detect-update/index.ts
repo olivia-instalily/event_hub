@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/detect-update.ts
 // Edge function: classify an inbound email / Linear note and match it to one of an
 // event's vendor decisions or deliverables. Stands in for a HubSpot/Gmail poller or
 // a Linear webhook — same matching logic, just fed text directly here.

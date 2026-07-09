@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/generate-page-style/index.ts
 import { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -5,14 +7,14 @@ const FONT = { type: 'string', enum: ['inter', 'serif', 'grotesk'] };
 const SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
-    headingFont:   { ...FONT },
-    bodyFont:      { ...FONT },
-    accent:        { type: 'string' },
-    accentOn:      { type: 'string', enum: ['marker', 'title'] },
-    headingStyle:  { type: 'string', enum: ['plain', 'marker'] },
-    bgColor:       { type: ['string', 'null'] },
-    textColor:     { type: ['string', 'null'] },
-    agendaLayout:  { type: 'string', enum: ['list', 'timeline', 'cards'] },
+    headingFont:   { ...FONT, description: 'font family for headings: inter=clean sans, serif=editorial serif, grotesk=mono/technical' },
+    bodyFont:      { ...FONT, description: 'font family for body copy' },
+    accent:        { type: 'string', description: 'primary accent color as a #RRGGBB hex' },
+    accentOn:      { type: 'string', enum: ['marker', 'title'], description: 'whether the accent colors a small square marker beside headings, or the heading text itself' },
+    headingStyle:  { type: 'string', enum: ['plain', 'marker'], description: 'plain=large title; marker=small uppercase tracked label with a colored square (technical/brand look)' },
+    bgColor:       { type: ['string', 'null'], description: 'page background as #RRGGBB, or null for white' },
+    textColor:     { type: ['string', 'null'], description: 'body text color as #RRGGBB, or null for near-black default' },
+    agendaLayout:  { type: 'string', enum: ['list', 'timeline', 'cards'], description: 'agenda presentation that best matches the reference' },
   },
   required: ['headingFont', 'bodyFont', 'accent', 'accentOn', 'headingStyle', 'bgColor', 'textColor', 'agendaLayout'],
 };

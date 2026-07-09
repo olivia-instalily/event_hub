@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// cloud-functions/src/functions/create-luma.ts
 // Edge function: create a brand-new Luma event from an Assembly event's info, then attach it.
 // Runs server-side — holds the Luma key, writes with the service role.
 //

@@ -1563,8 +1563,9 @@ export async function syncEventToGoogleCalendar(
  *  updates existing issues. Server-side holds the Linear API key. */
 export async function syncEventToLinear(
   eventId: string,
-): Promise<{ teamId: string; projectId: string; projectUrl: string | null; synced: number; total: number }> {
-  const { data, error } = await supabase.functions.invoke('linear-sync', { body: { eventId } });
+  opts?: { recreate?: boolean },
+): Promise<{ teamId: string; projectId: string; projectUrl: string | null; synced: number; total: number; recreated: boolean }> {
+  const { data, error } = await supabase.functions.invoke('linear-sync', { body: { eventId, recreate: opts?.recreate ?? false } });
   if (error) {
     let msg = (data as any)?.error ?? error.message ?? String(error);
     try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
@@ -1572,6 +1573,22 @@ export async function syncEventToLinear(
   }
   if ((data as any)?.error) throw new Error((data as any).error);
   return data as any;
+}
+
+/** Verify this event's Linear project still exists (it may have been deleted in Linear). Powers the
+ *  "Open in Linear" button so a dead project offers a re-sync instead of navigating to an empty page.
+ *  linked=false ⇒ never synced; exists=false ⇒ was synced but the project is gone from Linear. */
+export async function checkLinearProject(
+  eventId: string,
+): Promise<{ linked: boolean; exists: boolean; url: string | null }> {
+  const { data, error } = await supabase.functions.invoke('linear-sync', { body: { eventId, direction: 'check' } });
+  if (error) {
+    let msg = (data as any)?.error ?? error.message ?? String(error);
+    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return { linked: !!(data as any).linked, exists: !!(data as any).exists, url: (data as any).url ?? null };
 }
 
 /** Pull the current Linear issue states back onto this event's deliverables (Linear → EventHub).

@@ -1,3 +1,5 @@
+// DUAL-MAINTAINED: any changes here must also be made in
+// supabase/functions/gcal-sync/index.ts
 import { Request, Response } from 'express';
 import { getServiceClient } from '../db.js';
 
