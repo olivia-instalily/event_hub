@@ -111,3 +111,11 @@ export function buildScopingSummary(opts: { title: string; date: string | null; 
     `_Opens the scoping form in EventHub — enter the approved amount there to lock the target (or reply in thread)._`,
   ].filter((l) => l !== null).join("\n");
 }
+
+// One-time migrate-on-read bridge: map an existing localStorage scoping record to the fields the
+// budget_approval row needs. Returns null for a draft (nothing to migrate). NOT used for new
+// submissions — those call submitBudgetApproval directly.
+export function scopingToApproval(s: ScopingForm): { status: "submitted" | "assigned"; assignedAmount: number | null; slackChannel: string | null } | null {
+  if (s.status === "draft") return null;
+  return { status: s.status, assignedAmount: s.status === "assigned" ? s.assignedBudget : null, slackChannel: s.submittedChannel };
+}
