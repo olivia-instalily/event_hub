@@ -1,5 +1,6 @@
 import { supabase, proxiedBackend } from './supabase';
 import { sharedFiles, type DupEvent } from './dedup';
+import { scopingToApproval, loadScoping } from './scoping';
 import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
@@ -2618,6 +2619,76 @@ export async function setEventBudgetTarget(eventId: string, target: number | nul
   if (error) throw error;
   if (target != null) await graduateFromConcept(eventId);
 }
+
+export type BudgetApproval = {
+  eventId: string;
+  status: 'submitted' | 'assigned' | 'declined';
+  requestedAmount: number | null;
+  declineReason: string | null;
+  decidedVia: 'app' | 'slack' | null;
+  deciderRef: string | null;
+  decidedAt: string | null;
+  slackChannel: string | null;
+  slackMessageTs: string | null;
+};
+
+const toBudgetApproval = (r: any): BudgetApproval => ({
+  eventId: r.event_id, status: r.status, requestedAmount: r.requested_amount ?? null,
+  declineReason: r.decline_reason ?? null, decidedVia: r.decided_via ?? null, deciderRef: r.decider_ref ?? null,
+  decidedAt: r.decided_at ?? null, slackChannel: r.slack_channel ?? null, slackMessageTs: r.slack_message_ts ?? null,
+});
+
+export async function getBudgetApproval(eventId: string): Promise<BudgetApproval | null> {
+  const { data } = await supabase.from('budget_approval').select('*').eq('event_id', eventId).maybeSingle();
+  return data ? toBudgetApproval(data) : null;
+}
+
+/** New submissions write here directly (NOT via the migrate-on-read bridge). */
+export async function submitBudgetApproval(eventId: string, opts: { requestedAmount: number | null; slackChannel: string | null; slackMessageTs?: string | null }): Promise<void> {
+  const { error } = await supabase.from('budget_approval').upsert({
+    event_id: eventId, status: 'submitted', requested_amount: opts.requestedAmount,
+    slack_channel: opts.slackChannel, slack_message_ts: opts.slackMessageTs ?? null,
+    decline_reason: null, decided_via: null, decider_ref: null, decided_at: null, updated_at: new Date().toISOString(),
+  }, { onConflict: 'event_id' });
+  if (error) throw error;
+}
+
+/** Sanctioned assign path: set the target via the existing writer, THEN flip approval state.
+ *  Target first so we never mark 'assigned' without the target actually written. */
+export async function assignBudget(eventId: string, amount: number, decider: { via: 'app' | 'slack'; ref: string } = { via: 'app', ref: 'app' }): Promise<void> {
+  await setEventBudgetTarget(eventId, amount);
+  const { error } = await supabase.from('budget_approval').upsert({
+    event_id: eventId, status: 'assigned', decline_reason: null,
+    decided_via: decider.via, decider_ref: decider.ref, decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }, { onConflict: 'event_id' });
+  if (error) throw error;
+}
+
+export async function declineBudget(eventId: string, reason: string, decider: { via: 'app' | 'slack'; ref: string } = { via: 'app', ref: 'app' }): Promise<void> {
+  const { error } = await supabase.from('budget_approval').upsert({
+    event_id: eventId, status: 'declined', decline_reason: reason,
+    decided_via: decider.via, decider_ref: decider.ref, decided_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }, { onConflict: 'event_id' });
+  if (error) throw error;
+}
+
+/** One-time bridge: if there's no DB row yet but localStorage has a non-draft scoping, seed the DB
+ *  row from it (and set the target for an already-assigned record via the sanctioned path). Returns
+ *  the resulting approval. Safe to call on every load — no-ops once a row exists. */
+export async function migrateScopingApprovalIfNeeded(eventId: string): Promise<BudgetApproval | null> {
+  const existing = await getBudgetApproval(eventId);
+  if (existing) return existing;
+  const mapped = scopingToApproval(loadScoping(eventId));
+  if (!mapped) return null;
+  if (mapped.status === 'assigned' && mapped.assignedAmount != null) {
+    await assignBudget(eventId, mapped.assignedAmount);
+    if (mapped.slackChannel) await supabase.from('budget_approval').update({ slack_channel: mapped.slackChannel }).eq('event_id', eventId);
+  } else {
+    await submitBudgetApproval(eventId, { requestedAmount: null, slackChannel: mapped.slackChannel });
+  }
+  return getBudgetApproval(eventId);
+}
+
 /** Persist setup progress (completed step keys) and the overall complete flag together. */
 export async function saveSetupState(eventId: string, progress: string[], complete: boolean): Promise<void> {
   const { error } = await supabase.from('event').update({ setup_progress: progress, setup_complete: complete }).eq('id', eventId);
