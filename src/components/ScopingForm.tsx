@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy, MessageSquare } from "lucide-react";
+import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy } from "lucide-react";
 import { parseFormats } from "./FormatPicker";
 import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as ScopingData } from "../lib/scoping";
 import { buildEventDeepLink } from "../lib/deepLink";
-import { slackSend, type EventPlanning } from "../lib/db";
+import { slackSend, submitBudgetApproval, migrateScopingApprovalIfNeeded, assignBudget, type BudgetApproval, type EventPlanning } from "../lib/db";
 import { Button } from "@instalily/ui/button";
 
 const money = (n: number | null | undefined) =>
@@ -56,12 +56,14 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
 }) {
   const [variant, setVariant] = useState(0);
   const [assignInput, setAssignInput] = useState("");
-  const [commentInput, setCommentInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [slackChannel, setSlackChannel] = useState(() => { try { return localStorage.getItem("slack_budget_channel") || DEFAULT_SLACK_CHANNEL; } catch { return DEFAULT_SLACK_CHANNEL; } });
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
+  const [approval, setApproval] = useState<BudgetApproval | null>(null);
+  // Keep a local copy of the posted summary so we can display it after submit.
+  const [postedSummary, setPostedSummary] = useState<string | null>(null);
 
   // Generate on first open — compose facts + draft, don't persist a blank.
   useEffect(() => {
@@ -69,12 +71,15 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load approval from the DB (with migrate-on-read for existing localStorage records).
+  useEffect(() => { void migrateScopingApprovalIfNeeded(plan.id).then(setApproval); }, [plan.id]);
+
   const funding = fundingFor(plan.tags);
   const lead = leadTimeCheck(plan.date);
   const headNum = Number(scoping.headcount) || null;
   const perPerson = headNum && roughTotal ? roughTotal / headNum : null;
-  const locked = scoping.status === "assigned";
-  const submitted = scoping.status !== "draft";
+  const locked = approval?.status === "assigned";
+  const submitted = approval != null;
 
   const set = (f: Partial<ScopingData>) => onChange({ ...scoping, ...f });
   const regenerate = () => { const v = variant + 1; setVariant(v); set({ strategicJustification: draftJustification(plan, funding, v) }); };
@@ -92,15 +97,21 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
     try {
       await slackSend(slackChannel.trim(), summary);
       try { localStorage.setItem("slack_budget_channel", slackChannel.trim()); } catch { /* ignore */ }
-      set({ status: "submitted", submittedAt: new Date().toISOString().slice(0, 10), submittedChannel: slackChannel.trim(), submittedSummary: summary });
+      await submitBudgetApproval(plan.id, { requestedAmount: roughTotal, slackChannel: slackChannel.trim() });
+      setPostedSummary(summary);
+      setApproval(await migrateScopingApprovalIfNeeded(plan.id));
       setConfirmOpen(false);
     } catch (e: any) { setSubmitErr(e?.message ?? String(e)); }
     finally { setSubmitBusy(false); }
   };
   const reopen = () => set({ status: "draft" });
-  // Return the budget (+ optional comment) → locks as the target.
-  const assign = () => { const n = Number(assignInput); if (!Number.isFinite(n) || assignInput.trim() === "") return; set({ status: "assigned", assignedBudget: n, approvalComment: commentInput.trim() || null }); };
-  const copySummary = () => { if (scoping.submittedSummary) { void navigator.clipboard?.writeText(scoping.submittedSummary); setCopied(true); setTimeout(() => setCopied(false), 1500); } };
+  // Return the budget → locks as the target via the DB.
+  const assign = () => {
+    const n = Number(assignInput);
+    if (!Number.isFinite(n) || assignInput.trim() === "") return;
+    void assignBudget(plan.id, n).then(() => migrateScopingApprovalIfNeeded(plan.id)).then(setApproval);
+  };
+  const copySummary = () => { const text = postedSummary; if (text) { void navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } };
 
   const field = "w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
 
@@ -113,9 +124,9 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
             <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
           </div>
           <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] ${scoping.status === "assigned" ? "bg-green-100 text-green-700" : scoping.status === "submitted" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
-              {scoping.status === "assigned" ? <Lock className="w-3.5 h-3.5" /> : null}
-              {scoping.status === "draft" ? "Draft" : scoping.status === "submitted" ? "Submitted · awaiting budget" : "Budget assigned"}
+            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] ${(approval?.status ?? "draft") === "assigned" ? "bg-green-100 text-green-700" : (approval?.status ?? "draft") === "submitted" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
+              {(approval?.status ?? "draft") === "assigned" ? <Lock className="w-3.5 h-3.5" /> : null}
+              {(approval?.status ?? "draft") === "draft" ? "Draft" : (approval?.status ?? "draft") === "submitted" ? "Submitted · awaiting budget" : "Budget assigned"}
             </span>
           </div>
         </div>
@@ -185,13 +196,13 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
         </div>
 
         {/* Posted summary */}
-        {submitted && scoping.submittedSummary && (
+        {submitted && postedSummary && (
           <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
             <div className="flex items-center justify-between mb-1.5">
-              <p className="text-sm font-medium inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-green-600" /> Posted to {scoping.submittedChannel ?? "Slack"} for approval</p>
+              <p className="text-sm font-medium inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-green-600" /> Posted to {approval?.slackChannel ?? "Slack"} for approval</p>
               <button onClick={copySummary} className="text-[15px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1">{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</button>
             </div>
-            <pre className="text-[15px] text-gray-700 whitespace-pre-wrap font-sans">{scoping.submittedSummary}</pre>
+            <pre className="text-[15px] text-gray-700 whitespace-pre-wrap font-sans">{postedSummary}</pre>
           </div>
         )}
 
@@ -201,8 +212,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
             <p className="text-sm font-medium mb-1 inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-gray-400" /> Returned budget <span className="text-gray-400 font-normal">· Karim / admin</span></p>
             {locked ? (
               <>
-                <p className="text-lg">{money(scoping.assignedBudget)} <span className="text-[15px] text-gray-400">— locked target, owner can't edit</span></p>
-                {scoping.approvalComment && <p className="mt-2 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 inline-flex items-start gap-1.5"><MessageSquare className="w-3.5 h-3.5 mt-0.5 text-gray-400 shrink-0" /> {scoping.approvalComment}</p>}
+                <p className="text-lg">{money(plan.eventBudgetTarget)} <span className="text-[15px] text-gray-400">— locked target, owner can't edit</span></p>
               </>
             ) : (
               <div className="space-y-2 mt-1">
@@ -211,8 +221,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
                   <input type="number" value={assignInput} onChange={(e) => setAssignInput(e.target.value)} placeholder="Returned total" className="w-40 px-2 py-1 border border-border rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                   <Button size="sm" onClick={assign} disabled={assignInput.trim() === ""}>Assign &amp; lock</Button>
                 </div>
-                <textarea value={commentInput} onChange={(e) => setCommentInput(e.target.value)} rows={2} placeholder="Comment (optional) — e.g. approved at $8k, trim A/V…" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                <p className="text-[15px] text-gray-400">The returned amount becomes the locked budget target; the comment shows on this form.</p>
+                <p className="text-[15px] text-gray-400">The returned amount becomes the locked budget target.</p>
               </div>
             )}
           </div>
@@ -223,13 +232,13 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
         {/* Footer actions (fixed; edits autosave, so Save & exit just closes) */}
         <div className="p-6 pt-4 border-t border-gray-100 shrink-0 flex items-center justify-between gap-3">
           <span className="text-[15px] text-gray-400 min-w-0 truncate">
-            {scoping.status === "draft" ? (required ? "Ready to submit." : "Fill type, audience, headcount & justification to submit.")
-              : scoping.status === "submitted" ? `Submitted to ${scoping.submittedChannel ?? "Slack"} — awaiting budget.`
+            {(approval?.status ?? "draft") === "draft" ? (required ? "Ready to submit." : "Fill type, audience, headcount & justification to submit.")
+              : (approval?.status ?? "draft") === "submitted" ? `Submitted to ${approval?.slackChannel ?? "Slack"} — awaiting budget.`
               : "Budget assigned & locked."}
           </span>
           <div className="flex items-center gap-2 shrink-0">
-            {scoping.status === "draft" && <Button onClick={() => setConfirmOpen(true)} disabled={!required}>Submit for approval <Send className="w-4 h-4" /></Button>}
-            {scoping.status === "submitted" && <button onClick={reopen} className="text-sm text-gray-600 hover:text-gray-900">Reopen draft</button>}
+            {(approval?.status ?? "draft") === "draft" && <Button onClick={() => setConfirmOpen(true)} disabled={!required}>Submit for approval <Send className="w-4 h-4" /></Button>}
+            {(approval?.status ?? "draft") === "submitted" && <button onClick={reopen} className="text-sm text-gray-600 hover:text-gray-900">Reopen draft</button>}
             <Button variant="secondary" onClick={onClose}>Save &amp; exit</Button>
           </div>
         </div>
