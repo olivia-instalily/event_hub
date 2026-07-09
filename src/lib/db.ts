@@ -2628,6 +2628,7 @@ export type BudgetApproval = {
   decidedVia: 'app' | 'slack' | null;
   deciderRef: string | null;
   decidedAt: string | null;
+  createdAt: string | null;
   slackChannel: string | null;
   slackMessageTs: string | null;
 };
@@ -2635,7 +2636,7 @@ export type BudgetApproval = {
 const toBudgetApproval = (r: any): BudgetApproval => ({
   eventId: r.event_id, status: r.status, requestedAmount: r.requested_amount ?? null,
   declineReason: r.decline_reason ?? null, decidedVia: r.decided_via ?? null, deciderRef: r.decider_ref ?? null,
-  decidedAt: r.decided_at ?? null, slackChannel: r.slack_channel ?? null, slackMessageTs: r.slack_message_ts ?? null,
+  decidedAt: r.decided_at ?? null, createdAt: r.created_at ?? null, slackChannel: r.slack_channel ?? null, slackMessageTs: r.slack_message_ts ?? null,
 });
 
 export async function getBudgetApproval(eventId: string): Promise<BudgetApproval | null> {
@@ -2687,7 +2688,7 @@ export async function migrateScopingApprovalIfNeeded(eventId: string): Promise<B
   const mapped = scopingToApproval(loadScoping(eventId));
   if (!mapped) return null;
   if (mapped.status === 'assigned' && mapped.assignedAmount != null) {
-    await assignBudget(eventId, mapped.assignedAmount);
+    await assignBudget(eventId, mapped.assignedAmount, { via: 'app', ref: 'migrated' });
     if (mapped.slackChannel) await supabase.from('budget_approval').update({ slack_channel: mapped.slackChannel }).eq('event_id', eventId);
   } else {
     await submitBudgetApproval(eventId, { requestedAmount: null, slackChannel: mapped.slackChannel });

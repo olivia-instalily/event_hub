@@ -3069,7 +3069,7 @@ function BudgetCard({ plan, scoping, roughTotal, onOpenScoping, onOpenBudget }: 
               <dl className="mt-1.5 text-sm space-y-1">
                 <Row k="Rough cost" v={money(roughTotal)} />
                 <Row k="Funding" v={`${funding.fundingLine} · ${funding.tier}`} />
-                {approval?.decidedAt && <Row k="Submitted" v={approval.decidedAt} />}
+                {approval?.createdAt && <Row k="Submitted" v={approval.createdAt.slice(0, 10)} />}
                 <button onClick={onOpenScoping} className="text-sm text-gray-600 hover:text-gray-900 inline-flex items-center gap-1 pt-0.5">View full form <ChevronRight className="w-4 h-4" /></button>
               </dl>
             ) : (

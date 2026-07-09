@@ -4,7 +4,7 @@ import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy } from "lu
 import { parseFormats } from "./FormatPicker";
 import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as ScopingData } from "../lib/scoping";
 import { buildEventDeepLink } from "../lib/deepLink";
-import { slackSend, submitBudgetApproval, migrateScopingApprovalIfNeeded, assignBudget, reopenBudgetApproval, type BudgetApproval, type EventPlanning } from "../lib/db";
+import { slackSend, submitBudgetApproval, migrateScopingApprovalIfNeeded, getBudgetApproval, assignBudget, reopenBudgetApproval, type BudgetApproval, type EventPlanning } from "../lib/db";
 import { Button } from "@instalily/ui/button";
 
 const money = (n: number | null | undefined) =>
@@ -99,7 +99,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
       try { localStorage.setItem("slack_budget_channel", slackChannel.trim()); } catch { /* ignore */ }
       await submitBudgetApproval(plan.id, { requestedAmount: roughTotal, slackChannel: slackChannel.trim() });
       setPostedSummary(summary);
-      setApproval(await migrateScopingApprovalIfNeeded(plan.id));
+      setApproval(await getBudgetApproval(plan.id));
       setConfirmOpen(false);
     } catch (e: any) { setSubmitErr(e?.message ?? String(e)); }
     finally { setSubmitBusy(false); }
@@ -109,7 +109,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
   const assign = () => {
     const n = Number(assignInput);
     if (!Number.isFinite(n) || assignInput.trim() === "") return;
-    void assignBudget(plan.id, n).then(() => migrateScopingApprovalIfNeeded(plan.id)).then(setApproval);
+    void assignBudget(plan.id, n).then(() => getBudgetApproval(plan.id)).then(setApproval);
   };
   const copySummary = () => { const text = postedSummary; if (text) { void navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } };
 
