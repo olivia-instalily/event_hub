@@ -4,7 +4,7 @@ import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy } from "lu
 import { parseFormats } from "./FormatPicker";
 import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as ScopingData } from "../lib/scoping";
 import { buildEventDeepLink } from "../lib/deepLink";
-import { slackSend, submitBudgetApproval, migrateScopingApprovalIfNeeded, assignBudget, type BudgetApproval, type EventPlanning } from "../lib/db";
+import { slackSend, submitBudgetApproval, migrateScopingApprovalIfNeeded, assignBudget, reopenBudgetApproval, type BudgetApproval, type EventPlanning } from "../lib/db";
 import { Button } from "@instalily/ui/button";
 
 const money = (n: number | null | undefined) =>
@@ -104,7 +104,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
     } catch (e: any) { setSubmitErr(e?.message ?? String(e)); }
     finally { setSubmitBusy(false); }
   };
-  const reopen = () => set({ status: "draft" });
+  const reopen = () => { void reopenBudgetApproval(plan.id).then(() => setApproval(null)); };
   // Return the budget → locks as the target via the DB.
   const assign = () => {
     const n = Number(assignInput);

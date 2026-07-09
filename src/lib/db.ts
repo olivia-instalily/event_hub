@@ -2672,6 +2672,12 @@ export async function declineBudget(eventId: string, reason: string, decider: { 
   if (error) throw error;
 }
 
+/** Return an event to draft: remove its approval row entirely (no row = draft). */
+export async function reopenBudgetApproval(eventId: string): Promise<void> {
+  const { error } = await supabase.from('budget_approval').delete().eq('event_id', eventId);
+  if (error) throw error;
+}
+
 /** One-time bridge: if there's no DB row yet but localStorage has a non-draft scoping, seed the DB
  *  row from it (and set the target for an already-assigned record via the sanctioned path). Returns
  *  the resulting approval. Safe to call on every load — no-ops once a row exists. */
