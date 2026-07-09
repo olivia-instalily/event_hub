@@ -21,8 +21,8 @@ import { Input } from "@instalily/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@instalily/ui/table";
 import { parseBudgetText } from "./BudgetImport";
 import { filesFromDrop } from "../lib/drop";
-import { findDuplicateEvent, filesMatch, type DupEvent, type DupReason } from "../lib/dedup";
-import { getSourceMaterials, addSourceMaterial } from "../lib/db";
+import { findDuplicateEvent, type DupEvent, type DupReason } from "../lib/dedup";
+import { addSourceMaterial, findDuplicateBySourceFiles } from "../lib/db";
 
 const NOT_CAPTURED = "Not captured";
 
@@ -112,7 +112,7 @@ function looksLikeAttendees(lines: string[]): boolean {
   return hasNameOrEmail && !hasMoney;
 }
 
-async function classifyDropFile(f: File): Promise<Classified> {
+export async function classifyDropFile(f: File): Promise<Classified> {
   if (f.type.startsWith("image/")) return { kind: "cover", name: f.name, file: f, dataUrl: await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(f); }) };
   let text = "";
   try { text = await f.text(); } catch { return { kind: "unknown", name: f.name, file: f }; }
@@ -660,7 +660,7 @@ function TagFilter({ value, onChange, className = "" }: { value: string; onChang
   );
 }
 
-function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview, onBackfill }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void; onBackfill: (text?: string, files?: File[]) => void }) {
+export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview, onBackfill }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void; onBackfill: (text?: string, files?: File[]) => void }) {
   // Files dropped on the page open the modal already processing — the first paint is the
   // "reading…" state. A resumed review (re-opened after generating) lands straight back on
   // the review screen with the cached extraction, no reprocessing.
@@ -671,6 +671,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
   // review form. `attaching` tracks the "add these files as context" action on that screen.
   const [dup, setDup] = useState<{ event: DupEvent; reason: DupReason } | null>(null);
   const [attaching, setAttaching] = useState(false);
+  const [dupFiles, setDupFiles] = useState<File[] | null>(null); // files held when a same-files dup short-circuits before processing
   // Set on the planning fork: solo (InstaLILY hosts alone) vs cohost (sharing hosting & cost).
   const [planKind, setPlanKind] = useState<'solo' | 'cohost'>('solo');
   // Solo path only: internal vs external audience, then the specific taxonomy tag to apply.
@@ -752,8 +753,17 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
       else onBackfill();
     }
   };
-  // Classify every dropped input by content, extract per type, and assemble a single review.
+  // Entry for a drop. PRIMARY dedup runs first: if ANY dropped file is already attached to an
+  // existing event, it's a re-drop — short-circuit straight to that event's duplicate notice WITHOUT
+  // extracting/processing anything (the fast path). Otherwise fall through to full processing.
   const handleBriefDrop = async (files: File[]) => {
+    setMode('processing');
+    const fileDup = await findDuplicateBySourceFiles(files.map((f) => f.name)).catch(() => null);
+    if (fileDup) { setDup({ event: fileDup.event, reason: 'files' }); setDupFiles(files); setMode('duplicate'); return; }
+    await processDrop(files);
+  };
+  // Classify every dropped input by content, extract per type, and assemble a single review.
+  const processDrop = async (files: File[]) => {
     setMode('processing');
     const classified = await Promise.all(files.map(classifyDropFile));
     // Every dropped file, kept to attach to the event for reference.
@@ -878,20 +888,12 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
     const todayIso = new Date().toISOString().slice(0, 10);
     setPastHint(!isTemplate && fields.date && fields.date < todayIso ? (briefs[0]?.text ?? "") : null);
     setIngest({ fields, tag, isTemplate, attendees, phases, deliverables, vendors: roles.vendors, staff: roles.staff, reflections: roles.reflections, agenda: roles.agenda, walkthrough: ex?.walkthrough ?? [], heuristics: ex?.heuristics ?? [], outreach: ex?.outreach ?? [], materials, unsorted, hasBrief: briefs.length > 0, cover: covers[0]?.dataUrl ?? null, coverFile: covers[0]?.file ?? null, budgetLines, budgetSource, budgetLowConfidence, conflict, flags, slotHints, owner: nn(ex?.owner) ?? b?.owner ?? null, warnings, droppedForTemplate: (isTemplate && ex?.droppedForTemplate) ? ex.droppedForTemplate : [], sourceId: null });
-    // Duplicate guard: does this drop describe an event we already have? Match on title + date +
-    // type; upgrade to a "same files" match if the dropped files are already attached to it. If so,
-    // show the duplicate notice instead of the create form (the user can still override).
+    // Secondary duplicate guard (same-files is already handled earlier, before extraction): the
+    // drop's files are new, but its title + date + type match an event we already have → surface the
+    // notice instead of the create form (the user can still override, or add these files as context).
     const dupEvents: DupEvent[] = events.map((e) => ({ id: e.id, title: e.title, date: e.date, tags: e.tags, isTemplate: e.isTemplate }));
-    let match = findDuplicateEvent({ name: fields.name, date: fields.date || null, tag, isTemplate }, dupEvents);
-    if (match) {
-      try {
-        const mats = await getSourceMaterials(match.event.id);
-        if (filesMatch(materials.map((m) => m.name), mats.map((x) => x.name))) match = { ...match, reason: "files" };
-      } catch { /* fall back to the semantic 'similar' reason */ }
-      setDup(match);
-      setMode("duplicate");
-      return;
-    }
+    const match = findDuplicateEvent({ name: fields.name, date: fields.date || null, tag, isTemplate }, dupEvents);
+    if (match) { setDup(match); setDupFiles(null); setMode("duplicate"); return; }
     setMode("review");
   };
 
@@ -1198,7 +1200,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
                   {attaching ? 'Adding…' : `Add these files to “${dup.event.title}” as context`}
                 </button>
               )}
-              <button onClick={() => { setDup(null); setMode('review'); }} className="text-sm text-gray-500 hover:text-gray-800 mt-1">Create a new event anyway →</button>
+              <button onClick={() => { setDup(null); if (ingest) { setMode('review'); } else if (dupFiles) { const fs = dupFiles; setDupFiles(null); void processDrop(fs); } else { setMode('choose'); } }} className="text-sm text-gray-500 hover:text-gray-800 mt-1">Create a new event anyway →</button>
             </div>
           </div>
         ) : mode === 'choose' ? (

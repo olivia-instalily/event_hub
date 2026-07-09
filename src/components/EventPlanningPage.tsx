@@ -3363,8 +3363,18 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
           done event can be finished into a complete record. Upcoming → the GCal prompt. */}
       {(locked || temporal === "past") ? (
         <CompletenessPanel plan={plan} eventId={eventId} onApplied={onApplied} />
-      ) : plan.date && !plan.gcalEventId ? (
-        <GCalSync eventId={eventId} synced={false} variant="action" onSynced={onApplied} />
+      ) : (plan.date && !plan.gcalEventId) || !plan.linearProjectId ? (
+        <GCalSync
+          eventId={eventId}
+          synced={!!plan.gcalEventId}
+          htmlLink={plan.gcalHtmlLink}
+          gcalAvailable={!!plan.date}
+          variant="action"
+          onSynced={onApplied}
+          linearSynced={!!plan.linearProjectId}
+          linearProjectUrl={plan.linearProjectUrl}
+          onLinearSynced={onApplied}
+        />
       ) : null}
 
       {/* Status digest — synthesized one-liner by default; Claude bullets after Resync. */}

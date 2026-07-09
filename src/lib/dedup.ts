@@ -39,12 +39,19 @@ export function titlesSimilar(a: string, b: string): boolean {
   return union > 0 && inter / union >= 0.6;
 }
 
+/** The dropped files that are ALREADY attached to the event (matched by filename, case-insensitive).
+ *  Returns the original dropped names. Used for the primary "same files → it's a re-drop" detector,
+ *  where ANY overlap is enough to treat the drop as an existing event. */
+export function sharedFiles(droppedNames: string[], attachedNames: string[]): string[] {
+  const have = new Set(attachedNames.map((n) => norm(n)).filter(Boolean));
+  return droppedNames.filter((n) => n && have.has(norm(n)));
+}
+
 /** Every dropped file is already attached to the event (matched by filename, case-insensitive). */
 export function filesMatch(droppedNames: string[], attachedNames: string[]): boolean {
-  const dropped = droppedNames.map((n) => norm(n)).filter(Boolean);
+  const dropped = droppedNames.filter(Boolean);
   if (!dropped.length) return false;
-  const have = new Set(attachedNames.map((n) => norm(n)));
-  return dropped.every((n) => have.has(n));
+  return sharedFiles(dropped, attachedNames).length === dropped.length;
 }
 
 /** The strongest semantic match for a to-be-created event: same date + same type + a very similar

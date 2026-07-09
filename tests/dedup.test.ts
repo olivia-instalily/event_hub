@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { titlesSimilar, filesMatch, findDuplicateEvent, type DupEvent } from "../src/lib/dedup";
+import { titlesSimilar, filesMatch, sharedFiles, findDuplicateEvent, type DupEvent } from "../src/lib/dedup";
 
 const ev = (o: Partial<DupEvent> & { id: string; title: string }): DupEvent => ({
   date: null, tags: [], isTemplate: false, ...o,
@@ -33,6 +33,21 @@ describe("filesMatch", () => {
   });
   it("is false for an empty drop", () => {
     expect(filesMatch([], ["brief.md"])).toBe(false);
+  });
+});
+
+describe("sharedFiles", () => {
+  it("returns the dropped names that already exist (case-insensitive), for ANY overlap", () => {
+    expect(sharedFiles(["run-of-show.md", "new.csv"], ["RUN-OF-SHOW.MD", "budget.csv"])).toEqual(["run-of-show.md"]);
+  });
+  it("returns all overlaps when several match", () => {
+    expect(sharedFiles(["a.md", "b.csv"], ["a.md", "b.csv", "c.png"]).sort()).toEqual(["a.md", "b.csv"]);
+  });
+  it("is empty when nothing overlaps", () => {
+    expect(sharedFiles(["a.md"], ["b.md"])).toEqual([]);
+  });
+  it("is empty for an empty drop", () => {
+    expect(sharedFiles([], ["a.md"])).toEqual([]);
   });
 });
 

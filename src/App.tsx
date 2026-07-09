@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Home, Calendar, Users, Briefcase, DollarSign, Plus } from 'lucide-react';
+import { Home, Calendar, Users, Briefcase, DollarSign, Plus, AlertCircle } from 'lucide-react';
 import { filesFromDrop } from './lib/drop';
 import { looksLikeBackfill } from './lib/backfill';
 import { parseDeepLink, setPendingScopingBudget } from './lib/deepLink';
-import { EventsPage } from './components/EventsPage';
+import { EventsPage, CreateEventModal, classifyDropFile } from './components/EventsPage';
+import { BackfillModal } from './components/BackfillModal';
+import { listEvents, type EventListItem } from './lib/db';
 import { HomePage } from './components/HomePage';
 import { PeoplePage } from './components/PeoplePage';
 import { VendorsPage } from './components/VendorsPage';
@@ -27,17 +29,22 @@ export default function Component() {
   const [peopleEventFilter, setPeopleEventFilter] = useState<EventFilter | null>(null);
   // Bumped on home/Events nav so EventsPage remounts and resets its filters.
   const [eventsNonce, setEventsNonce] = useState(0);
-  // Set when arriving at Events via a "Create Event" button, so the modal opens on mount.
-  const [createOnEvents, setCreateOnEvents] = useState(false);
   // Which page an open event was launched from, so its Back button returns there
   // (e.g. a Home todo → Back to Home, a Budget row → Back to Budget).
   type Page = 'home' | 'events' | 'people' | 'vendors' | 'budget';
   const [eventOrigin, setEventOrigin] = useState<Page>('events');
-  // Files dropped anywhere on the page → jump to Events, open Create, ingest straight to review.
-  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
-  const [droppedLooksPast, setDroppedLooksPast] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
+
+  // Create-event flow, hosted at the app root so it overlays whatever page you're on. Dropping a
+  // file (or hitting a "Create Event" button) opens the modal over the current page — the background
+  // never switches to Events mid-drop. events feeds the modal's dedup + template matching.
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createFiles, setCreateFiles] = useState<File[] | null>(null);
+  const [pastChooserFiles, setPastChooserFiles] = useState<File[] | null>(null);
+  const [backfill, setBackfill] = useState<{ text?: string; files: File[] | null } | null>(null);
+  const [modalEvents, setModalEvents] = useState<EventListItem[]>([]);
+  const loadModalEvents = async () => { try { setModalEvents(await listEvents()); } catch { setModalEvents([]); } };
   const onAppDrop = async (files: File[]) => {
     if (!files.length) return;
     // Light sniff: a dropped debrief/recap is a BACKFILL, not a create. If it looks past, hand
@@ -51,13 +58,19 @@ export default function Component() {
       const texts = await Promise.all((texty.length ? texty : files.slice(0, 1)).map((f) => f.text().catch(() => '')));
       suspect = looksLikeBackfill(texts.join('\n\n'));
     } catch { /* unreadable — treat as create */ }
-    setDroppedFiles(files);
-    setDroppedLooksPast(suspect);
-    setSelectedEventId(null);
-    setPeopleEventFilter(null);
-    setCreateOnEvents(!suspect); // suspect → EventsPage shows the chooser, not the create modal
-    setEventsNonce((n) => n + 1);
-    setActivePage('events');
+    await loadModalEvents();
+    // Open the flow as an overlay on the CURRENT page — no setActivePage, so the background you
+    // dropped onto (Home, Budget, …) stays put. suspect → ask backfill-vs-create first.
+    if (suspect) setPastChooserFiles(files);
+    else { setCreateFiles(files); setCreateOpen(true); }
+  };
+  // Backfill-vs-create resolution for a past-looking drop (mirrors EventsPage's chooser).
+  const chooseInProcess = () => { const f = pastChooserFiles; setPastChooserFiles(null); setCreateFiles(f); setCreateOpen(true); };
+  const chooseBackfill = async () => {
+    const files = pastChooserFiles ?? []; setPastChooserFiles(null);
+    const c = await Promise.all(files.map(classifyDropFile));
+    const text = c.find((x) => x.kind === 'brief')?.text ?? (await files[0]?.text().catch(() => '')) ?? '';
+    setBackfill({ text: text || undefined, files: files.length ? files : null });
   };
 
   // Event detail → People filtered to that event.
@@ -96,20 +109,18 @@ export default function Component() {
   const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget') => {
     setActivePage(page);
     setPeopleEventFilter(null); // manual nav = unscoped
-    setCreateOnEvents(false); // plain nav never auto-opens the create modal
     if (page === 'events') {
       setSelectedEventId(null); // Events tab returns to the list
       setEventsNonce((n) => n + 1); // remount EventsPage so it resets to "All"
     }
   };
 
-  // "Create Event" from anywhere (e.g. Home): jump to the Events list with the modal open.
-  const createEvent = () => {
-    setSelectedEventId(null);
-    setPeopleEventFilter(null);
-    setEventsNonce((n) => n + 1); // remount so the modal opens fresh
-    setCreateOnEvents(true);
-    setActivePage('events');
+  // "Create Event" from anywhere (e.g. Home): open the modal over the current page — no page switch,
+  // so the background stays where you were. Navigation to the new event happens only on create.
+  const createEvent = async () => {
+    await loadModalEvents();
+    setCreateFiles(null);
+    setCreateOpen(true);
   };
 
   // Background Luma sync — fire and forget on mount. The user never waits for it and never sees
@@ -176,10 +187,6 @@ export default function Component() {
             selectedEventId={selectedEventId}
             setSelectedEventId={setSelectedFromEvents}
             onViewPeople={viewPeopleForEvent}
-            openCreate={createOnEvents}
-            initialFiles={droppedFiles}
-            looksPast={droppedLooksPast}
-            onFilesConsumed={() => { setDroppedFiles(null); setDroppedLooksPast(false); }}
           />
         )}
         {activePage === 'people' && (
@@ -191,6 +198,42 @@ export default function Component() {
         {activePage === 'vendors' && <VendorsPage />}
         {activePage === 'budget' && <BudgetPage onOpenEvent={(id) => openEvent(id, 'budget')} />}
       </div>
+
+      {/* Create / backfill flow — hosted here (not inside a page) so it overlays whatever page is
+          active. Dropping a file opens this without switching the background page. */}
+      {pastChooserFiles && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setPastChooserFiles(null)}>
+          <div className="bg-white rounded-2xl border border-border max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-1"><AlertCircle className="w-5 h-5 text-amber-600" /><h2 className="text-lg">Looks like a backfilled event</h2></div>
+            <p className="text-sm text-gray-600 mb-5">This reads like a past event (a debrief/recap). Backfilling records what happened and updates the template. Is this a past event, or one you're still planning?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={chooseBackfill} className="w-full px-3 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-black text-left">Past event — backfill it <span className="text-gray-300">· → wrapped record</span></button>
+              <button onClick={chooseInProcess} className="w-full px-3 py-2 rounded-lg border border-border bg-white text-sm text-gray-800 hover:bg-gray-50 text-left">In-process / upcoming — create it <span className="text-gray-400">· → plan it</span></button>
+              <button onClick={() => setPastChooserFiles(null)} className="text-sm text-gray-500 hover:text-gray-800 mt-1">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {createOpen && (
+        <CreateEventModal
+          events={modalEvents}
+          initialFiles={createFiles}
+          onFilesConsumed={() => setCreateFiles(null)}
+          onClose={() => { setCreateOpen(false); setCreateFiles(null); }}
+          onBackfill={(text, files) => { setCreateOpen(false); setCreateFiles(null); setBackfill({ text, files: files ?? null }); }}
+          onCreated={(id) => { setCreateOpen(false); setCreateFiles(null); openEvent(id, 'events'); }}
+        />
+      )}
+
+      {backfill && (
+        <BackfillModal
+          initialText={backfill.text}
+          initialFiles={backfill.files}
+          onClose={() => setBackfill(null)}
+          onCreated={(id) => { setBackfill(null); openEvent(id, 'events'); }}
+        />
+      )}
     </div>
     </ProfileProvider>
   );

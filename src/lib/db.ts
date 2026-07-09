@@ -1,4 +1,5 @@
 import { supabase, proxiedBackend } from './supabase';
+import { sharedFiles, type DupEvent } from './dedup';
 import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
@@ -436,6 +437,21 @@ export async function signDocValues(values: (string | null | undefined)[]): Prom
   const { data } = await supabase.storage.from(DOC_BUCKET).createSignedUrls(paths, SIGNED_TTL);
   for (const r of data ?? []) if (r.path && r.signedUrl) out.set(r.path, r.signedUrl);
   return out;
+}
+
+/** Primary duplicate detector for a drop: find an existing event that already has ANY of the dropped
+ *  files (matched by source-material filename). One query, matched client-side. Lets the create flow
+ *  short-circuit a re-drop straight to the existing event BEFORE any (slow) extraction runs. */
+export async function findDuplicateBySourceFiles(droppedNames: string[]): Promise<{ event: DupEvent; matched: string[] } | null> {
+  const dropped = droppedNames.filter(Boolean);
+  if (!dropped.length) return null;
+  const { data } = await supabase.from('event').select('id, name, event_date, tags, is_template, source_materials');
+  for (const row of (data ?? []) as any[]) {
+    const mats = Array.isArray(row.source_materials) ? row.source_materials : [];
+    const matched = sharedFiles(dropped, mats.map((m: any) => m?.name).filter(Boolean));
+    if (matched.length) return { event: { id: row.id, title: row.name, date: row.event_date ?? null, tags: row.tags ?? [], isTemplate: !!row.is_template }, matched };
+  }
+  return null;
 }
 
 // ── Event page ownership / dev round-trip (Assembly side) ────────────────────
