@@ -22,6 +22,8 @@ import { handler as lumaImport }             from './functions/luma-import.js';
 import { handler as lumaSync }               from './functions/luma-sync.js';
 import { handler as planningSummary }        from './functions/planning-summary.js';
 import { handler as slackSend }              from './functions/slack-send.js';
+import { handler as storageUpload }          from './functions/storage-upload.js';
+import { handler as storageSign }            from './functions/storage-sign.js';
 import { handler as summarizeCorrespondence} from './functions/summarize-correspondence.js';
 
 const app = express();
@@ -51,6 +53,8 @@ app.post('/luma-import',              lumaImport);
 app.post('/luma-sync',                lumaSync);
 app.post('/planning-summary',         planningSummary);
 app.post('/slack-send',               slackSend);
+app.post('/storage-upload',           storageUpload);
+app.post('/storage-sign',             storageSign);
 app.post('/summarize-correspondence', summarizeCorrespondence);
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));

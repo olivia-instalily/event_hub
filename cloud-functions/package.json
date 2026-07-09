@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@google-cloud/storage": "^7.21.0",
     "@supabase/supabase-js": "^2.108.1",
     "cors": "^2.8.5",
     "express": "^4.21.1"

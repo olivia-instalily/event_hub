@@ -32,6 +32,15 @@
 	handle {
 		root * /srv
 		try_files {path} /index.html
+		# Content-hashed bundles (/assets/index-<hash>.js) can be cached forever — the hash
+		# changes on every build. Everything else (index.html + the history-mode fallback) must
+		# revalidate so a fresh deploy is picked up immediately instead of a stale shell that
+		# points at old asset hashes. Without this, browsers heuristically cache index.html and a
+		# deploy looks like it "did nothing" until a hard refresh.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@shell not path /assets/*
+		header @shell Cache-Control "no-cache"
 		file_server
 	}
 }

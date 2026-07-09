@@ -21,3 +21,9 @@ if (!resolvedUrl) {
 }
 
 export const supabase = createClient(resolvedUrl, resolvedKey);
+
+// True in the deployed (reverse-proxy) mode: no VITE_SUPABASE_URL, so we're behind Caddy on GCP,
+// which has PostgREST + functions but NO Supabase Storage. Storage-dependent calls route through
+// the GCS-backed storage-upload/storage-sign cloud functions instead. Local dev keeps using
+// Supabase Storage directly.
+export const proxiedBackend = !url;

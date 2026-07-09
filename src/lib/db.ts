@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, proxiedBackend } from './supabase';
 import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
@@ -359,8 +359,32 @@ export async function suggestVendors(category: string | null, location: string |
   } catch { return []; }
 }
 
+// Deployed mode (GCS): base64 the file and POST it to the storage-upload cloud function. Local dev
+// keeps talking to Supabase Storage directly (see each caller's `proxiedBackend` branch).
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+async function gcsUpload(file: File, visibility: 'public' | 'private'): Promise<{ url?: string; path?: string }> {
+  const res = await fetch('/functions/v1/storage-upload', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: file.name, contentType: file.type || null, visibility, dataBase64: await fileToBase64(file) }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.error ?? `Upload failed (${res.status}).`);
+  return data as { url?: string; path?: string };
+}
+
 /** Upload a dropped file to the attachments bucket; returns its public URL. */
 export async function uploadAttachment(file: File): Promise<string> {
+  if (proxiedBackend) {
+    const { url } = await gcsUpload(file, 'public');
+    if (!url) throw new Error('Upload did not return a URL.');
+    return url;
+  }
   const dot = file.name.lastIndexOf('.');
   const ext = dot >= 0 ? file.name.slice(dot) : '';
   const path = `${newId('att')}${ext}`;
@@ -378,6 +402,11 @@ const DOC_BUCKET = 'documents';
 const SIGNED_TTL = 3600; // seconds
 
 export async function uploadDocument(file: File): Promise<string> {
+  if (proxiedBackend) {
+    const { path } = await gcsUpload(file, 'private');
+    if (!path) throw new Error('Upload did not return a path.');
+    return path; // GCS object key; signed on read
+  }
   const dot = file.name.lastIndexOf('.');
   const ext = dot >= 0 ? file.name.slice(dot) : '';
   const path = `${newId('doc')}${ext}`;
@@ -396,6 +425,14 @@ export async function signDocValues(values: (string | null | undefined)[]): Prom
   const out = new Map<string, string>();
   const paths = Array.from(new Set(values.filter(isDocPath)));
   if (!paths.length) return out;
+  if (proxiedBackend) {
+    try {
+      const res = await fetch('/functions/v1/storage-sign', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paths }) });
+      const data = await res.json().catch(() => ({}));
+      for (const r of ((data as any)?.urls ?? []) as { path: string; url: string }[]) if (r.path && r.url) out.set(r.path, r.url);
+    } catch { /* leave unsigned — callers fall back to the raw value */ }
+    return out;
+  }
   const { data } = await supabase.storage.from(DOC_BUCKET).createSignedUrls(paths, SIGNED_TTL);
   for (const r of data ?? []) if (r.path && r.signedUrl) out.set(r.path, r.signedUrl);
   return out;
