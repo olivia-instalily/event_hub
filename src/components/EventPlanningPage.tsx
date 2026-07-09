@@ -33,6 +33,7 @@ import {
   type PlanningBudget, type BudgetLineTracker, type Deliverable, type CarriedLesson,
   type PlanningFacts, type VendorSuggestion, type BudgetStatus, BUDGET_STATUSES,
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
+  getBudgetApproval, type BudgetApproval,
 } from "../lib/db";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
@@ -916,10 +917,12 @@ function BudgetLineModal({ eventId, line, engagements, onClose, onChange }: {
   );
 }
 
-function BudgetTracker({ budget, eventId, engagements = [] }: { budget: PlanningBudget; eventId: string; engagements?: EngagementWithCandidates[] }) {
+function BudgetTracker({ budget, eventId, eventBudgetTarget = null, engagements = [] }: { budget: PlanningBudget; eventId: string; eventBudgetTarget?: number | null; engagements?: EngagementWithCandidates[] }) {
   const engById = new Map(engagements.map((e) => [e.id, e]));
-  // A confirmed (assigned) scoping budget seeds the target when none is set yet.
-  const assignedBudget = loadScoping(eventId).assignedBudget;
+  // A confirmed (assigned) approval budget seeds the target when none is set yet.
+  const [approval, setApproval] = useState<BudgetApproval | null>(null);
+  useEffect(() => { void getBudgetApproval(eventId).then(setApproval); }, [eventId]);
+  const assignedBudget = approval?.status === "assigned" ? eventBudgetTarget : null;
   const seedTarget = budget.targetAmount ?? assignedBudget;
   const [lines, setLines] = useState(budget.lines);
   const [target, setTarget] = useState<number | null>(seedTarget);
@@ -3036,8 +3039,10 @@ function StepDot({ n, done, active }: { n: number; done?: boolean; active?: bool
 }
 function BudgetCard({ plan, scoping, roughTotal, onOpenScoping, onOpenBudget }: { plan: EventPlanning; scoping: ScopingData; roughTotal: number; onOpenScoping: () => void; onOpenBudget: () => void }) {
   const funding = fundingFor(plan.tags);
-  const submitted = scoping.status !== "draft";
-  const assigned = scoping.assignedBudget;
+  const [approval, setApproval] = useState<BudgetApproval | null>(null);
+  useEffect(() => { void getBudgetApproval(plan.id).then(setApproval); }, [plan.id]);
+  const submitted = approval != null;
+  const assigned = approval?.status === "assigned" ? plan.eventBudgetTarget : null;
   const hasAssigned = assigned != null;
   const lines = plan.budget?.lines ?? [];
   const committed = lines.filter((l) => l.status !== "estimate").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
@@ -3064,7 +3069,7 @@ function BudgetCard({ plan, scoping, roughTotal, onOpenScoping, onOpenBudget }: 
               <dl className="mt-1.5 text-sm space-y-1">
                 <Row k="Rough cost" v={money(roughTotal)} />
                 <Row k="Funding" v={`${funding.fundingLine} · ${funding.tier}`} />
-                {scoping.submittedAt && <Row k="Submitted" v={scoping.submittedAt} />}
+                {approval?.decidedAt && <Row k="Submitted" v={approval.decidedAt} />}
                 <button onClick={onOpenScoping} className="text-sm text-gray-600 hover:text-gray-900 inline-flex items-center gap-1 pt-0.5">View full form <ChevronRight className="w-4 h-4" /></button>
               </dl>
             ) : (
@@ -3082,7 +3087,7 @@ function BudgetCard({ plan, scoping, roughTotal, onOpenScoping, onOpenBudget }: 
             ) : (
               <p className="text-[15px] text-gray-400 mt-0.5">{submitted ? "Awaiting Karim's assignment." : "Pending scoping submission."}</p>
             )}
-            {hasAssigned && scoping.approvalComment && <p className="text-[15px] text-gray-500 mt-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 inline-flex items-start gap-1"><MessageSquare className="w-3 h-3 mt-0.5 shrink-0" /> “{scoping.approvalComment}”</p>}
+            {approval?.status === "declined" && approval.declineReason && <p className="text-[15px] text-gray-500 mt-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 inline-flex items-start gap-1"><MessageSquare className="w-3 h-3 mt-0.5 shrink-0" /> &ldquo;{approval.declineReason}&rdquo;</p>}
           </div>
         </li>
         {/* 3 · Tracking */}
@@ -3313,6 +3318,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
   // Scoping (client-side). The full form opens as a modal from the budget flow / glance card.
   const [scoping, setScoping] = useState<ScopingData>(() => loadScoping(eventId));
   const [scopingOpen, setScopingOpen] = useState(false);
+  // Budget approval state (DB-backed; approval workflow fields only — scoping inputs stay in localStorage).
+  const [approval, setApproval] = useState<BudgetApproval | null>(null);
+  useEffect(() => { void getBudgetApproval(eventId).then(setApproval); }, [eventId]);
   // Open straight to the scoping/budget form when arrived here via a Slack deep link
   // (?event=<id>&view=budget). Consumed in an effect, not a state initializer: React StrictMode
   // double-invokes initializers, which would swallow this one-shot (it clears on read).
@@ -3343,19 +3351,19 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
   // Synthesized one-liner used when there's no Claude digest yet (never a blank empty state).
   const synth: string[] = [plan.macroStage ?? "Planning"];
   if (facts.daysOut != null) synth.push(facts.daysOut > 0 ? `${facts.daysOut}d to event` : facts.daysOut === 0 ? "event today" : `${-facts.daysOut}d ago`);
-  if (scoping.assignedBudget != null) synth.push(`${money(scoping.assignedBudget)} budget`);
+  if (approval?.status === "assigned" && plan.eventBudgetTarget != null) synth.push(`${money(plan.eventBudgetTarget)} budget`);
   synth.push(`${facts.deliverables.done}/${facts.deliverables.total} deliverables`);
   if (plan.staffRoles.length) synth.push(`${plan.staffRoles.length} open role${plan.staffRoles.length === 1 ? "" : "s"}`);
   const synthDigest = synth.join(" · ");
 
   // Scoping is the gate for planning: nag until it's submitted (skip past/locked events).
-  const scopingSubmitted = scoping.status !== "draft";
+  const scopingSubmitted = approval != null;
   const showScopingNag = !scopingSubmitted && !locked && temporal !== "past";
 
   const expectedTurnout = plan.rsvp ?? plan.headcount ?? null;
   const showRate = plan.heuristics.find((h) => /show|rsvp|turn ?out|%/.test(h.toLowerCase())) ?? null;
   const committed = facts.budget?.committed ?? 0;
-  const tgt = scoping.assignedBudget ?? facts.budget?.target ?? null;
+  const tgt = (approval?.status === "assigned" ? plan.eventBudgetTarget : null) ?? facts.budget?.target ?? null;
 
   return (
     <div className="space-y-6">
@@ -3845,7 +3853,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 )}
                 {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}
                 {eventSubTab === "budget" && (plan.budget
-                  ? <BudgetTracker budget={plan.budget} eventId={eventId} engagements={plan.engagements} />
+                  ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} engagements={plan.engagements} />
                   : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
                 {eventSubTab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
               </div>
@@ -3873,7 +3881,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
         {tab === "budget" && (plan.budget
-          ? <BudgetTracker budget={plan.budget} eventId={eventId} engagements={plan.engagements} />
+          ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} engagements={plan.engagements} />
           : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && (
           <div className="space-y-6">
