@@ -21,6 +21,8 @@ import { Input } from "@instalily/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@instalily/ui/table";
 import { parseBudgetText } from "./BudgetImport";
 import { filesFromDrop } from "../lib/drop";
+import { findDuplicateEvent, filesMatch, type DupEvent, type DupReason } from "../lib/dedup";
+import { getSourceMaterials, addSourceMaterial } from "../lib/db";
 
 const NOT_CAPTURED = "Not captured";
 
@@ -662,9 +664,13 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
   // Files dropped on the page open the modal already processing — the first paint is the
   // "reading…" state. A resumed review (re-opened after generating) lands straight back on
   // the review screen with the cached extraction, no reprocessing.
-  const [mode, setMode] = useState<'choose' | 'planFork' | 'audience' | 'planning' | 'review' | 'backfill' | 'processing'>(
+  const [mode, setMode] = useState<'choose' | 'planFork' | 'audience' | 'planning' | 'review' | 'backfill' | 'processing' | 'duplicate'>(
     () => (initialFiles && initialFiles.length ? 'processing' : resumeIngest ? 'review' : 'choose'),
   );
+  // Set when a drop looks like an event we already have → show the duplicate notice instead of the
+  // review form. `attaching` tracks the "add these files as context" action on that screen.
+  const [dup, setDup] = useState<{ event: DupEvent; reason: DupReason } | null>(null);
+  const [attaching, setAttaching] = useState(false);
   // Set on the planning fork: solo (InstaLILY hosts alone) vs cohost (sharing hosting & cost).
   const [planKind, setPlanKind] = useState<'solo' | 'cohost'>('solo');
   // Solo path only: internal vs external audience, then the specific taxonomy tag to apply.
@@ -684,6 +690,13 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const descRef = useRef<HTMLTextAreaElement>(null);
+  // The review form (Create Event from Brief) is very long; the sticky footer jumps straight to the
+  // budget card / its conflict so you don't have to scroll the whole thing to resolve it.
+  const modalScrollRef = useRef<HTMLDivElement>(null);
+  const budgetSectionRef = useRef<HTMLDivElement>(null);
+  const conflictRef = useRef<HTMLDivElement>(null);
+  const jumpToConflict = () => (conflictRef.current ?? budgetSectionRef.current)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  const scrollToBottom = () => modalScrollRef.current?.scrollTo({ top: modalScrollRef.current.scrollHeight, behavior: "smooth" });
 
   // Format catalog + the event's formats. Auto-detected from the name/description (any
   // catalog format whose term appears verbatim) until the user edits the field themselves.
@@ -865,7 +878,34 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
     const todayIso = new Date().toISOString().slice(0, 10);
     setPastHint(!isTemplate && fields.date && fields.date < todayIso ? (briefs[0]?.text ?? "") : null);
     setIngest({ fields, tag, isTemplate, attendees, phases, deliverables, vendors: roles.vendors, staff: roles.staff, reflections: roles.reflections, agenda: roles.agenda, walkthrough: ex?.walkthrough ?? [], heuristics: ex?.heuristics ?? [], outreach: ex?.outreach ?? [], materials, unsorted, hasBrief: briefs.length > 0, cover: covers[0]?.dataUrl ?? null, coverFile: covers[0]?.file ?? null, budgetLines, budgetSource, budgetLowConfidence, conflict, flags, slotHints, owner: nn(ex?.owner) ?? b?.owner ?? null, warnings, droppedForTemplate: (isTemplate && ex?.droppedForTemplate) ? ex.droppedForTemplate : [], sourceId: null });
+    // Duplicate guard: does this drop describe an event we already have? Match on title + date +
+    // type; upgrade to a "same files" match if the dropped files are already attached to it. If so,
+    // show the duplicate notice instead of the create form (the user can still override).
+    const dupEvents: DupEvent[] = events.map((e) => ({ id: e.id, title: e.title, date: e.date, tags: e.tags, isTemplate: e.isTemplate }));
+    let match = findDuplicateEvent({ name: fields.name, date: fields.date || null, tag, isTemplate }, dupEvents);
+    if (match) {
+      try {
+        const mats = await getSourceMaterials(match.event.id);
+        if (filesMatch(materials.map((m) => m.name), mats.map((x) => x.name))) match = { ...match, reason: "files" };
+      } catch { /* fall back to the semantic 'similar' reason */ }
+      setDup(match);
+      setMode("duplicate");
+      return;
+    }
     setMode("review");
+  };
+
+  // "Add these files as context" on the duplicate screen: attach the dropped materials to the
+  // EXISTING event (never a new one), then open it.
+  const addDroppedToExisting = async (eventId: string) => {
+    if (!ingest) return;
+    setAttaching(true);
+    try {
+      for (const m of ingest.materials) {
+        try { const url = await uploadDocument(m.file); await addSourceMaterial(eventId, { name: m.name, url, type: m.file.type || m.kind }); } catch { /* non-fatal */ }
+      }
+      onCreated(eventId);
+    } finally { setAttaching(false); }
   };
 
   useEffect(() => {
@@ -977,7 +1017,9 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
         const setupCovered = !!f.date && headNum != null && lines.length > 0;
         if (setupCovered) { try { await saveSetupState(id, ['essentials', 'budget', 'timeline'], true); } catch { /* non-fatal */ } }
       }
-      onCacheReview?.(ingest); // keep the processed review so it can be reopened without reprocessing
+      // Cache the review WITH the new event's id as sourceId — so if it's reopened (e.g. via Back),
+      // it presents as an already-created event that a re-submit UPDATES, never a fresh duplicate.
+      onCacheReview?.({ ...ingest, sourceId: id });
       onCreated(id);
     } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
   };
@@ -1111,7 +1153,8 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose} onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); } }} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); }}>
       <div
-        className="relative bg-white rounded-2xl border border-border max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6"
+        ref={modalScrollRef}
+        className={`relative bg-white rounded-2xl border border-border max-w-2xl w-full max-h-[85vh] overflow-y-auto px-6 pt-6 ${mode === 'review' && ingest ? 'pb-0' : 'pb-6'}`}
         onClick={(e) => e.stopPropagation()}
         onDragEnter={(e) => { e.stopPropagation(); if (mode === 'choose' && hasFiles(e)) { e.preventDefault(); dragDepth.current++; setBriefDragOver(true); } }}
         onDragOver={(e) => { e.stopPropagation(); if (hasFiles(e)) e.preventDefault(); }}
@@ -1134,6 +1177,29 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
             <div className="w-10 h-10 rounded-full border-2 border-gray-200 border-t-gray-900 animate-spin mb-4" />
             <p className="text-gray-900 font-medium">Reading what you dropped…</p>
             <p className="text-sm text-gray-500 mt-1">Classifying files and pulling out the event details, phases, deliverables, and more. You'll review everything before anything's created.</p>
+          </div>
+        ) : mode === 'duplicate' && dup ? (
+          <div className="py-6">
+            <div className="flex items-start gap-3 mb-4">
+              <AlertCircle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <h2 className="text-xl">You already have this event</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  {dup.reason === 'files'
+                    ? <>These same files already created <span className="font-medium">“{dup.event.title}”</span>. Nothing new was made.</>
+                    : <><span className="font-medium">“{dup.event.title}”</span> looks like the same event{dup.event.date ? ` (${dup.event.date})` : ''} — same type and a very similar name.</>}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Button onClick={() => onCreated(dup.event.id)}>Go to “{dup.event.title}”</Button>
+              {dup.reason === 'similar' && ingest && ingest.materials.length > 0 && (
+                <button onClick={() => void addDroppedToExisting(dup.event.id)} disabled={attaching} className="px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                  {attaching ? 'Adding…' : `Add these files to “${dup.event.title}” as context`}
+                </button>
+              )}
+              <button onClick={() => { setDup(null); setMode('review'); }} className="text-sm text-gray-500 hover:text-gray-800 mt-1">Create a new event anyway →</button>
+            </div>
           </div>
         ) : mode === 'choose' ? (
           <div>
@@ -1499,7 +1565,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
             )}
 
             {/* Budget — rough cost, never the assigned target */}
-            <div className="rounded-xl border border-gray-200 p-4">
+            <div ref={budgetSectionRef} className="scroll-mt-4 rounded-xl border border-gray-200 p-4">
               <div className="flex items-center justify-between mb-1">
                 <h3 className="font-medium">Budget <span className="text-gray-400 font-normal text-sm">· rough cost (scoping input)</span></h3>
                 {ingest.budgetSource && <span className={`text-[13px] uppercase tracking-wide rounded px-1.5 py-0.5 ${ingest.budgetLowConfidence ? 'bg-amber-100 text-amber-700' : 'text-gray-400 bg-gray-100'}`}>{ingest.budgetSource === 'file' ? 'from budget file' : 'from brief · low confidence'}</span>}
@@ -1507,7 +1573,7 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
               <p className="text-[15px] text-gray-400 mb-3">Not the assigned budget — Karim's locked target is set later in the scoping flow.</p>
 
               {ingest.conflict ? (
-                <div className="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
+                <div ref={conflictRef} className="scroll-mt-4 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
                   Conflict — the brief says <b>${ingest.conflict.brief.toLocaleString()}</b> but the budget file totals <b>${ingest.conflict.file.toLocaleString()}</b>. Pick the source of truth (I won't merge them):
                   <span className="flex flex-wrap gap-2 mt-2">
                     <button onClick={() => patchIngest({ budgetLines: ingest.conflict!.fileLines, budgetSource: 'file', budgetLowConfidence: false, conflict: null })} className="px-2.5 py-1 bg-gray-200 rounded text-[15px] hover:bg-gray-300">Use budget file (${ingest.conflict.file.toLocaleString()})</button>
@@ -1618,20 +1684,31 @@ function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed,
               const cands = !ingest.isTemplate && !ingest.sourceId && tag ? events.filter((e) => e.isTemplate && e.tags.includes(tag)) : [];
               const fmt = ingest.fields.format[0];
               const match = cands.length ? ((fmt ? cands.find((e) => parseFormats(e.format).includes(fmt)) : null) ?? cands[0]) : null;
+              // Sticky action liner — a slim bar pinned to the bottom of the (very long) review form so
+              // Create is reachable from anywhere you scroll. The budget/conflict hints are jump links
+              // that scroll straight to the budget card instead of hunting for it.
               return (
-                <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
-                  <button onClick={() => { setIngest(null); setChoice(null); setMode('choose'); }} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
-                  <div className="flex items-center gap-3">
+                // Clicking any empty part of the liner (anything that isn't a control) scrolls the form
+                // to the bottom; the interactive controls handle their own clicks.
+                <div
+                  onClick={(e) => { if (!(e.target as HTMLElement).closest('button,a,input,select,textarea')) scrollToBottom(); }}
+                  title="Scroll to the bottom"
+                  className="sticky bottom-0 z-10 -mx-6 mt-2 flex cursor-pointer items-center justify-between gap-3 border-t border-gray-200 bg-white/95 px-6 py-2 backdrop-blur"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <button onClick={() => { setIngest(null); setChoice(null); setMode('choose'); }} className="shrink-0 text-sm text-gray-600 hover:text-gray-900">← Back</button>
+                  </div>
+                  <div className="flex min-w-0 items-center gap-3">
                     {ingest.conflict
-                      ? <span className="text-[15px] text-amber-700 inline-flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5" /> Resolve the budget conflict above to continue</span>
-                      : !ingest.tag ? <span className="text-[15px] text-amber-600 inline-flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5" /> Pick a tag to continue</span>
-                      : !ingest.fields.name.trim() ? <span className="text-[15px] text-gray-400">Add an event name to continue</span> : null}
+                      ? <button type="button" onClick={jumpToConflict} title="Jump to the budget conflict" className="inline-flex min-w-0 items-center gap-1 text-[15px] text-amber-700 hover:text-amber-900 hover:underline"><AlertCircle className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">Conflict: budget</span></button>
+                      : !ingest.tag ? <span className="inline-flex items-center gap-1 text-[15px] text-amber-600"><AlertCircle className="h-3.5 w-3.5" /> Pick a tag</span>
+                      : !ingest.fields.name.trim() ? <span className="text-[15px] text-gray-400">Add an event name</span> : null}
                     {match && (
-                      <button onClick={() => buildFromTemplate(match.id)} disabled={blocked} title={blockTitle ?? `Build from your “${match.title}” template`} className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-violet-300 text-violet-800 rounded-lg text-sm hover:bg-violet-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                        <Sparkles className="w-4 h-4" /> {creating ? 'Building…' : `Build from “${match.title}”`}
+                      <button onClick={() => buildFromTemplate(match.id)} disabled={blocked} title={blockTitle ?? `Build from your “${match.title}” template`} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-sm text-violet-800 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50">
+                        <Sparkles className="h-4 w-4" /> {creating ? 'Building…' : 'Build from template'}
                       </button>
                     )}
-                    <Button onClick={createFromIngest} disabled={blocked} title={blockTitle}>{ingest.sourceId ? (creating ? 'Saving…' : 'Save') : creating ? 'Creating…' : ingest.isTemplate ? 'Save as template' : 'Create event'}</Button>
+                    <Button size="sm" onClick={createFromIngest} disabled={blocked} title={blockTitle}>{ingest.sourceId ? (creating ? 'Saving…' : 'Go Back to Event') : creating ? 'Creating…' : ingest.isTemplate ? 'Save as template' : 'Create event'}</Button>
                   </div>
                 </div>
               );
