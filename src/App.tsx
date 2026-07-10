@@ -185,7 +185,7 @@ export default function Component() {
                   <TabsTrigger value="people"><Users className="w-4 h-4" /> People</TabsTrigger>
                   <TabsTrigger value="vendors"><Briefcase className="w-4 h-4" /> Vendors</TabsTrigger>
                   <TabsTrigger value="budget"><DollarSign className="w-4 h-4" /> Budget</TabsTrigger>
-                  <TabsTrigger value="calendar"><CalendarDays className="w-4 h-4" /> Calendar</TabsTrigger>
+                  <TabsTrigger value="calendar" title="Calendar" aria-label="Calendar"><CalendarDays className="w-4 h-4" /></TabsTrigger>
                 </TabsList>
               </Tabs>
             </div>
