@@ -455,7 +455,7 @@ export async function findDuplicateBySourceFiles(droppedNames: string[]): Promis
   return null;
 }
 
-// ── Event page ownership / dev round-trip (Assembly side) ────────────────────
+// ── Event page ownership / dev round-trip (EventHub side) ────────────────────
 
 /** The frozen World-only snapshot for a page (eject seed + regenerate-diff base).
  *  Selects ONLY the public allowlist, so sensitive data can never be seeded. */

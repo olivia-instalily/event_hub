@@ -4,6 +4,14 @@ import { Plus, Search, Check, Users } from "lucide-react";
 import { useProfile, initials } from "../lib/profile";
 import { addEventOwner, removeEventOwner } from "../lib/db";
 
+// Profiles store color as a Tailwind class ("bg-blue-500") or a hex ("#3b82f6", SSO-created). A hex
+// isn't a valid class, so render it via inline style — otherwise the avatar circle is invisible.
+function avatarColor(color: string | null): { cls: string; style?: { backgroundColor: string } } {
+  const raw = color?.trim();
+  if (raw?.startsWith("#")) return { cls: "", style: { backgroundColor: raw } };
+  return { cls: raw || "bg-gray-400" };
+}
+
 type Owner = { id: string; name: string; color: string | null };
 type Pos = { left: number; top?: number; bottom?: number; maxHeight: number; width: number };
 
@@ -67,7 +75,7 @@ export function OwnerPicker({ eventId, owners, onChange }: {
         <span className="group/own inline-flex items-center">
           {owners.map((o, i) => (
             <span key={o.id} className={`inline-flex transition-[margin] duration-200 ${i ? "-ml-2 group-hover/own:ml-0.5" : ""}`}>
-              <span title={o.name} className={`w-7 h-7 rounded-full ring-2 ring-white text-white text-[13px] font-medium flex items-center justify-center ${o.color ?? "bg-gray-400"}`}>{initials(o.name)}</span>
+              {(() => { const { cls, style } = avatarColor(o.color); return <span title={o.name} style={style} className={`w-7 h-7 rounded-full ring-2 ring-white text-white text-[13px] font-medium flex items-center justify-center ${cls}`}>{initials(o.name)}</span>; })()}
             </span>
           ))}
         </span>
@@ -89,7 +97,7 @@ export function OwnerPicker({ eventId, owners, onChange }: {
             {profiles.length === 0 && <p className="px-2 py-2 text-sm text-gray-400 inline-flex items-center gap-1"><Users className="w-4 h-4" /> No profiles — create one in the header.</p>}
             {filtered.map((p) => (
               <button key={p.id} onClick={() => toggle(p)} className="flex items-center gap-2 w-full text-left px-2 py-1 rounded hover:bg-gray-50 text-sm">
-                <span className={`w-5 h-5 rounded-full text-white text-[13px] font-medium flex items-center justify-center ${p.color ?? "bg-gray-400"}`}>{initials(p.name)}</span>
+                {(() => { const { cls, style } = avatarColor(p.color); return <span style={style} className={`w-5 h-5 rounded-full text-white text-[13px] font-medium flex items-center justify-center ${cls}`}>{initials(p.name)}</span>; })()}
                 <span className="flex-1 truncate">{p.name}</span>
                 {has(p.id) && <Check className="w-4 h-4 text-gray-700" />}
               </button>

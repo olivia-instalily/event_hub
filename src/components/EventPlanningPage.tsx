@@ -3463,7 +3463,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
 
           {/* Below, full width. */}
           <OverviewDeliverables plan={plan} onOpen={onOpenDeliverable} />
-          <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} />
+          <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} />
           <div>
             <h3 className="text-lg font-medium mb-3">Auto-updates</h3>
             <AutoUpdates eventId={eventId} engagements={plan.engagements} onApplied={onApplied} />
@@ -3617,7 +3617,7 @@ function PageOwnership({ eventId, initial }: { eventId: string; initial: PageSta
             <p className="text-[15px] text-gray-400 mt-2">Reference only — never auto-applied. Update the code to match.</p>
           </div>
         )}
-        <p className="text-[15px] text-gray-400">Assembly doesn't host or render dev-owned pages — they deploy from code. Git dir creation, CI preview builds, and promote run in your pipeline; these fields surface their state.</p>
+        <p className="text-[15px] text-gray-400">EventHub doesn't host or render dev-owned pages — they deploy from code. Git dir creation, CI preview builds, and promote run in your pipeline; these fields surface their state.</p>
       </div>
       <DeveloperManager eventId={eventId} />
     </div>

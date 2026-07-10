@@ -1792,8 +1792,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   const [bookmarkedEvents, setBookmarkedEvents] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines' | 'calendar'>('cards');
-  // Status is a multi-select: all three on by default, click one to toggle it off (no "All" button —
-  // deselecting narrows). Templates is a separate exclusive view (a different entity list).
+  // Status is a multi-select: all three on by default, click one to toggle it off. The "All" button
+  // (furthest left) re-selects all three. Templates is a separate exclusive view (a different entity list).
   const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
   const [templatesView, setTemplatesView] = useState(false);
   const toggleStatus = (s: EventStatus) => {
@@ -2002,6 +2002,18 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       {/* Status Tabs */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex gap-2">
+          <button
+            onClick={() => { setTemplatesView(false); setSelectedStatuses(new Set(['future', 'in-process', 'past'] as EventStatus[])); }}
+            aria-pressed={!templatesView && selectedStatuses.size === 3}
+            title="Show all"
+            className={`px-2 py-1 rounded-lg border transition-all ${
+              !templatesView && selectedStatuses.size === 3
+                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            All
+          </button>
           {(['future', 'in-process', 'past'] as EventStatus[]).map((s) => (
             <button
               key={s}

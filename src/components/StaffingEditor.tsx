@@ -22,13 +22,18 @@ function computePos(el: HTMLElement | null, width: number, desired: number): Pos
   return { left, top: r.bottom + 4, maxHeight: Math.min(desired, below), width };
 }
 
-function avatarColor(p: Profile): string {
-  return p.color?.trim() || "bg-gray-400";
+// Profiles store color as a Tailwind class ("bg-blue-500") or a hex ("#3b82f6", SSO-created). A hex
+// isn't a valid class, so render it via inline style — otherwise the circle comes out invisible.
+function avatarColor(color: string | null): { cls: string; style?: { backgroundColor: string } } {
+  const raw = color?.trim();
+  if (raw?.startsWith("#")) return { cls: "", style: { backgroundColor: raw } };
+  return { cls: raw || "bg-gray-400" };
 }
 
-function Avatar({ name, color }: { name: string; color: string }) {
+function Avatar({ name, color }: { name: string; color: string | null }) {
+  const { cls, style } = avatarColor(color);
   return (
-    <span className={`w-5 h-5 rounded-full text-white text-[13px] font-medium flex items-center justify-center shrink-0 ${color}`}>
+    <span style={style} className={`w-5 h-5 rounded-full text-white text-[13px] font-medium flex items-center justify-center shrink-0 ${cls}`}>
       {initials(name)}
     </span>
   );
@@ -79,7 +84,7 @@ function AssigneePicker({ team, current, onPick }: {
         className={`inline-flex items-center gap-1.5 rounded-full border px-1.5 py-0.5 text-sm transition-colors ${assigned ? "border-gray-200 hover:bg-gray-50" : "border-dashed border-gray-300 text-gray-400 hover:bg-gray-50"}`}
       >
         {assigned ? (
-          <><Avatar name={assigned.name} color={avatarColor(assigned)} /> <span className="text-gray-800">{assigned.name}</span></>
+          <><Avatar name={assigned.name} color={assigned.color} /> <span className="text-gray-800">{assigned.name}</span></>
         ) : current ? (
           // Assigned to a name that isn't (or is no longer) a profile — still show it.
           <><span className="w-5 h-5 rounded-full bg-gray-400 text-white text-[13px] font-medium flex items-center justify-center shrink-0">{initials(current)}</span> <span className="text-gray-800">{current}</span></>
@@ -108,7 +113,7 @@ function AssigneePicker({ team, current, onPick }: {
             {team.length === 0 && <p className="px-2 py-2 text-sm text-gray-400 inline-flex items-center gap-1"><Users className="w-4 h-4" /> No @instalily.ai profiles yet.</p>}
             {filtered.map((p) => (
               <button key={p.id} onClick={() => { onPick(p.name); setOpen(false); setQuery(""); }} className="flex items-center gap-2 w-full text-left px-2 py-1 rounded hover:bg-gray-50 text-sm">
-                <Avatar name={p.name} color={avatarColor(p)} />
+                <Avatar name={p.name} color={p.color} />
                 <span className="flex-1 min-w-0">
                   <span className="block truncate">{p.name}</span>
                   {p.email && <span className="block text-[13px] text-gray-400 truncate">{p.email}</span>}
@@ -125,10 +130,11 @@ function AssigneePicker({ team, current, onPick }: {
   );
 }
 
-export function StaffingEditor({ eventId, initialRoles, initialAssignments }: {
+export function StaffingEditor({ eventId, initialRoles, initialAssignments, defaultAssignee }: {
   eventId: string;
   initialRoles: string[];
   initialAssignments: Record<string, string>;
+  defaultAssignee?: string | null; // new roles default to this person (the event's creator/owner)
 }) {
   const { profiles } = useProfile();
   const team = profiles.filter((p) => (p.email ?? "").toLowerCase().endsWith(INSTALILY));
@@ -143,6 +149,8 @@ export function StaffingEditor({ eventId, initialRoles, initialAssignments }: {
     const t = draft.trim();
     if (!t || roles.some((r) => r.toLowerCase() === t.toLowerCase())) { setDraft(""); return; }
     saveRoles([...roles, t]);
+    // Default the new role to the event's creator/owner — reassignable from the picker.
+    if (defaultAssignee) saveAssigns({ ...assigns, [t]: defaultAssignee });
     setDraft("");
   };
   const removeRole = (role: string) => {

@@ -32,7 +32,7 @@ const SECTIONS: Section[] = [
     heading: "Getting an event in",
     blurb: "The four ways an event starts life in EventHub.",
     items: [
-      { title: "Create from a folder", when: "You have a brief, budget, or attendee list to drop in.", icon: FolderInput, length: "1:10", embedUrl: null, status: "soon" },
+      { title: "Create from a folder", when: "You have a brief, budget, or attendee list to drop in.", icon: FolderInput, length: "1:10", embedUrl: "https://demo.arcade.software/zIxItNMYbgowZanKxQkt?embed&embed_mobile=inline&embed_desktop=inline&show_copy_link=true", status: "ready" },
       { title: "Spin up from a similar event", when: "You've run something like this before and want to reuse it.", icon: Copy, length: "0:55", embedUrl: null, status: "soon" },
       { title: "Color in a past event", when: "Backfilling an event that already happened.", icon: History, length: "1:05", embedUrl: null, status: "soon" },
       { title: "Build from scratch", when: "Starting fresh with no source material.", icon: PencilLine, length: "0:50", embedUrl: null, status: "soon" },
@@ -106,7 +106,7 @@ export function TutorialPage() {
                 title={selected.title}
                 className="w-full h-full"
                 allowFullScreen
-                allow="clipboard-write; fullscreen; picture-in-picture"
+                allow="clipboard-write; autoplay; fullscreen; picture-in-picture"
               />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-gray-400">

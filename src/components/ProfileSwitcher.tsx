@@ -5,15 +5,23 @@ import { useAuth } from "../lib/auth";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
 
 function Avatar({ p }: { p: Profile | null }) {
-  // Fall back to a stable per-name color when the profile has no color set
-  // (a signed-in SSO profile can arrive with color = "" or null, which `??`
-  // wouldn't catch — leaving the circle invisible).
-  const color = (p?.color?.trim() || (p ? colorFor(p.name) : "bg-gray-400"));
+  const { cls, style } = avatarColor(p?.color ?? null, p?.name ?? null);
   return (
-    <span className={`w-7 h-7 rounded-full text-white text-[15px] font-medium flex items-center justify-center shrink-0 ${color}`}>
+    <span style={style} className={`w-7 h-7 rounded-full text-white text-[15px] font-medium flex items-center justify-center shrink-0 ${cls}`}>
       {p ? initials(p.name) : "?"}
     </span>
   );
+}
+
+// Profiles store color two ways: a Tailwind class ("bg-blue-500", from client-created profiles)
+// or a hex value ("#3b82f6", from SSO-created profiles in the auth function). A hex string isn't a
+// valid class, so dropping it into className leaves the circle invisible — render hex via inline
+// style instead. Empty/null falls back to a stable per-name color so a circle is never colorless.
+function avatarColor(color: string | null, name: string | null): { cls: string; style?: { backgroundColor: string } } {
+  const raw = color?.trim();
+  if (raw?.startsWith("#")) return { cls: "", style: { backgroundColor: raw } };
+  if (raw) return { cls: raw };
+  return { cls: name ? colorFor(name) : "bg-gray-400" };
 }
 
 // Deterministic color pick from a name, so the same person always gets the same circle.
