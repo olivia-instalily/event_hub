@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Plus, Check, Trash2, X, Pencil, GraduationCap } from "lucide-react";
+import { ChevronDown, Plus, Check, Trash2, X, Pencil, HelpCircle } from "lucide-react";
 import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
 import { useAuth } from "../lib/auth";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
@@ -50,7 +50,7 @@ export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => voi
         <span className="text-sm text-gray-700 max-w-[10rem] truncate">{current?.name ?? "…"}</span>
         {onOpenTutorial && (
           <button onClick={onOpenTutorial} className="text-sm text-gray-500 hover:text-gray-900 ml-1 inline-flex items-center gap-1">
-            <GraduationCap className="w-4 h-4" />
+            <HelpCircle className="w-4 h-4" />
           </button>
         )}
         <button onClick={() => void signOut()} className="text-sm text-gray-500 hover:text-gray-900 ml-1">Sign out</button>
@@ -116,7 +116,7 @@ export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => voi
 
             {onOpenTutorial && (
               <div className="border-t border-gray-100 mt-1 pt-1">
-                <button onClick={() => { setOpen(false); onOpenTutorial(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><GraduationCap className="w-4 h-4" /> Tutorial</button>
+                <button onClick={() => { setOpen(false); onOpenTutorial(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><HelpCircle className="w-4 h-4" /> Tutorial</button>
               </div>
             )}
           </div>

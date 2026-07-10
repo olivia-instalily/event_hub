@@ -1,4 +1,4 @@
-import { GraduationCap, PlayCircle } from "lucide-react";
+import { HelpCircle, PlayCircle } from "lucide-react";
 
 // Walk-through videos for EventHub. Add entries here as you record them — each renders as a card
 // with an embedded player. `embedUrl` is the EMBED url (Loom: https://www.loom.com/embed/<id>;
@@ -13,7 +13,7 @@ export function TutorialPage() {
   return (
     <div className="max-w-3xl mx-auto">
       <div className="flex items-center gap-3 mb-1">
-        <GraduationCap className="w-6 h-6 text-gray-700" />
+        <HelpCircle className="w-6 h-6 text-gray-700" />
         <h1 className="text-2xl">Tutorials</h1>
       </div>
       <p className="text-sm text-gray-500 mb-6">Short walk-throughs of how to use EventHub.</p>
