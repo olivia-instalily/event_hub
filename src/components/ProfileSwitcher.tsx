@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Plus, Check, Trash2, X, Pencil } from "lucide-react";
+import { ChevronDown, Plus, Check, Trash2, X, Pencil, GraduationCap } from "lucide-react";
 import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
 
@@ -11,7 +11,7 @@ function Avatar({ p }: { p: Profile | null }) {
   );
 }
 
-export function ProfileSwitcher() {
+export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => void }) {
   const { profiles, current, setCurrent, refresh } = useProfile();
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -96,6 +96,12 @@ export function ProfileSwitcher() {
                 <button onClick={() => setAdding(true)} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><Plus className="w-4 h-4" /> Add profile</button>
               )}
             </div>
+
+            {onOpenTutorial && (
+              <div className="border-t border-gray-100 mt-1 pt-1">
+                <button onClick={() => { setOpen(false); onOpenTutorial(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><GraduationCap className="w-4 h-4" /> Tutorial</button>
+              </div>
+            )}
           </div>
         </>
       )}

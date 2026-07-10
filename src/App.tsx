@@ -10,6 +10,7 @@ import { HomePage } from './components/HomePage';
 import { PeoplePage } from './components/PeoplePage';
 import { VendorsPage } from './components/VendorsPage';
 import { BudgetPage } from './components/BudgetPage';
+import { TutorialPage } from './components/TutorialPage';
 import { ProfileProvider } from './lib/profile';
 import { ProfileSwitcher } from './components/ProfileSwitcher';
 import { Tabs, TabsList, TabsTrigger } from '@instalily/ui/tabs';
@@ -22,7 +23,7 @@ export default function Component() {
   // a cold click lands on that event. Parsed synchronously here so the initial nav state below
   // opens straight to the event (no flash of Home first).
   const [deepLink] = useState(() => (typeof window !== 'undefined' ? parseDeepLink(window.location.search) : null));
-  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget'>(deepLink ? 'events' : 'home');
+  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget' | 'tutorial'>(deepLink ? 'events' : 'home');
   // Lifted so navigation can leave the Events page and return to the same event detail.
   const [selectedEventId, setSelectedEventId] = useState<string | null>(deepLink?.eventId ?? null);
   // When set (and on the People page), People is scoped to this event with a Back button.
@@ -106,7 +107,7 @@ export default function Component() {
     }
   };
 
-  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget') => {
+  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget' | 'tutorial') => {
     setActivePage(page);
     setPeopleEventFilter(null); // manual nav = unscoped
     if (page === 'events') {
@@ -174,7 +175,7 @@ export default function Component() {
                 </TabsList>
               </Tabs>
             </div>
-            <ProfileSwitcher />
+            <ProfileSwitcher onOpenTutorial={() => setActivePage('tutorial')} />
           </div>
         </div>
       </nav>
@@ -197,6 +198,7 @@ export default function Component() {
         )}
         {activePage === 'vendors' && <VendorsPage />}
         {activePage === 'budget' && <BudgetPage onOpenEvent={(id) => openEvent(id, 'budget')} />}
+        {activePage === 'tutorial' && <TutorialPage />}
       </div>
 
       {/* Create / backfill flow — hosted here (not inside a page) so it overlays whatever page is
