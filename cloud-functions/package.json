@@ -14,7 +14,8 @@
     "@google-cloud/storage": "^7.21.0",
     "@supabase/supabase-js": "^2.108.1",
     "cors": "^2.8.5",
-    "express": "^4.21.1"
+    "express": "^4.21.1",
+    "google-auth-library": "^9.15.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

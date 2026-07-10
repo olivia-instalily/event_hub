@@ -27,6 +27,7 @@ import { handler as slackSend }              from './functions/slack-send.js';
 import { handler as storageUpload }          from './functions/storage-upload.js';
 import { handler as storageSign }            from './functions/storage-sign.js';
 import { handler as summarizeCorrespondence} from './functions/summarize-correspondence.js';
+import { authConfig, authGoogle, authMe, authLogout } from './functions/auth.js';
 
 const app = express();
 
@@ -40,6 +41,11 @@ app.use(cors({
 app.post('/slack-interactions', express.raw({ type: '*/*', limit: '2mb' }), slackInteractions);
 // 20 MB limit — generate-page-style sends base64 images
 app.use(express.json({ limit: '20mb' }));
+
+app.get('/auth/config',   authConfig);
+app.post('/auth/google',  authGoogle);
+app.get('/auth/me',       authMe);
+app.post('/auth/logout',  authLogout);
 
 app.post('/attach-luma',              attachLuma);
 app.post('/comparable-lessons',       comparableLessons);
