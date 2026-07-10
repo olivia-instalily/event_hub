@@ -22,6 +22,39 @@ export async function handler(req: Request, res: Response) {
   }
 }
 
-// onAction / onSubmit are added in Tasks 4 and 5.
-async function onAction(_payload: any, res: Response) { res.status(200).send(''); }
+const slackApi = async (method: string, body: unknown) => {
+  const r = await fetch(`https://slack.com/api/${method}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`, 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify(body),
+  });
+  return await r.json() as any;
+};
+
+async function onAction(payload: any, res: Response) {
+  const action = payload.actions?.[0];
+  const eventId = action?.value;
+  const meta = JSON.stringify({ eventId, channel: payload.channel?.id, ts: payload.message?.ts });
+  // Ack the button click immediately (empty 200) — the modal is opened via the trigger_id.
+  res.status(200).send('');
+  if (action?.action_id === 'approve') {
+    await slackApi('views.open', { trigger_id: payload.trigger_id, view: {
+      type: 'modal', callback_id: 'approve_modal', private_metadata: meta,
+      title: { type: 'plain_text', text: 'Approve budget' },
+      submit: { type: 'plain_text', text: 'Approve' },
+      blocks: [{ type: 'input', block_id: 'amt', label: { type: 'plain_text', text: 'Assigned amount (USD)' },
+        element: { type: 'number_input', is_decimal_allowed: false, action_id: 'value' } }],
+    } });
+  } else if (action?.action_id === 'decline') {
+    await slackApi('views.open', { trigger_id: payload.trigger_id, view: {
+      type: 'modal', callback_id: 'decline_modal', private_metadata: meta,
+      title: { type: 'plain_text', text: 'Decline budget' },
+      submit: { type: 'plain_text', text: 'Decline' },
+      blocks: [{ type: 'input', block_id: 'reason', label: { type: 'plain_text', text: 'Reason (required)' },
+        element: { type: 'plain_text_input', multiline: true, action_id: 'value' } }],
+    } });
+  }
+}
+
+// onSubmit is added in Task 5.
 async function onSubmit(_payload: any, res: Response) { res.status(200).send(''); }
