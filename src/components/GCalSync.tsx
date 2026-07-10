@@ -50,6 +50,7 @@ export function GCalSync({
   const [linBusy, setLinBusy] = useState(false);
   const [linErr, setLinErr] = useState<string | null>(null);
   const [linMsg, setLinMsg] = useState<string | null>(null); // confirmation after a sync this session
+  const [linJustSynced, setLinJustSynced] = useState(false); // synced in THIS session → show a brief confirmation
 
   const add = async () => {
     setBusy(true);
@@ -75,6 +76,7 @@ export function GCalSync({
       const res = await syncEventToLinear(eventId);
       setLinLink(res.projectUrl ?? null);
       setLinDone(true);
+      setLinJustSynced(true);
       setLinMsg(`Project created in Linear · ${LINEAR_TEAM} team · ${res.synced} ${res.synced === 1 ? "issue" : "issues"} synced`);
       onLinearSynced?.();
     } catch (e: any) {
@@ -110,21 +112,22 @@ export function GCalSync({
     );
   }
 
-  // ── Action variant — amber card with one line item per integration ─────────
-  const gcalPending = gcalAvailable && !done;
-  const linearPending = !linDone;
-  // Nothing left to set up → the header icons convey the synced state; hide the card.
-  if (!gcalPending && !linearPending) return null;
+  // ── Action variant — amber card listing only what's NOT done yet ───────────
+  // A line stays only while its integration is pending. Once linked, it drops off entirely (a brief
+  // confirmation lingers just for the sync you did this session). Card hides when nothing's left.
+  const gcalShow = gcalAvailable && (!done || justSynced);
+  const linearShow = !linDone || linJustSynced;
+  if (!gcalShow && !linearShow) return null;
 
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 divide-y divide-amber-200/70">
-      {/* Google Calendar line — only when the event has a date */}
-      {gcalAvailable && (
-        <div className="pb-3">
+    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 divide-y divide-amber-200/70">
+      {/* Google Calendar line — only when the event has a date and isn't already on the calendar */}
+      {gcalShow && (
+        <div className="py-3">
           {done ? (
             <div className="flex items-center gap-2 text-[15px] text-emerald-700">
               <Check className="w-4 h-4 shrink-0" />
-              {justSynced ? "Added to Google Calendar" : "On Google Calendar"}
+              Added to Google Calendar
               {link && (
                 <a href={link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline decoration-dotted underline-offset-2 hover:text-emerald-900">
                   View <ExternalLink className="w-3.5 h-3.5" />
@@ -148,33 +151,35 @@ export function GCalSync({
         </div>
       )}
 
-      {/* Linear project line */}
-      <div className={gcalAvailable ? "pt-3" : ""}>
-        {linDone ? (
-          <div className="flex items-center gap-2 text-[15px] text-emerald-700">
-            <Check className="w-4 h-4 shrink-0" />
-            <span>{linMsg ?? `Project in Linear · ${LINEAR_TEAM} team`}</span>
-            {linLink && (
-              <a href={linLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline decoration-dotted underline-offset-2 hover:text-emerald-900">
-                View <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            )}
-          </div>
-        ) : (
-          <div className="flex items-center gap-3">
-            <Activity className="w-5 h-5 text-amber-700 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-[15px] font-medium text-amber-900">Create a project in Linear</p>
-              <p className="text-[13px] text-amber-700">Adds a project in the {LINEAR_TEAM} team, one issue per deliverable.</p>
+      {/* Linear project line — only while not yet linked */}
+      {linearShow && (
+        <div className="py-3">
+          {linDone ? (
+            <div className="flex items-center gap-2 text-[15px] text-emerald-700">
+              <Check className="w-4 h-4 shrink-0" />
+              <span>{linMsg ?? `Project created in Linear · ${LINEAR_TEAM} team`}</span>
+              {linLink && (
+                <a href={linLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline decoration-dotted underline-offset-2 hover:text-emerald-900">
+                  View <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
             </div>
-            <Button size="sm" onClick={addLinear} disabled={linBusy}>
-              {linBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
-              Sync to Linear
-            </Button>
-          </div>
-        )}
-        {linErr && <p className="text-[13px] text-red-600 mt-2">{linErr}</p>}
-      </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <Activity className="w-5 h-5 text-amber-700 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[15px] font-medium text-amber-900">Create a project in Linear</p>
+                <p className="text-[13px] text-amber-700">Adds a project in the {LINEAR_TEAM} team, one issue per deliverable.</p>
+              </div>
+              <Button size="sm" onClick={addLinear} disabled={linBusy}>
+                {linBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
+                Sync to Linear
+              </Button>
+            </div>
+          )}
+          {linErr && <p className="text-[13px] text-red-600 mt-2">{linErr}</p>}
+        </div>
+      )}
     </div>
   );
 }
