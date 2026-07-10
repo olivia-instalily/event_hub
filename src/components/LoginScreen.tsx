@@ -40,7 +40,7 @@ export function LoginScreen() {
               body: JSON.stringify({ credential: resp.credential }),
             });
             if (r.ok) { await refresh(); }
-            else { const b = await r.json().catch(() => ({})); setErr(b.error === "not an instalily.ai account" ? "Use your @instalily.ai Google account." : "Sign-in failed. Try again."); }
+            else { setErr(r.status === 403 ? "Use your @instalily.ai Google account." : "Sign-in failed. Try again."); }
           },
         });
         window.google.accounts.id.renderButton(btnRef.current, { theme: "outline", size: "large", type: "standard" });
