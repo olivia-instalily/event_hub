@@ -13,12 +13,13 @@
 :{$PORT:8080} {
 	encode gzip
 
-	# PostgREST REST API  →  strip /rest/v1 prefix, inject anon JWT
+	# PostgREST REST API  →  strip /rest/v1 prefix, forward the session cookie as the bearer.
+	# No cookie ⇒ empty bearer ⇒ PostgREST falls back to the (locked-down) anon role ⇒ denied.
 	handle /rest/* {
 		uri strip_prefix /rest/v1
 		reverse_proxy localhost:3000 {
-			header_up Authorization "Bearer {$POSTGREST_ANON_JWT}"
-			header_up apikey "{$POSTGREST_ANON_JWT}"
+			header_up Authorization "Bearer {http.request.cookie.eh_session}"
+			header_up apikey ""
 		}
 	}
 
