@@ -1668,6 +1668,17 @@ export async function postApprovalRequest(opts: { channel: string; eventId: stri
   return { channel: (data as any).channel, ts: (data as any).ts };
 }
 
+/** List the Slack channels the bot can post to (member-of), for the by-name channel picker. */
+export async function listSlackChannels(): Promise<{ id: string; name: string }[]> {
+  try {
+    const { data, error } = await supabase.functions.invoke('slack-channels', { body: {} });
+    if (error || (data as any)?.error) return [];
+    return ((data as any)?.channels ?? []) as { id: string; name: string }[];
+  } catch {
+    return [];
+  }
+}
+
 /** Post a message to a Slack channel via the bot token (server-side). */
 export async function slackSend(channel: string, text: string): Promise<{ channel: string; ts: string }> {
   const { data, error } = await supabase.functions.invoke('slack-send', { body: { channel, text } });

@@ -4,7 +4,7 @@ import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy } from "lu
 import { parseFormats } from "./FormatPicker";
 import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as ScopingData } from "../lib/scoping";
 import { buildEventDeepLink } from "../lib/deepLink";
-import { postApprovalRequest, submitBudgetApproval, migrateScopingApprovalIfNeeded, getBudgetApproval, assignBudget, reopenBudgetApproval, type BudgetApproval, type EventPlanning } from "../lib/db";
+import { postApprovalRequest, submitBudgetApproval, migrateScopingApprovalIfNeeded, getBudgetApproval, assignBudget, reopenBudgetApproval, listSlackChannels, type BudgetApproval, type EventPlanning } from "../lib/db";
 import { Button } from "@instalily/ui/button";
 
 const money = (n: number | null | undefined) =>
@@ -63,6 +63,8 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [approval, setApproval] = useState<BudgetApproval | null>(null);
+  // Channels the bot can post to, for the by-name picker (falls back to a text field if none load).
+  const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   // Keep a local copy of the posted summary so we can display it after submit.
   const [postedSummary, setPostedSummary] = useState<string | null>(null);
 
@@ -74,6 +76,16 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
 
   // Load approval from the DB (with migrate-on-read for existing localStorage records).
   useEffect(() => { void migrateScopingApprovalIfNeeded(plan.id).then(setApproval); }, [plan.id]);
+  // Load the postable Slack channels once, for the by-name picker.
+  useEffect(() => { void listSlackChannels().then(setChannels); }, []);
+
+  // Show a Slack channel as a readable #name; fall back to the raw id if it's not in the list.
+  const channelLabel = (idOrName: string | null | undefined): string => {
+    if (!idOrName) return "Slack";
+    const hit = channels.find((c) => c.id === idOrName || c.name === idOrName);
+    if (hit) return `#${hit.name}`;
+    return idOrName.startsWith("#") ? idOrName : idOrName; // unresolved id/name — show as-is
+  };
 
   const funding = fundingFor(plan.tags);
   const lead = leadTimeCheck(plan.date);
@@ -131,11 +143,15 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
             <h2 className="text-xl">Scoping form</h2>
             <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-2">
             <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] ${(approval?.status ?? "draft") === "assigned" ? "bg-green-100 text-green-700" : (approval?.status ?? "draft") === "submitted" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
               {(approval?.status ?? "draft") === "assigned" ? <Lock className="w-3.5 h-3.5" /> : null}
               {(approval?.status ?? "draft") === "draft" ? "Draft" : (approval?.status ?? "draft") === "submitted" ? "Submitted · awaiting budget" : "Budget assigned"}
             </span>
+            {/* Resubmit lives at the top (not the crowded footer) — only once a decision came back. */}
+            {((approval?.status ?? "draft") === "assigned" || (approval?.status ?? "draft") === "declined") && (
+              <Button size="sm" variant="outline" onClick={() => setResubmitConfirm(true)}>Resubmit <Send className="w-4 h-4" /></Button>
+            )}
           </div>
         </div>
         <div className="px-6 py-3 overflow-y-auto flex-1 min-h-0">
@@ -207,7 +223,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
         {submitted && postedSummary && (
           <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
             <div className="flex items-center justify-between mb-1.5">
-              <p className="text-sm font-medium inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-green-600" /> Posted to {approval?.slackChannel ?? "Slack"} for approval</p>
+              <p className="text-sm font-medium inline-flex items-center gap-1.5"><Check className="w-3.5 h-3.5 text-green-600" /> Posted to {channelLabel(approval?.slackChannel)} for approval</p>
               <button onClick={copySummary} className="text-[15px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1">{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</button>
             </div>
             <pre className="text-[15px] text-gray-700 whitespace-pre-wrap font-sans">{postedSummary}</pre>
@@ -239,17 +255,25 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
 
         {/* Footer actions (fixed; edits autosave, so Save & exit just closes) */}
         <div className="p-6 pt-4 border-t border-gray-100 shrink-0 flex items-center justify-between gap-3">
-          <span className="text-[15px] text-gray-400 min-w-0 truncate">
-            {(approval?.status ?? "draft") === "draft" ? (required ? "Ready to submit." : "Fill type, audience, headcount & justification to submit.")
-              : (approval?.status ?? "draft") === "submitted" ? `Submitted to ${approval?.slackChannel ?? "Slack"} — awaiting budget.`
-              : "Budget assigned & locked."}
-          </span>
+          <div className="flex flex-col min-w-0">
+            {(approval?.status ?? "draft") === "draft" ? (
+              <span className="text-[15px] text-gray-400 truncate">{required ? "Ready to submit." : "Fill type, audience, headcount & justification to submit."}</span>
+            ) : (
+              <>
+                <span className="text-sm text-gray-700 truncate">Submitted to <span className="font-medium">{channelLabel(approval?.slackChannel)}</span></span>
+                <span className="text-[13px] text-gray-400">
+                  {(approval?.status ?? "") === "submitted" ? "Awaiting approval"
+                    : (approval?.status ?? "") === "assigned" ? "Budget assigned & locked"
+                    : "Declined — resubmit above"}
+                </span>
+              </>
+            )}
+          </div>
           <div className="flex items-center gap-2 shrink-0">
             {(approval?.status ?? "draft") === "draft" && <Button onClick={() => setConfirmOpen(true)} disabled={!required}>Submit for approval <Send className="w-4 h-4" /></Button>}
-            {(approval?.status ?? "draft") === "submitted" && <button onClick={reopen} className="text-sm text-gray-600 hover:text-gray-900">Reopen draft</button>}
+            {(approval?.status ?? "draft") === "submitted" && <button onClick={reopen} className="text-sm text-gray-600 hover:text-gray-900">Edit</button>}
             {(approval?.status ?? "draft") === "submitted" && <button onClick={() => void resend()} className="text-sm text-gray-600 hover:text-gray-900">Re-send to Slack</button>}
-            {((approval?.status ?? "draft") === "assigned" || (approval?.status ?? "draft") === "declined") && <button onClick={() => setResubmitConfirm(true)} className="text-sm text-gray-600 hover:text-gray-900">Resubmit</button>}
-            <Button variant="secondary" onClick={onClose}>Save &amp; exit</Button>
+            <Button variant="outline" onClick={onClose}>Save &amp; exit</Button>
           </div>
         </div>
 
@@ -258,8 +282,19 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 rounded-2xl p-4" onClick={() => !submitBusy && setConfirmOpen(false)}>
             <div className="bg-white rounded-2xl border border-border max-w-sm w-full p-5" onClick={(e) => e.stopPropagation()}>
               <p className="font-medium mb-1">Submit for approval?</p>
-              <p className="text-sm text-gray-600">This posts the scoping summary to <span className="font-medium">{slackChannel}</span> for approval.</p>
-              <label className="block mt-3"><span className="text-[15px] text-gray-500 mb-1 block">Channel</span><input value={slackChannel} onChange={(e) => setSlackChannel(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" /></label>
+              <p className="text-sm text-gray-600">This posts the scoping summary to <span className="font-medium">{channelLabel(slackChannel)}</span> for approval.</p>
+              <label className="block mt-3">
+                <span className="text-[15px] text-gray-500 mb-1 block">Channel</span>
+                {channels.length > 0 ? (
+                  <select value={slackChannel} onChange={(e) => setSlackChannel(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-300">
+                    {/* Keep the current value selectable even if it's not in the fetched list. */}
+                    {!channels.some((c) => c.id === slackChannel) && <option value={slackChannel}>{channelLabel(slackChannel)}</option>}
+                    {channels.map((c) => <option key={c.id} value={c.id}>#{c.name}</option>)}
+                  </select>
+                ) : (
+                  <input value={slackChannel} onChange={(e) => setSlackChannel(e.target.value)} placeholder="Channel ID or name" className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                )}
+              </label>
               {submitErr && <p className="text-red-600 text-[15px] mt-2">{submitErr}</p>}
               <div className="flex justify-end gap-2 mt-4">
                 <button onClick={() => setConfirmOpen(false)} disabled={submitBusy} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
@@ -273,7 +308,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 rounded-2xl p-4" onClick={() => setResubmitConfirm(false)}>
             <div className="bg-white rounded-2xl border border-border max-w-sm w-full p-5" onClick={(e) => e.stopPropagation()}>
               <p className="font-medium mb-1">Resubmit for approval?</p>
-              <p className="text-sm text-gray-600">This already got a response ({(approval?.status ?? "") === "assigned" ? "budget assigned" : "declined"}). Resubmitting posts a fresh request to <span className="font-medium">{approval?.slackChannel ?? slackChannel}</span> for a new decision.</p>
+              <p className="text-sm text-gray-600">This already got a response ({(approval?.status ?? "") === "assigned" ? "budget assigned" : "declined"}). Resubmitting posts a fresh request to <span className="font-medium">{channelLabel(approval?.slackChannel ?? slackChannel)}</span> for a new decision.</p>
               <div className="flex justify-end gap-2 mt-4">
                 <button onClick={() => setResubmitConfirm(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
                 <Button size="sm" onClick={() => { setResubmitConfirm(false); void resend(); }}>Resubmit <Send className="w-4 h-4" /></Button>
