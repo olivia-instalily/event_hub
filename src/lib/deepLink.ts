@@ -45,6 +45,12 @@ export function setPendingScopingBudget(eventId: string | null): void {
   pendingScopingEventId = eventId;
 }
 
+/** Peek the pending deep-link event id WITHOUT clearing it (routing uses this to send a budget
+ *  deep-link straight to the planning view, where the scoping form lives). */
+export function peekPendingScopingBudget(): string | null {
+  return pendingScopingEventId;
+}
+
 /** Returns true (and clears the intent) exactly once, for the event that was deep-linked. */
 export function takePendingScopingBudget(eventId: string): boolean {
   if (pendingScopingEventId !== null && pendingScopingEventId === eventId) {

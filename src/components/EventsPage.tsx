@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { parseBudgetText } from "./BudgetImport";
 import { filesFromDrop } from "../lib/drop";
 import { findDuplicateEvent, type DupEvent, type DupReason } from "../lib/dedup";
+import { peekPendingScopingBudget } from "../lib/deepLink";
 import { addSourceMaterial, findDuplicateBySourceFiles } from "../lib/db";
 
 const NOT_CAPTURED = "Not captured";
@@ -1182,25 +1183,36 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
           </div>
         ) : mode === 'duplicate' && dup ? (
           <div className="py-6">
-            <div className="flex items-start gap-3 mb-4">
-              <AlertCircle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <h2 className="text-xl">You already have this event</h2>
-                <p className="text-sm text-gray-600 mt-1">
-                  {dup.reason === 'files'
-                    ? <>These same files already created <span className="font-medium">“{dup.event.title}”</span>. Nothing new was made.</>
-                    : <><span className="font-medium">“{dup.event.title}”</span> looks like the same event{dup.event.date ? ` (${dup.event.date})` : ''} — same type and a very similar name.</>}
-                </p>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-[15px] text-amber-900">
+                    Looks like another event:{' '}
+                    <button
+                      onClick={() => onCreated(dup.event.id)}
+                      className="font-medium underline decoration-dotted underline-offset-2 hover:text-amber-950"
+                    >
+                      {dup.event.title}{dup.event.date ? ` (${dup.event.date})` : ''}
+                    </button>
+                  </p>
+                  {dup.reason === 'similar' && ingest && ingest.materials.length > 0 && (
+                    <button
+                      onClick={() => void addDroppedToExisting(dup.event.id)}
+                      disabled={attaching}
+                      className="mt-2 block text-[13px] text-amber-800 underline decoration-dotted underline-offset-2 hover:text-amber-950 disabled:opacity-50"
+                    >
+                      {attaching ? 'Adding…' : 'Add these files to it as context'}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setDup(null); if (ingest) { setMode('review'); } else if (dupFiles) { const fs = dupFiles; setDupFiles(null); void processDrop(fs); } else { setMode('choose'); } }}
+                    className="mt-2 block text-[13px] text-amber-800/80 hover:text-amber-950"
+                  >
+                    Create a new event anyway →
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Button onClick={() => onCreated(dup.event.id)}>Go to “{dup.event.title}”</Button>
-              {dup.reason === 'similar' && ingest && ingest.materials.length > 0 && (
-                <button onClick={() => void addDroppedToExisting(dup.event.id)} disabled={attaching} className="px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                  {attaching ? 'Adding…' : `Add these files to “${dup.event.title}” as context`}
-                </button>
-              )}
-              <button onClick={() => { setDup(null); if (ingest) { setMode('review'); } else if (dupFiles) { const fs = dupFiles; setDupFiles(null); void processDrop(fs); } else { setMode('choose'); } }} className="text-sm text-gray-500 hover:text-gray-800 mt-1">Create a new event anyway →</button>
             </div>
           </div>
         ) : mode === 'choose' ? (
@@ -1780,7 +1792,14 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   const [bookmarkedEvents, setBookmarkedEvents] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines' | 'calendar'>('cards');
-  const [statusFilter, setStatusFilter] = useState<EventStatus | 'all' | 'templates'>('all');
+  // Status is a multi-select: all three on by default, click one to toggle it off (no "All" button —
+  // deselecting narrows). Templates is a separate exclusive view (a different entity list).
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
+  const [templatesView, setTemplatesView] = useState(false);
+  const toggleStatus = (s: EventStatus) => {
+    setTemplatesView(false);
+    setSelectedStatuses((prev) => { const next = new Set(prev); if (next.has(s)) next.delete(s); else next.add(s); return next; });
+  };
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
@@ -1903,8 +1922,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // Distinct formats across events (each event may carry several joined formats).
   const formatOptions = Array.from(new Set(events.flatMap(e => parseFormats(e.format ?? "")))).filter(Boolean).sort((a, b) => a.localeCompare(b));
 
-  // Date filtering applies to Past / All only (not Future or In-Process).
-  const showDateFilter = statusFilter === 'past' || statusFilter === 'all';
+  // Date filtering is meaningful only when Past is among the selected statuses.
+  const showDateFilter = !templatesView && selectedStatuses.has('past');
   let dateFrom: string | null = null;
   let dateTo: string | null = null;
   if (showDateFilter) {
@@ -1922,10 +1941,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   }
 
   const filteredEvents = events.filter(event => {
-    // The Templates tab shows only templates; every other view excludes them.
-    const tmplView = statusFilter === 'templates';
-    if (tmplView ? !event.isTemplate : event.isTemplate) return false;
-    if (!tmplView && statusFilter !== 'all' && event.status !== statusFilter) return false;
+    // The Templates view shows only templates; every other view excludes them.
+    if (templatesView ? !event.isTemplate : event.isTemplate) return false;
+    if (!templatesView && !selectedStatuses.has(event.status)) return false;
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
     if (ownerFilter !== 'all' && !event.owners.some(o => o.name === ownerFilter)) return false;
     if (tagFilter !== 'all' && !event.tags.includes(tagFilter)) return false;
@@ -1940,12 +1958,13 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     }
     return true;
   }).sort((a, b) => {
-    // Future: soonest first. Past / All: most recent first. Undated last.
+    // Future-only: soonest first. Anything else (mixed / past): most recent first. Undated last.
     const ad = a.date ?? '', bd = b.date ?? '';
     if (!ad && !bd) return 0;
     if (!ad) return 1;
     if (!bd) return -1;
-    return statusFilter === 'future' ? ad.localeCompare(bd) : bd.localeCompare(ad);
+    const futureOnly = !templatesView && selectedStatuses.size === 1 && selectedStatuses.has('future');
+    return futureOnly ? ad.localeCompare(bd) : bd.localeCompare(ad);
   });
 
   if (selectedEventId !== null) {
@@ -1967,7 +1986,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
         setSelectedEventId(null);
       }
     };
-    return sel?.macroStage != null ? (
+    // A budget deep-link (Slack "Open in EventHub") targets the scoping form, which lives ONLY in the
+    // planning view — route there regardless of macro_stage / list membership, so it never lands on
+    // the legacy recap view's "Event not found".
+    const budgetDeepLink = peekPendingScopingBudget() === selectedEventId;
+    return (sel?.macroStage != null || budgetDeepLink) ? (
       <EventPlanningPage eventId={selectedEventId} onBack={onBack} onViewPeople={onViewPeople} onOpenEvent={(id) => setSelectedEventId(id)} onReview={() => openReviewForEvent(selectedEventId)} />
     ) : (
       <EventDetailPage eventId={selectedEventId} onBack={onBack} onViewPeople={onViewPeople} />
@@ -1979,19 +2002,32 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       {/* Status Tabs */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex gap-2">
-          {(['future', 'in-process', 'past', 'all', 'templates'] as const).map((s) => (
+          {(['future', 'in-process', 'past'] as EventStatus[]).map((s) => (
             <button
               key={s}
-              onClick={() => setStatusFilter(s)}
-              className={`px-2 py-1 rounded-lg transition-colors ${
-                statusFilter === s
-                  ? 'bg-gray-200 text-black'
-                  : 'bg-white border border-border text-gray-700 hover:bg-gray-50'
+              onClick={() => toggleStatus(s)}
+              aria-pressed={!templatesView && selectedStatuses.has(s)}
+              title={!templatesView && selectedStatuses.has(s) ? 'Showing — click to hide' : 'Hidden — click to show'}
+              className={`px-2 py-1 rounded-lg border transition-all ${
+                !templatesView && selectedStatuses.has(s)
+                  ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                  : 'bg-white border-border text-gray-700 hover:bg-gray-50'
               }`}
             >
-              {s === 'future' ? 'Future' : s === 'in-process' ? 'In-Process' : s === 'past' ? 'Past' : s === 'templates' ? 'Templates' : 'All'}
+              {s === 'future' ? 'Future' : s === 'in-process' ? 'In-Process' : 'Past'}
             </button>
           ))}
+          <button
+            onClick={() => setTemplatesView(true)}
+            aria-pressed={templatesView}
+            className={`px-2 py-1 rounded-lg border transition-all ${
+              templatesView
+                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            Templates
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
@@ -2111,7 +2147,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
         </p>
       )}
       {!loading && !error && filteredEvents.length === 0 && (
-        <p className="text-gray-500 py-12 text-center">No {statusFilter.replace('-', ' ')} events.</p>
+        <p className="text-gray-500 py-12 text-center">{templatesView ? 'No templates.' : selectedStatuses.size === 0 ? 'No status selected — pick Future, In-Process, or Past.' : 'No events match.'}</p>
       )}
 
       {/* Cards View */}

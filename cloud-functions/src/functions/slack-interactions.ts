@@ -35,18 +35,26 @@ const slackApi = async (method: string, body: unknown) => {
 async function onAction(payload: any, res: Response) {
   const action = payload.actions?.[0];
   const eventId = action?.value;
-  const meta = JSON.stringify({ eventId, channel: payload.channel?.id, ts: payload.message?.ts });
+  // Carry the event's deep link (from the original message's link button) through the modal so the
+  // resolved message can link back to the event.
+  const link = (payload.message?.blocks ?? []).flatMap((b: any) => b.elements ?? []).find((e: any) => e.url)?.url ?? null;
+  const meta = JSON.stringify({ eventId, channel: payload.channel?.id, ts: payload.message?.ts, link });
   // Ack the button click immediately (empty 200) — the modal is opened via the trigger_id.
   res.status(200).send('');
   // Post-ack work runs after the response; wrap so errors are logged rather than becoming unhandled rejections.
   try {
     if (action?.action_id === 'approve') {
+      // Pre-fill the amount with the requested budget; the approver can still change it before submit.
+      const { data: appr } = await getServiceClient().from('budget_approval').select('requested_amount').eq('event_id', eventId).maybeSingle();
+      const requested = (appr as any)?.requested_amount;
+      const amountEl: Record<string, unknown> = { type: 'number_input', is_decimal_allowed: false, action_id: 'value' };
+      if (requested != null) amountEl.initial_value = String(requested);
       const result = await slackApi('views.open', { trigger_id: payload.trigger_id, view: {
         type: 'modal', callback_id: 'approve_modal', private_metadata: meta,
         title: { type: 'plain_text', text: 'Approve budget' },
         submit: { type: 'plain_text', text: 'Approve' },
         blocks: [{ type: 'input', block_id: 'amt', label: { type: 'plain_text', text: 'Assigned amount (USD)' },
-          element: { type: 'number_input', is_decimal_allowed: false, action_id: 'value' } }],
+          element: amountEl }],
       } });
       if (!result.ok) console.error(JSON.stringify({ fn: 'slack-interactions', op: 'views.open', error: result.error }));
     } else if (action?.action_id === 'decline') {
@@ -68,7 +76,8 @@ async function onSubmit(payload: any, res: Response) {
   const view = payload.view;
   const meta = JSON.parse(view.private_metadata || '{}');
   const eventId = meta.eventId as string;
-  const userId = payload.user?.id as string;
+  const userId = payload.user?.id as string;                 // for the <@id> Slack mention
+  const userName = payload.user?.username || payload.user?.name || userId; // readable, stored as decider_ref (shown in-app)
   const supa = getServiceClient();
 
   // Idempotency: if already resolved, no-op and just refresh the message.
@@ -90,7 +99,7 @@ async function onSubmit(payload: any, res: Response) {
     if (eventUpdateErr) throw eventUpdateErr;
     // CAS: only flip if still submitted — guards against concurrent double-clicks.
     const { data: won, error: flipErr } = await supa.from('budget_approval')
-      .update({ status: 'assigned', decided_via: 'slack', decider_ref: userId, decided_at: nowIso, decline_reason: null, updated_at: nowIso })
+      .update({ status: 'assigned', decided_via: 'slack', decider_ref: userName, decided_at: nowIso, decline_reason: null, updated_at: nowIso })
       .eq('event_id', eventId).eq('status', 'submitted').select('event_id');
     if (flipErr) throw flipErr;
     if (!won || won.length === 0) { res.status(200).send(''); await updateMessage(meta, 'Already resolved — no change.'); return; }
@@ -104,7 +113,7 @@ async function onSubmit(payload: any, res: Response) {
     // Mirror Phase 0 declineBudget: flip declined state. Keep in sync with src/lib/db.ts.
     // CAS: only flip if still submitted — guards against concurrent double-clicks.
     const { data: won, error: flipErr } = await supa.from('budget_approval')
-      .update({ status: 'declined', decline_reason: reason, decided_via: 'slack', decider_ref: userId, decided_at: nowIso, updated_at: nowIso })
+      .update({ status: 'declined', decline_reason: reason, decided_via: 'slack', decider_ref: userName, decided_at: nowIso, updated_at: nowIso })
       .eq('event_id', eventId).eq('status', 'submitted').select('event_id');
     if (flipErr) throw flipErr;
     if (!won || won.length === 0) { res.status(200).send(''); await updateMessage(meta, 'Already resolved — no change.'); return; }
@@ -115,7 +124,8 @@ async function onSubmit(payload: any, res: Response) {
   res.status(200).send('');
 }
 
-async function updateMessage(meta: { channel?: string; ts?: string }, text: string) {
+async function updateMessage(meta: { channel?: string; ts?: string; link?: string | null }, text: string) {
   if (!meta.channel || !meta.ts) return;
-  await slackApi('chat.update', { channel: meta.channel, ts: meta.ts, text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] });
+  const full = meta.link ? `${text}\n<${meta.link}|Open the event →>` : text;
+  await slackApi('chat.update', { channel: meta.channel, ts: meta.ts, text: full, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: full } }] });
 }

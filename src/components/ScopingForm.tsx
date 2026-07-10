@@ -59,6 +59,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
   const [copied, setCopied] = useState(false);
   const [slackChannel, setSlackChannel] = useState(() => { try { return localStorage.getItem("slack_budget_channel") || DEFAULT_SLACK_CHANNEL; } catch { return DEFAULT_SLACK_CHANNEL; } });
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [resubmitConfirm, setResubmitConfirm] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [approval, setApproval] = useState<BudgetApproval | null>(null);
@@ -247,6 +248,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
             {(approval?.status ?? "draft") === "draft" && <Button onClick={() => setConfirmOpen(true)} disabled={!required}>Submit for approval <Send className="w-4 h-4" /></Button>}
             {(approval?.status ?? "draft") === "submitted" && <button onClick={reopen} className="text-sm text-gray-600 hover:text-gray-900">Reopen draft</button>}
             {(approval?.status ?? "draft") === "submitted" && <button onClick={() => void resend()} className="text-sm text-gray-600 hover:text-gray-900">Re-send to Slack</button>}
+            {((approval?.status ?? "draft") === "assigned" || (approval?.status ?? "draft") === "declined") && <button onClick={() => setResubmitConfirm(true)} className="text-sm text-gray-600 hover:text-gray-900">Resubmit</button>}
             <Button variant="secondary" onClick={onClose}>Save &amp; exit</Button>
           </div>
         </div>
@@ -262,6 +264,19 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
               <div className="flex justify-end gap-2 mt-4">
                 <button onClick={() => setConfirmOpen(false)} disabled={submitBusy} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
                 <Button size="sm" onClick={doSubmit} disabled={submitBusy || !slackChannel.trim()}>{submitBusy ? "Sending…" : <>Send for approval <Send className="w-4 h-4" /></>}</Button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Resubmit confirmation — only shown once a response has already come back */}
+        {resubmitConfirm && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 rounded-2xl p-4" onClick={() => setResubmitConfirm(false)}>
+            <div className="bg-white rounded-2xl border border-border max-w-sm w-full p-5" onClick={(e) => e.stopPropagation()}>
+              <p className="font-medium mb-1">Resubmit for approval?</p>
+              <p className="text-sm text-gray-600">This already got a response ({(approval?.status ?? "") === "assigned" ? "budget assigned" : "declined"}). Resubmitting posts a fresh request to <span className="font-medium">{approval?.slackChannel ?? slackChannel}</span> for a new decision.</p>
+              <div className="flex justify-end gap-2 mt-4">
+                <button onClick={() => setResubmitConfirm(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+                <Button size="sm" onClick={() => { setResubmitConfirm(false); void resend(); }}>Resubmit <Send className="w-4 h-4" /></Button>
               </div>
             </div>
           </div>

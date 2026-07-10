@@ -3083,7 +3083,7 @@ function BudgetCard({ plan, scoping, roughTotal, onOpenScoping, onOpenBudget }: 
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium inline-flex items-center gap-1.5">{hasAssigned && <Lock className="w-3.5 h-3.5 text-gray-400" />} Budget assigned</p>
             {hasAssigned ? (
-              <p className="text-sm mt-0.5">{money(assigned)} <span className="text-gray-400">· set by admin</span></p>
+              <p className="text-sm mt-0.5">{money(assigned)} <span className="text-gray-400">· set by {approval?.deciderRef ? `@${approval.deciderRef}` : "admin"}</span></p>
             ) : (
               <p className="text-[15px] text-gray-400 mt-0.5">{submitted ? "Awaiting Karim's assignment." : "Pending scoping submission."}</p>
             )}
