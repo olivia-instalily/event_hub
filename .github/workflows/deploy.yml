@@ -65,6 +65,7 @@ jobs:
           LINEAR_TEAM_ID=eventhub-linear-team-id:latest,\
           LUMA_API_KEY=eventhub-luma-key:latest,\
           SLACK_BOT_TOKEN=eventhub-slack-token:latest,\
+          SLACK_SIGNING_SECRET=eventhub-slack-signing-secret:latest,\
           GREENHOUSE_API_KEY=eventhub-greenhouse-key:latest,\
           GOOGLE_CLIENT_ID=eventhub-google-client-id:latest,\
           GOOGLE_CLIENT_SECRET=eventhub-google-client-secret:latest,\

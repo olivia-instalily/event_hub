@@ -1660,6 +1660,14 @@ export async function pullEventFromLinear(
   return data as any;
 }
 
+/** Post an interactive budget-approval request (Approve/Decline buttons) to Slack. */
+export async function postApprovalRequest(opts: { channel: string; eventId: string; summary: string; link: string; requestedAmount: number | null }): Promise<{ channel: string; ts: string }> {
+  const res = await fetch('/functions/v1/slack-approval', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(opts) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.error ?? `Slack post failed (${res.status}).`);
+  return { channel: (data as any).channel, ts: (data as any).ts };
+}
+
 /** Post a message to a Slack channel via the bot token (server-side). */
 export async function slackSend(channel: string, text: string): Promise<{ channel: string; ts: string }> {
   const { data, error } = await supabase.functions.invoke('slack-send', { body: { channel, text } });

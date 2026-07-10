@@ -4,7 +4,7 @@ import { X, Check, Send, Lock, Sparkles, RefreshCw, AlertCircle, Copy } from "lu
 import { parseFormats } from "./FormatPicker";
 import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as ScopingData } from "../lib/scoping";
 import { buildEventDeepLink } from "../lib/deepLink";
-import { slackSend, submitBudgetApproval, migrateScopingApprovalIfNeeded, getBudgetApproval, assignBudget, reopenBudgetApproval, type BudgetApproval, type EventPlanning } from "../lib/db";
+import { postApprovalRequest, submitBudgetApproval, migrateScopingApprovalIfNeeded, getBudgetApproval, assignBudget, reopenBudgetApproval, type BudgetApproval, type EventPlanning } from "../lib/db";
 import { Button } from "@instalily/ui/button";
 
 const money = (n: number | null | undefined) =>
@@ -95,9 +95,9 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
     const link = typeof window !== "undefined" ? buildEventDeepLink(window.location.origin, plan.id) : undefined;
     const summary = buildScopingSummary({ title: plan.title, date: plan.date, tags: plan.tags, scoping, roughTotal, link });
     try {
-      await slackSend(slackChannel.trim(), summary);
+      const { channel, ts } = await postApprovalRequest({ channel: slackChannel.trim(), eventId: plan.id, summary, link: link ?? "", requestedAmount: roughTotal });
       try { localStorage.setItem("slack_budget_channel", slackChannel.trim()); } catch { /* ignore */ }
-      await submitBudgetApproval(plan.id, { requestedAmount: roughTotal, slackChannel: slackChannel.trim() });
+      await submitBudgetApproval(plan.id, { requestedAmount: roughTotal, slackChannel: channel, slackMessageTs: ts });
       setPostedSummary(summary);
       setApproval(await getBudgetApproval(plan.id));
       setConfirmOpen(false);
@@ -105,6 +105,13 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
     finally { setSubmitBusy(false); }
   };
   const reopen = () => { void reopenBudgetApproval(plan.id).then(() => setApproval(null)); };
+  const resend = async () => {
+    const link = typeof window !== "undefined" ? buildEventDeepLink(window.location.origin, plan.id) : undefined;
+    const summary = buildScopingSummary({ title: plan.title, date: plan.date, tags: plan.tags, scoping, roughTotal, link });
+    const { channel, ts } = await postApprovalRequest({ channel: (approval?.slackChannel ?? slackChannel).trim(), eventId: plan.id, summary, link: link ?? "", requestedAmount: roughTotal });
+    await submitBudgetApproval(plan.id, { requestedAmount: roughTotal, slackChannel: channel, slackMessageTs: ts });
+    setApproval(await getBudgetApproval(plan.id));
+  };
   // Return the budget → locks as the target via the DB.
   const assign = () => {
     const n = Number(assignInput);
@@ -239,6 +246,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
           <div className="flex items-center gap-2 shrink-0">
             {(approval?.status ?? "draft") === "draft" && <Button onClick={() => setConfirmOpen(true)} disabled={!required}>Submit for approval <Send className="w-4 h-4" /></Button>}
             {(approval?.status ?? "draft") === "submitted" && <button onClick={reopen} className="text-sm text-gray-600 hover:text-gray-900">Reopen draft</button>}
+            {(approval?.status ?? "draft") === "submitted" && <button onClick={() => void resend()} className="text-sm text-gray-600 hover:text-gray-900">Re-send to Slack</button>}
             <Button variant="secondary" onClick={onClose}>Save &amp; exit</Button>
           </div>
         </div>
