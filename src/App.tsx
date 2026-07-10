@@ -15,6 +15,9 @@ import { CalendarPage } from './components/CalendarPage';
 import { ProfileProvider } from './lib/profile';
 import { ProfileSwitcher } from './components/ProfileSwitcher';
 import { Tabs, TabsList, TabsTrigger } from '@instalily/ui/tabs';
+import { useAuth } from './lib/auth';
+import { LoginScreen } from './components/LoginScreen';
+import { proxiedBackend } from './lib/supabase';
 
 export type PeopleStatusFilter = 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers';
 export type EventFilter = { id: string; name: string; tag?: string | null; status?: PeopleStatusFilter };
@@ -23,6 +26,7 @@ export default function Component() {
   // Deep link from a Slack scoping request (?event=<id>&view=budget) — resolved once on load so
   // a cold click lands on that event. Parsed synchronously here so the initial nav state below
   // opens straight to the event (no flash of Home first).
+  const { status: authStatus, user: authUser } = useAuth();
   const [deepLink] = useState(() => (typeof window !== 'undefined' ? parseDeepLink(window.location.search) : null));
   const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar' | 'tutorial'>(deepLink ? 'events' : 'home');
   // Lifted so navigation can leave the Events page and return to the same event detail.
@@ -144,8 +148,16 @@ export default function Component() {
   }, [deepLink]);
 
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+
+  if (authStatus === 'loading') {
+    return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading…</div>;
+  }
+  if (authStatus === 'unauthed') {
+    return <LoginScreen />;
+  }
+
   return (
-    <ProfileProvider>
+    <ProfileProvider forcedProfileId={proxiedBackend ? (authUser?.profileId || null) : null}>
     <div
       className="min-h-screen bg-white"
       onDragEnter={(e) => { if (hasFiles(e)) { e.preventDefault(); dragDepth.current++; setDragOver(true); } }}
