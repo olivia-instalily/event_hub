@@ -1,6 +1,7 @@
 // cloud-functions/src/functions/slack-interactions.ts
 import { Request, Response } from 'express';
 import { verifySlackSignature } from '../lib/slack.js';
+import { getServiceClient } from '../db.js';
 
 export async function handler(req: Request, res: Response) {
   const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body ?? '');
@@ -56,5 +57,46 @@ async function onAction(payload: any, res: Response) {
   }
 }
 
-// onSubmit is added in Task 5.
-async function onSubmit(_payload: any, res: Response) { res.status(200).send(''); }
+async function onSubmit(payload: any, res: Response) {
+  const view = payload.view;
+  const meta = JSON.parse(view.private_metadata || '{}');
+  const eventId = meta.eventId as string;
+  const userId = payload.user?.id as string;
+  const supa = getServiceClient();
+
+  // Idempotency: if already resolved, no-op and just refresh the message.
+  const { data: existing } = await supa.from('budget_approval').select('status').eq('event_id', eventId).maybeSingle();
+  const already = (existing as any)?.status;
+  if (already === 'assigned' || already === 'declined') {
+    res.status(200).send(''); // close the modal
+    await updateMessage(meta, `Already ${already} — no change.`);
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  if (view.callback_id === 'approve_modal') {
+    const amount = Number(view.state.values.amt.value.value);
+    if (!Number.isFinite(amount)) { res.status(200).json({ response_action: 'errors', errors: { amt: 'Enter a number' } }); return; }
+    // Mirror Phase 0 assignBudget: set the target, then flip approval state. Keep in sync with src/lib/db.ts.
+    await supa.from('event').update({ event_budget_target: amount }).eq('id', eventId);
+    await supa.from('budget_approval').upsert({ event_id: eventId, status: 'assigned', decided_via: 'slack', decider_ref: userId, decided_at: nowIso, decline_reason: null, updated_at: nowIso }, { onConflict: 'event_id' });
+    res.status(200).send('');
+    await updateMessage(meta, `Approved by <@${userId}> — $${amount} assigned.`);
+    return;
+  }
+  if (view.callback_id === 'decline_modal') {
+    const reason = String(view.state.values.reason.value.value || '').trim();
+    if (!reason) { res.status(200).json({ response_action: 'errors', errors: { reason: 'A reason is required' } }); return; }
+    // Mirror Phase 0 declineBudget: upsert declined state. Keep in sync with src/lib/db.ts.
+    await supa.from('budget_approval').upsert({ event_id: eventId, status: 'declined', decline_reason: reason, decided_via: 'slack', decider_ref: userId, decided_at: nowIso, updated_at: nowIso }, { onConflict: 'event_id' });
+    res.status(200).send('');
+    await updateMessage(meta, `Declined by <@${userId}> — ${reason}`);
+    return;
+  }
+  res.status(200).send('');
+}
+
+async function updateMessage(meta: { channel?: string; ts?: string }, text: string) {
+  if (!meta.channel || !meta.ts) return;
+  await slackApi('chat.update', { channel: meta.channel, ts: meta.ts, text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] });
+}
