@@ -22,6 +22,7 @@ import { handler as lumaImport }             from './functions/luma-import.js';
 import { handler as lumaSync }               from './functions/luma-sync.js';
 import { handler as planningSummary }        from './functions/planning-summary.js';
 import { handler as slackApproval }          from './functions/slack-approval.js';
+import { handler as slackInteractions }      from './functions/slack-interactions.js';
 import { handler as slackSend }              from './functions/slack-send.js';
 import { handler as storageUpload }          from './functions/storage-upload.js';
 import { handler as storageSign }            from './functions/storage-sign.js';
@@ -34,6 +35,9 @@ app.use(cors({
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['authorization', 'x-client-info', 'apikey', 'content-type'],
 }));
+// Slack signature verification needs the RAW body, so this route must be registered with a raw
+// parser BEFORE the global express.json() (which would otherwise consume the stream).
+app.post('/slack-interactions', express.raw({ type: '*/*', limit: '2mb' }), slackInteractions);
 // 20 MB limit — generate-page-style sends base64 images
 app.use(express.json({ limit: '20mb' }));
 
