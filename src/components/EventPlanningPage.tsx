@@ -3385,26 +3385,30 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
         />
       ) : null}
 
+      {/* Scoping gate — its own action card, matching the Google Calendar / Linear card, shown until
+          the scoping form is submitted. (Lives outside the status-digest block.) */}
+      {showScopingNag && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-700 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[15px] font-medium text-amber-900">Submit the scoping form</p>
+              <p className="text-[13px] text-amber-700">Do this first to unlock budget and planning.</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setScopingOpen(true)}>Open</Button>
+          </div>
+        </div>
+      )}
+
       {/* Status digest — synthesized one-liner by default; Claude bullets after Resync. */}
       <div className="bg-white rounded-2xl border border-border p-4">
-        {/* Mandatory gate: scoping must be submitted before planning can really start. */}
-        {showScopingNag && (
-          <button
-            onClick={() => setScopingOpen(true)}
-            className="w-full mb-3 flex items-start gap-2 text-left rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 hover:bg-amber-100"
-          >
-            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span className="flex-1 text-sm font-medium">Scoping form not submitted — submit it first to unlock budget and planning.</span>
-            <ChevronRight className="w-4 h-4 mt-0.5 shrink-0" />
-          </button>
-        )}
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center justify-between gap-3">
           {summaryBullets.length > 0 ? (
-            <ul className="flex-1 list-disc pl-5 space-y-1 text-gray-700 leading-relaxed">
+            <ul className="flex-1 list-disc pl-5 space-y-1 text-[15px] text-gray-700 leading-relaxed">
               {summaryBullets.map((b, i) => <li key={i}>{b}</li>)}
             </ul>
           ) : (
-            <p className="flex-1 text-sm text-gray-700">{synthDigest}</p>
+            <p className="flex-1 text-[15px] text-gray-700">{synthDigest}</p>
           )}
           <button onClick={resync} disabled={resyncing} className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
             <RefreshCw className={`w-3 h-3 ${resyncing ? "animate-spin" : ""}`} /> {resyncing ? "Resyncing…" : "Resync"}

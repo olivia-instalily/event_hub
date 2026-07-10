@@ -70,4 +70,7 @@ jobs:
           GOOGLE_CLIENT_ID=eventhub-google-client-id:latest,\
           GOOGLE_CLIENT_SECRET=eventhub-google-client-secret:latest,\
           GOOGLE_REFRESH_TOKEN=eventhub-google-refresh-token:latest,\
-          GMAIL_REFRESH_TOKEN=eventhub-gmail-refresh-token:latest"
+          GMAIL_REFRESH_TOKEN=eventhub-gmail-refresh-token:latest,\
+          GCAL_CLIENT_ID=eventhub-gcal-client-id:latest,\
+          GCAL_CLIENT_SECRET=eventhub-gcal-client-secret:latest,\
+          GCAL_REFRESH_TOKEN=eventhub-gcal-refresh-token:latest"
