@@ -6,7 +6,7 @@
 // The fixed event-tag taxonomy: a few categories, one color per category (pinned in PRESET below).
 export interface TagCategory { name: string; tags: string[] }
 export const TAG_CATEGORIES: TagCategory[] = [
-  { name: 'Hosted', tags: ['Client summit', 'Brand & community event', 'Co-hosted partner event', 'Hackathon', 'Campus'] },
+  { name: 'Hosted', tags: ['Client summit', 'Brand & community event', 'Co-hosted partner event', 'Campus'] },
   { name: 'Sponsorship', tags: ['Sponsorship'] },
   { name: 'Internal', tags: ['Internal team social', 'Company milestone'] },
 ];
@@ -37,7 +37,7 @@ const PALETTE: Hue[] = [
 // shares one color. Non-taxonomy strings (vendor categories, people tags) still hash below.
 const PRESET: Record<string, number> = {
   // Hosted → green
-  'Client summit': 2, 'Brand & community event': 2, 'Co-hosted partner event': 2, Hackathon: 2, Campus: 2,
+  'Client summit': 2, 'Brand & community event': 2, 'Co-hosted partner event': 2, Campus: 2,
   // Sponsorship → amber
   Sponsorship: 7,
   // Internal → purple
@@ -71,7 +71,7 @@ export function tagHoverRing(tag: string | null | undefined): string {
 export type BadgeVariant = 'gray' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'purple';
 const BADGE_POOL: BadgeVariant[] = ['orange', 'purple', 'green', 'blue', 'cyan', 'red', 'yellow'];
 const BADGE_PRESET: Record<string, BadgeVariant> = {
-  'Client summit': 'green', 'Brand & community event': 'green', 'Co-hosted partner event': 'green', Hackathon: 'green', Campus: 'green',
+  'Client summit': 'green', 'Brand & community event': 'green', 'Co-hosted partner event': 'green', Campus: 'green',
   Sponsorship: 'yellow',
   'Internal team social': 'purple', 'Company milestone': 'purple',
 };

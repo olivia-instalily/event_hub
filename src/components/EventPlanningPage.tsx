@@ -3371,7 +3371,10 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
           done event can be finished into a complete record. Upcoming → the GCal prompt. */}
       {(locked || temporal === "past") ? (
         <CompletenessPanel plan={plan} eventId={eventId} onApplied={onApplied} />
-      ) : (plan.date && !plan.gcalEventId) || !plan.linearProjectId ? (
+      ) : (
+        // Always mount GCalSync in the active planning view — it self-hides (returns null) when
+        // there's nothing left to sync, but staying mounted lets the post-sync "Added ✓ / synced ✓"
+        // confirmation (this-session only, gone on reload) show even after the LAST integration.
         <GCalSync
           eventId={eventId}
           synced={!!plan.gcalEventId}
@@ -3383,7 +3386,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
           linearProjectUrl={plan.linearProjectUrl}
           onLinearSynced={onApplied}
         />
-      ) : null}
+      )}
 
       {/* Scoping gate — its own action card, matching the Google Calendar / Linear card, shown until
           the scoping form is submitted. (Lives outside the status-digest block.) */}

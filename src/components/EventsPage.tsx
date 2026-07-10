@@ -1179,7 +1179,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
           <div className="py-16 flex flex-col items-center justify-center text-center">
             <div className="w-10 h-10 rounded-full border-2 border-gray-200 border-t-gray-900 animate-spin mb-4" />
             <p className="text-gray-900 font-medium">Reading what you dropped…</p>
-            <p className="text-sm text-gray-500 mt-1">Classifying files and pulling out the event details, phases, deliverables, and more. You'll review everything before anything's created.</p>
+            <p className="text-sm text-gray-500 mt-1">Parsing files… You'll review everything before anything's created.</p>
           </div>
         ) : mode === 'duplicate' && dup ? (
           <div className="py-6">
