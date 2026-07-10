@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, Plus, Check, Trash2, X, Pencil, GraduationCap } from "lucide-react";
 import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
+import { useAuth } from "../lib/auth";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
 
 function Avatar({ p }: { p: Profile | null }) {
@@ -12,7 +13,8 @@ function Avatar({ p }: { p: Profile | null }) {
 }
 
 export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => void }) {
-  const { profiles, current, setCurrent, refresh } = useProfile();
+  const { profiles, current, setCurrent, refresh, locked } = useProfile();
+  const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -40,6 +42,21 @@ export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => voi
     if (current?.id === id) setCurrent(null);
     await refresh();
   };
+
+  if (locked) {
+    return (
+      <div className="flex items-center gap-2">
+        <Avatar p={current} />
+        <span className="text-sm text-gray-700 max-w-[10rem] truncate">{current?.name ?? "…"}</span>
+        {onOpenTutorial && (
+          <button onClick={onOpenTutorial} className="text-sm text-gray-500 hover:text-gray-900 ml-1 inline-flex items-center gap-1">
+            <GraduationCap className="w-4 h-4" />
+          </button>
+        )}
+        <button onClick={() => void signOut()} className="text-sm text-gray-500 hover:text-gray-900 ml-1">Sign out</button>
+      </div>
+    );
+  }
 
   return (
     <div className="relative">

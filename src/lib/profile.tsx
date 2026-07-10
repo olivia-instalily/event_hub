@@ -20,29 +20,32 @@ interface ProfileCtx {
   current: Profile | null;
   setCurrent: (id: string | null) => void;
   refresh: () => Promise<void>;
+  locked: boolean;
 }
-const Ctx = createContext<ProfileCtx>({ profiles: [], current: null, setCurrent: () => {}, refresh: async () => {} });
+const Ctx = createContext<ProfileCtx>({ profiles: [], current: null, setCurrent: () => {}, refresh: async () => {}, locked: false });
 export const useProfile = () => useContext(Ctx);
 
 const KEY = "currentProfileId";
 
-export function ProfileProvider({ children }: { children: ReactNode }) {
+export function ProfileProvider({ children, forcedProfileId = null }: { children: ReactNode; forcedProfileId?: string | null }) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [currentId, setCurrentId] = useState<string | null>(() => localStorage.getItem(KEY));
+  const [currentId, setCurrentId] = useState<string | null>(() => forcedProfileId ?? localStorage.getItem(KEY));
 
   const refresh = async () => {
     const p = await listProfiles().catch(() => [] as Profile[]);
     setProfiles(p);
-    // If the stored current was deleted, fall back to the first profile.
-    setCurrentId((id) => (id && p.some((x) => x.id === id) ? id : p[0]?.id ?? null));
+    setCurrentId((id) => forcedProfileId ?? (id && p.some((x) => x.id === id) ? id : p[0]?.id ?? null));
   };
   useEffect(() => { void refresh(); }, []);
+  // Keep the current profile pinned to the signed-in user when forced.
+  useEffect(() => { if (forcedProfileId) setCurrentId(forcedProfileId); }, [forcedProfileId]);
 
   const setCurrent = (id: string | null) => {
+    if (forcedProfileId) return; // switching disabled when auth pins the identity
     setCurrentId(id);
     if (id) localStorage.setItem(KEY, id); else localStorage.removeItem(KEY);
   };
 
   const current = profiles.find((p) => p.id === currentId) ?? null;
-  return <Ctx.Provider value={{ profiles, current, setCurrent, refresh }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ profiles, current, setCurrent, refresh, locked: !!forcedProfileId }}>{children}</Ctx.Provider>;
 }
