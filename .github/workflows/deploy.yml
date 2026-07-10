@@ -54,7 +54,7 @@ jobs:
             --min-instances 0 \
             --max-instances 4 \
             --timeout 60 \
-            --set-env-vars "CLOUD_SQL_CONNECTION_NAME=$SQL_INSTANCE,GCS_PUBLIC_BUCKET=event-499220-eventhub-public,GCS_DOCS_BUCKET=event-499220-eventhub-docs" \
+            --set-env-vars "CLOUD_SQL_CONNECTION_NAME=$SQL_INSTANCE,GCS_PUBLIC_BUCKET=event-499220-eventhub-public,GCS_DOCS_BUCKET=event-499220-eventhub-docs,GOOGLE_OAUTH_CLIENT_ID=15951963035-ekkf3evlup14fici4vaotu6sj116p1k8.apps.googleusercontent.com" \
             --set-secrets "\
           DB_PASSWORD=eventhub-db-password:latest,\
           POSTGREST_JWT_SECRET=eventhub-jwt-secret:latest,\
