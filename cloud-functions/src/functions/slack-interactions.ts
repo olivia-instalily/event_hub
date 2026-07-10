@@ -38,22 +38,29 @@ async function onAction(payload: any, res: Response) {
   const meta = JSON.stringify({ eventId, channel: payload.channel?.id, ts: payload.message?.ts });
   // Ack the button click immediately (empty 200) — the modal is opened via the trigger_id.
   res.status(200).send('');
-  if (action?.action_id === 'approve') {
-    await slackApi('views.open', { trigger_id: payload.trigger_id, view: {
-      type: 'modal', callback_id: 'approve_modal', private_metadata: meta,
-      title: { type: 'plain_text', text: 'Approve budget' },
-      submit: { type: 'plain_text', text: 'Approve' },
-      blocks: [{ type: 'input', block_id: 'amt', label: { type: 'plain_text', text: 'Assigned amount (USD)' },
-        element: { type: 'number_input', is_decimal_allowed: false, action_id: 'value' } }],
-    } });
-  } else if (action?.action_id === 'decline') {
-    await slackApi('views.open', { trigger_id: payload.trigger_id, view: {
-      type: 'modal', callback_id: 'decline_modal', private_metadata: meta,
-      title: { type: 'plain_text', text: 'Decline budget' },
-      submit: { type: 'plain_text', text: 'Decline' },
-      blocks: [{ type: 'input', block_id: 'reason', label: { type: 'plain_text', text: 'Reason (required)' },
-        element: { type: 'plain_text_input', multiline: true, action_id: 'value' } }],
-    } });
+  // Post-ack work runs after the response; wrap so errors are logged rather than becoming unhandled rejections.
+  try {
+    if (action?.action_id === 'approve') {
+      const result = await slackApi('views.open', { trigger_id: payload.trigger_id, view: {
+        type: 'modal', callback_id: 'approve_modal', private_metadata: meta,
+        title: { type: 'plain_text', text: 'Approve budget' },
+        submit: { type: 'plain_text', text: 'Approve' },
+        blocks: [{ type: 'input', block_id: 'amt', label: { type: 'plain_text', text: 'Assigned amount (USD)' },
+          element: { type: 'number_input', is_decimal_allowed: false, action_id: 'value' } }],
+      } });
+      if (!result.ok) console.error(JSON.stringify({ fn: 'slack-interactions', op: 'views.open', error: result.error }));
+    } else if (action?.action_id === 'decline') {
+      const result = await slackApi('views.open', { trigger_id: payload.trigger_id, view: {
+        type: 'modal', callback_id: 'decline_modal', private_metadata: meta,
+        title: { type: 'plain_text', text: 'Decline budget' },
+        submit: { type: 'plain_text', text: 'Decline' },
+        blocks: [{ type: 'input', block_id: 'reason', label: { type: 'plain_text', text: 'Reason (required)' },
+          element: { type: 'plain_text_input', multiline: true, action_id: 'value' } }],
+      } });
+      if (!result.ok) console.error(JSON.stringify({ fn: 'slack-interactions', op: 'views.open', error: result.error }));
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ fn: 'slack-interactions', op: 'onAction-post-ack', error: String((e as Error)?.message ?? e) }));
   }
 }
 
@@ -78,8 +85,15 @@ async function onSubmit(payload: any, res: Response) {
     const amount = Number(view.state.values.amt.value.value);
     if (!Number.isFinite(amount)) { res.status(200).json({ response_action: 'errors', errors: { amt: 'Enter a number' } }); return; }
     // Mirror Phase 0 assignBudget: set the target, then flip approval state. Keep in sync with src/lib/db.ts.
-    await supa.from('event').update({ event_budget_target: amount }).eq('id', eventId);
-    await supa.from('budget_approval').upsert({ event_id: eventId, status: 'assigned', decided_via: 'slack', decider_ref: userId, decided_at: nowIso, decline_reason: null, updated_at: nowIso }, { onConflict: 'event_id' });
+    // Unlike the in-app setEventBudgetTarget, this path does not call graduateFromConcept — intentional for Phase 1 (a budgeted event is past Concept in practice).
+    const { error: eventUpdateErr } = await supa.from('event').update({ event_budget_target: amount }).eq('id', eventId);
+    if (eventUpdateErr) throw eventUpdateErr;
+    // CAS: only flip if still submitted — guards against concurrent double-clicks.
+    const { data: won, error: flipErr } = await supa.from('budget_approval')
+      .update({ status: 'assigned', decided_via: 'slack', decider_ref: userId, decided_at: nowIso, decline_reason: null, updated_at: nowIso })
+      .eq('event_id', eventId).eq('status', 'submitted').select('event_id');
+    if (flipErr) throw flipErr;
+    if (!won || won.length === 0) { res.status(200).send(''); await updateMessage(meta, 'Already resolved — no change.'); return; }
     res.status(200).send('');
     await updateMessage(meta, `Approved by <@${userId}> — $${amount} assigned.`);
     return;
@@ -87,8 +101,13 @@ async function onSubmit(payload: any, res: Response) {
   if (view.callback_id === 'decline_modal') {
     const reason = String(view.state.values.reason.value.value || '').trim();
     if (!reason) { res.status(200).json({ response_action: 'errors', errors: { reason: 'A reason is required' } }); return; }
-    // Mirror Phase 0 declineBudget: upsert declined state. Keep in sync with src/lib/db.ts.
-    await supa.from('budget_approval').upsert({ event_id: eventId, status: 'declined', decline_reason: reason, decided_via: 'slack', decider_ref: userId, decided_at: nowIso, updated_at: nowIso }, { onConflict: 'event_id' });
+    // Mirror Phase 0 declineBudget: flip declined state. Keep in sync with src/lib/db.ts.
+    // CAS: only flip if still submitted — guards against concurrent double-clicks.
+    const { data: won, error: flipErr } = await supa.from('budget_approval')
+      .update({ status: 'declined', decline_reason: reason, decided_via: 'slack', decider_ref: userId, decided_at: nowIso, updated_at: nowIso })
+      .eq('event_id', eventId).eq('status', 'submitted').select('event_id');
+    if (flipErr) throw flipErr;
+    if (!won || won.length === 0) { res.status(200).send(''); await updateMessage(meta, 'Already resolved — no change.'); return; }
     res.status(200).send('');
     await updateMessage(meta, `Declined by <@${userId}> — ${reason}`);
     return;
