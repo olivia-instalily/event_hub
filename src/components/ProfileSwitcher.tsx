@@ -5,11 +5,22 @@ import { useAuth } from "../lib/auth";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
 
 function Avatar({ p }: { p: Profile | null }) {
+  // Fall back to a stable per-name color when the profile has no color set
+  // (a signed-in SSO profile can arrive with color = "" or null, which `??`
+  // wouldn't catch — leaving the circle invisible).
+  const color = (p?.color?.trim() || (p ? colorFor(p.name) : "bg-gray-400"));
   return (
-    <span className={`w-7 h-7 rounded-full text-white text-[15px] font-medium flex items-center justify-center shrink-0 ${p?.color ?? "bg-gray-400"}`}>
+    <span className={`w-7 h-7 rounded-full text-white text-[15px] font-medium flex items-center justify-center shrink-0 ${color}`}>
       {p ? initials(p.name) : "?"}
     </span>
   );
+}
+
+// Deterministic color pick from a name, so the same person always gets the same circle.
+function colorFor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return PROFILE_COLORS[Math.abs(h) % PROFILE_COLORS.length];
 }
 
 export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => void }) {

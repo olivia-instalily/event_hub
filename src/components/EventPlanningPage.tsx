@@ -24,7 +24,7 @@ import {
   setSettleState, setEventVerdict, saveDebriefNotes, settleEvent, setRoleAssignments, type SettleState,
   listEventTags, type EventPersonTag,
   type PersonView, type PeopleStats,
-  setEventAgenda, setEventStaffRoles, setEventReflections,
+  setEventAgenda, setEventReflections,
   listEventUpdates, recordEventUpdate, detectUpdate, syncGmail, summarizeCorrespondence,
   ejectPage, regeneratePageDraft, setPageFields, promoteToLive, listDevelopers, addDeveloper, removeDeveloper,
   type EventUpdate, type DetectedUpdate, type PageState, type Developer,
@@ -48,6 +48,7 @@ import { FileDrop } from "./FileDrop";
 import { EventPageBuilder } from "./EventPageBuilder";
 import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
+import { StaffingEditor } from "./StaffingEditor";
 import { GCalSync } from "./GCalSync";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
@@ -3462,7 +3463,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
 
           {/* Below, full width. */}
           <OverviewDeliverables plan={plan} onOpen={onOpenDeliverable} />
-          <StringListEditor title="Staffing" initial={plan.staffRoles} onSave={(v) => setEventStaffRoles(eventId, v).catch(() => {})} variant="chips" addLabel="Add role" placeholder="Add a role (e.g. photographer)" empty="No roles yet." />
+          <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} />
           <div>
             <h3 className="text-lg font-medium mb-3">Auto-updates</h3>
             <AutoUpdates eventId={eventId} engagements={plan.engagements} onApplied={onApplied} />
