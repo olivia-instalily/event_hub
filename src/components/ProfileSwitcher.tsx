@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Plus, Check, Trash2, X, Pencil, HelpCircle } from "lucide-react";
+import { ChevronDown, Plus, Check, Trash2, X, Pencil, HelpCircle, LogOut } from "lucide-react";
 import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
 import { useAuth } from "../lib/auth";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
@@ -45,15 +45,23 @@ export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => voi
 
   if (locked) {
     return (
-      <div className="flex items-center gap-2">
-        <Avatar p={current} />
-        <span className="text-sm text-gray-700 max-w-[10rem] truncate">{current?.name ?? "…"}</span>
-        {onOpenTutorial && (
-          <button onClick={onOpenTutorial} className="text-sm text-gray-500 hover:text-gray-900 ml-1 inline-flex items-center gap-1">
-            <HelpCircle className="w-4 h-4" />
-          </button>
+      <div className="relative">
+        <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+          <Avatar p={current} />
+          <span className="text-sm text-gray-700 max-w-[10rem] truncate">{current?.name ?? "…"}</span>
+          <ChevronDown className="w-4 h-4 text-gray-400" />
+        </button>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+            <div className="absolute right-0 z-40 mt-1 w-48 bg-white border border-border rounded-lg shadow-lg p-1">
+              {onOpenTutorial && (
+                <button onClick={() => { setOpen(false); onOpenTutorial(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><HelpCircle className="w-4 h-4" /> Tutorial</button>
+              )}
+              <button onClick={() => { setOpen(false); void signOut(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><LogOut className="w-4 h-4" /> Sign out</button>
+            </div>
+          </>
         )}
-        <button onClick={() => void signOut()} className="text-sm text-gray-500 hover:text-gray-900 ml-1">Sign out</button>
       </div>
     );
   }
