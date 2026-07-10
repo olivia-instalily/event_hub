@@ -42,7 +42,7 @@ const SECTIONS: Section[] = [
     heading: "Planning the event",
     blurb: "Working an event through to the day-of.",
     items: [
-      { title: "Budget flow", when: "Scoping a target and tracking spend against it.", icon: DollarSign, length: "1:20", embedUrl: null, status: "soon" },
+      { title: "Budget flow", when: "Scoping a target and tracking spend against it.", icon: DollarSign, length: "1:20", embedUrl: "https://demo.arcade.software/vk5LA3UpZIH0yNDbKZlV?embed&embed_mobile=tab&embed_desktop=inline&show_copy_link=true", status: "ready" },
       { title: "Phases", when: "Laying out the timeline and its deliverables.", icon: GitBranch, length: "1:00", embedUrl: null, status: "soon" },
       { title: "Sync with Linear", when: "Mirroring deliverables into Linear as issues.", icon: Activity, length: "0:45", embedUrl: null, status: "soon" },
       { title: "Calendar", when: "Putting the event on the shared company calendar.", icon: CalendarDays, length: "0:40", embedUrl: null, status: "soon" },
