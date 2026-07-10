@@ -470,7 +470,7 @@ function LumaSwatch({ url, fallback }: { url: string | null; fallback: string })
 }
 
 // Month-grid calendar of the (filtered) events, placed on their dates. Click an event to open it.
-function CalendarView({ events, onOpen }: { events: EventListItem[]; onOpen: (id: string) => void }) {
+export function CalendarView({ events, onOpen }: { events: EventListItem[]; onOpen: (id: string) => void }) {
   const pad = (n: number) => String(n).padStart(2, "0");
   const now = new Date();
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() });

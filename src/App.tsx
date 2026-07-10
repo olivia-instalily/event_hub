@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Home, Calendar, Users, Briefcase, DollarSign, Plus, AlertCircle } from 'lucide-react';
+import { Home, Calendar, CalendarDays, Users, Briefcase, DollarSign, Plus, AlertCircle } from 'lucide-react';
 import { filesFromDrop } from './lib/drop';
 import { looksLikeBackfill } from './lib/backfill';
 import { parseDeepLink, setPendingScopingBudget } from './lib/deepLink';
@@ -11,6 +11,7 @@ import { PeoplePage } from './components/PeoplePage';
 import { VendorsPage } from './components/VendorsPage';
 import { BudgetPage } from './components/BudgetPage';
 import { TutorialPage } from './components/TutorialPage';
+import { CalendarPage } from './components/CalendarPage';
 import { ProfileProvider } from './lib/profile';
 import { ProfileSwitcher } from './components/ProfileSwitcher';
 import { Tabs, TabsList, TabsTrigger } from '@instalily/ui/tabs';
@@ -23,7 +24,7 @@ export default function Component() {
   // a cold click lands on that event. Parsed synchronously here so the initial nav state below
   // opens straight to the event (no flash of Home first).
   const [deepLink] = useState(() => (typeof window !== 'undefined' ? parseDeepLink(window.location.search) : null));
-  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget' | 'tutorial'>(deepLink ? 'events' : 'home');
+  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar' | 'tutorial'>(deepLink ? 'events' : 'home');
   // Lifted so navigation can leave the Events page and return to the same event detail.
   const [selectedEventId, setSelectedEventId] = useState<string | null>(deepLink?.eventId ?? null);
   // When set (and on the People page), People is scoped to this event with a Back button.
@@ -32,7 +33,7 @@ export default function Component() {
   const [eventsNonce, setEventsNonce] = useState(0);
   // Which page an open event was launched from, so its Back button returns there
   // (e.g. a Home todo → Back to Home, a Budget row → Back to Budget).
-  type Page = 'home' | 'events' | 'people' | 'vendors' | 'budget';
+  type Page = 'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar';
   const [eventOrigin, setEventOrigin] = useState<Page>('events');
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
@@ -107,7 +108,7 @@ export default function Component() {
     }
   };
 
-  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget' | 'tutorial') => {
+  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar' | 'tutorial') => {
     setActivePage(page);
     setPeopleEventFilter(null); // manual nav = unscoped
     if (page === 'events') {
@@ -172,6 +173,7 @@ export default function Component() {
                   <TabsTrigger value="people"><Users className="w-4 h-4" /> People</TabsTrigger>
                   <TabsTrigger value="vendors"><Briefcase className="w-4 h-4" /> Vendors</TabsTrigger>
                   <TabsTrigger value="budget"><DollarSign className="w-4 h-4" /> Budget</TabsTrigger>
+                  <TabsTrigger value="calendar"><CalendarDays className="w-4 h-4" /> Calendar</TabsTrigger>
                 </TabsList>
               </Tabs>
             </div>
@@ -198,6 +200,7 @@ export default function Component() {
         )}
         {activePage === 'vendors' && <VendorsPage />}
         {activePage === 'budget' && <BudgetPage onOpenEvent={(id) => openEvent(id, 'budget')} />}
+        {activePage === 'calendar' && <CalendarPage onOpenEvent={(id) => openEvent(id, 'calendar')} />}
         {activePage === 'tutorial' && <TutorialPage />}
       </div>
 
