@@ -33,8 +33,10 @@ function DeciderTag({ who }: { who: string | null }) {
   let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   const cls = hex ? "" : (raw || PROFILE_COLORS[Math.abs(h) % PROFILE_COLORS.length]);
   return (
-    <span title={`Set by ${name}`} className="font-normal text-gray-400 inline-flex items-center gap-1">· set by
+    <span className="group relative font-normal text-gray-400 inline-flex items-center gap-1">· set by
       <span style={hex ? { backgroundColor: raw } : undefined} className={`w-5 h-5 rounded-full text-white text-[11px] font-medium inline-flex items-center justify-center ${cls}`}>{initials(name)}</span>
+      {/* Custom hover tooltip (native title is unreliable) */}
+      <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1 hidden group-hover:block whitespace-nowrap rounded bg-gray-900 px-1.5 py-0.5 text-[11px] text-white shadow-lg z-50">{name}</span>
     </span>
   );
 }

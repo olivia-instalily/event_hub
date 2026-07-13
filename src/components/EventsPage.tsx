@@ -7,7 +7,7 @@ import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
 import { canonicalCity } from "../lib/cities";
-import { EventPlanningPage } from "./EventPlanningPage";
+import { EventPlanningPage, ingestEventDoc, completenessFields } from "./EventPlanningPage";
 import { PhaseRail, PHASE_COLORS } from "./TemplateView";
 import { unsupportedFileMessage } from "../lib/fileSupport";
 import { ConfirmModal } from "./Modal";
@@ -1894,6 +1894,35 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       .catch((e) => setError(e.message ?? String(e)))
       .finally(() => setLoading(false));
 
+  // Drop files/folders straight onto an event in the list to backfill/enrich it — no need to open it.
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [dropBusyId, setDropBusyId] = useState<string | null>(null);
+  const [dropToast, setDropToast] = useState<string | null>(null);
+  useEffect(() => { if (!dropToast) return; const t = setTimeout(() => setDropToast(null), 6000); return () => clearTimeout(t); }, [dropToast]);
+  const handleEventDrop = async (id: string, title: string, files: File[]) => {
+    if (!files.length) return;
+    setDropBusyId(id); setDropToast(null);
+    try {
+      const plan = await getEventPlanning(id);
+      if (!plan) { setDropToast(`${title}: couldn't load the event.`); return; }
+      const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
+      let applied = 0;
+      for (const file of files) {
+        try { const r = await ingestEventDoc(id, file, gapKeys); if (r.applied) applied++; } catch { /* skip one bad file */ }
+      }
+      setDropToast(`${title}: processed ${files.length} file${files.length === 1 ? "" : "s"}${applied ? `, ${applied} applied` : " — nothing new"}.`);
+      if (applied) await load();
+    } catch (e: any) { setDropToast(`${title}: ${e?.message ?? String(e)}`); }
+    finally { setDropBusyId(null); }
+  };
+  // Drop-zone props shared by cards and lines. stopPropagation keeps it from bubbling to the
+  // app-level global drop (which would create a NEW event instead of enriching this one).
+  const dropZone = (id: string, title: string) => ({
+    onDragOver: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(id); },
+    onDragLeave: (e: React.DragEvent) => { e.stopPropagation(); setDragOverId((cur) => (cur === id ? null : cur)); },
+    onDrop: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(null); void filesFromDrop(e.dataTransfer).then((fs) => { if (fs.length) void handleEventDrop(id, title, fs); }); },
+  });
+
   // Reload on mount and whenever we return from an event view, so edits made inside an
   // event (e.g. formats) are reflected on its card.
   useEffect(() => { void load(); }, [selectedEventId]);
@@ -2008,6 +2037,14 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   return (
     <div>
+      {/* Result of a drop-onto-a-line backfill */}
+      {dropToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[95] inline-flex items-center gap-2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg">
+          <span>{dropToast}</span>
+          <button onClick={() => setDropToast(null)} className="text-gray-400 hover:text-white" aria-label="Dismiss"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+
       {/* Status Tabs */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex gap-2">
@@ -2181,9 +2218,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           {filteredEvents.map((event) => (
             <div
               key={event.id}
-              className="group bg-card rounded-xl ring-1 ring-foreground/10 p-6 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex flex-col"
+              {...dropZone(event.id, event.title)}
+              className={`group relative bg-card rounded-xl p-6 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex flex-col ${dragOverId === event.id ? 'ring-2 ring-gray-400 bg-gray-50' : 'ring-1 ring-foreground/10'}`}
               onClick={() => setSelectedEventId(event.id)}
             >
+              {dropBusyId === event.id && <div className="absolute inset-0 z-10 bg-white/70 flex items-center justify-center text-sm text-gray-600">Processing dropped files…</div>}
               {event.coverImageUrl && (
                 // Fixed band (card size never changes); the image scales up on hover and is clipped
                 // by the card's overflow-hidden — expands without reflowing the row.
@@ -2334,7 +2373,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               {filteredEvents.map((event) => (
                 <TableRow
                   key={event.id}
-                  className="group/row cursor-pointer"
+                  {...dropZone(event.id, event.title)}
+                  className={`group/row cursor-pointer transition-colors ${dragOverId === event.id ? 'bg-gray-100' : ''} ${dropBusyId === event.id ? 'opacity-60 pointer-events-none' : ''}`}
                   onClick={() => setSelectedEventId(event.id)}
                 >
                   <TableCell className="px-4 py-4 whitespace-normal">

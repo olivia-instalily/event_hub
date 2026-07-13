@@ -1747,7 +1747,10 @@ export async function listEvents(): Promise<EventListItem[]> {
     .eq('status', 'Done')
     .or('title.ilike.%reflection%,title.ilike.%insight%');
   const complete = new Set((reflDone ?? []).map((d: any) => d.event_id));
-  for (const it of items) it.finalRecordComplete = complete.has(it.id);
+  // Only a PAST / wrapped event can be a "complete record." A planning event's reflections
+  // deliverable is auto-seeded and can get flipped to Done (e.g. a bulk "mark all done"), which
+  // would otherwise wrongly show the ✓ on an event you're still planning.
+  for (const it of items) it.finalRecordComplete = complete.has(it.id) && it.status === 'past';
   return items;
 }
 

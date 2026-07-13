@@ -178,7 +178,7 @@ export default function Component() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <button onClick={() => navTo('home')} className="text-xl mr-8 hover:opacity-70 transition-opacity" title="Home">EventHub</button>
+              <button onClick={() => navTo('home')} className="text-[1.35rem] mr-8 inline-flex items-center gap-2 leading-none hover:opacity-70 transition-opacity" title="Home"><img src="/logo.svg" alt="" className="h-7 w-auto" /> EventHub</button>
               {/* mr-8 mirrors EventHub's left gap, so an equal buffer is always kept to the
                   right of the menu — even when the window narrows it won't crowd the profile. */}
               <Tabs className="mr-8" value={activePage} onValueChange={(v) => navTo(v as typeof activePage)}>

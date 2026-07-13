@@ -1872,7 +1872,7 @@ function DayOfView({ plan, temporal }: { plan: EventPlanning; temporal: "past" |
 // The fields a complete record of an event's category carries — shared by the completeness panel
 // and the page-level "drop project knowledge" handler so both judge gaps identically. Budget/vendors
 // aren't load-bearing for community ("neither") events, so they're skipped there.
-function completenessFields(plan: EventPlanning): { key: string; label: string; present: boolean }[] {
+export function completenessFields(plan: EventPlanning): { key: string; label: string; present: boolean }[] {
   const focus = eventFocus(plan.tags, plan.format);
   return ([
     { key: "date", label: "Event date", present: !!plan.date },
@@ -1892,7 +1892,7 @@ function completenessFields(plan: EventPlanning): { key: string; label: string; 
 // A budget sheet records actuals + is kept as a linked source; any other doc is kept as project
 // context and run through the brief/debrief extractor to fill only the named gap fields (plus
 // always-additive lessons). Returns a human message + whether anything changed (→ caller reloads).
-async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): Promise<{ message: string; applied: boolean }> {
+export async function ingestEventDoc(eventId: string, file: File, gapKeys: string[]): Promise<{ message: string; applied: boolean }> {
   // Is this exact file already attached? Reuse its URL (so re-processed lines stay linked to the
   // same source for cascade-delete) and — for the LLM/prose path only — skip re-extraction. The
   // budget and run-of-show paths are idempotent, so we always let them RECONCILE: re-dropping a
@@ -3669,14 +3669,23 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   const [dropMsg, setDropMsg] = useState<string | null>(null);
   const dropDepth = useRef(0);
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
-  const onPageDrop = async (file: File) => {
-    if (!plan) return;
+  const onPageDrop = async (files: File[]) => {
+    if (!plan || !files.length) return;
     setDropBusy(true); setDropMsg(null);
     try {
       const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
-      const { message, applied } = await ingestEventDoc(eventId, file, gapKeys);
-      setDropMsg(message);
-      if (applied) setReload((r) => r + 1);
+      let anyApplied = false;
+      const msgs: string[] = [];
+      // A dropped folder can carry many files — process each into THIS event.
+      for (const file of files) {
+        try {
+          const { message, applied } = await ingestEventDoc(eventId, file, gapKeys);
+          msgs.push(message);
+          if (applied) anyApplied = true;
+        } catch (e: any) { msgs.push(`${file.name}: ${e?.message ?? String(e)}`); }
+      }
+      setDropMsg(files.length === 1 ? msgs[0] : `Processed ${files.length} files${anyApplied ? "" : " — nothing new applied"}.`);
+      if (anyApplied) setReload((r) => r + 1);
     } catch (e: any) { setDropMsg(e?.message ?? String(e)); }
     finally { setDropBusy(false); }
   };
@@ -3698,7 +3707,9 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
     onDragEnter: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); dropDepth.current++; setDropOver(true); },
     onDragOver: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); },
     onDragLeave: (e: React.DragEvent) => { e.stopPropagation(); dropDepth.current = Math.max(0, dropDepth.current - 1); if (dropDepth.current === 0) setDropOver(false); },
-    onDrop: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); dropDepth.current = 0; setDropOver(false); const f = e.dataTransfer.files?.[0]; if (f) void onPageDrop(f); },
+    // filesFromDrop descends into a dropped folder (falls back to the flat file list) — so folders
+    // work, not just single files.
+    onDrop: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); dropDepth.current = 0; setDropOver(false); void filesFromDrop(e.dataTransfer).then((fs) => { if (fs.length) void onPageDrop(fs); }); },
   };
 
   // Refetch when the tab changes (or an auto-update applies) so the Overview and each
@@ -3743,6 +3754,8 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   const headcount = plan.capacity != null ? `${plan.rsvp ?? 0} / ${plan.capacity} expected` : plan.rsvp != null ? `${plan.rsvp} expected` : "—";
   // One "wrapped" concept: a settled event (backfill / post-event tail) OR a macro_stage Wrapped one.
   const wrapped = plan.settleState === "settled" || plan.macroStage === "Wrapped";
+  // Past by date → the setup wizard (confirm essentials / review budget) is moot; go straight to the page.
+  const pastByDate = !!plan.date && plan.date < new Date().toISOString().slice(0, 10);
 
   // Re-run AI extraction on the attached materials and ADD anything missing (shared util; events
   // fill phases + deliverables). Non-destructive; refresh after so the view reflects new content.
@@ -3909,9 +3922,9 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
       </div>
 
       <div key={`${tab}-${version}`}>
-        {/* A reopened wrapped event skips the setup wizard — it already has a full history; land on
-            the actual page (Overview), not the from-scratch setup flow. */}
-        {tab === "overview" && ((plan.setupComplete || wrapped)
+        {/* Skip the setup wizard for anything that's already run: setup-complete, wrapped, or past by
+            date. Those land on the actual page (Overview), not the from-scratch setup flow. */}
+        {tab === "overview" && ((plan.setupComplete || wrapped || pastByDate)
           ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} />
           : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
