@@ -1693,6 +1693,29 @@ export async function listSlackChannels(): Promise<{ id: string; name: string }[
   }
 }
 
+// ── Tutorials (admin-editable) ───────────────────────────────────────────────
+// The whole tutorial structure lives as one JSON blob in app_setting.value (text). null = never
+// saved yet → the page falls back to its built-in default seed. `icon` is a lucide name (string),
+// mapped to a component in TutorialPage.
+export interface TutorialWalkthrough {
+  id: string; title: string; when: string; icon: string; length: string;
+  embedUrl: string | null; status: 'ready' | 'soon' | 'planned'; aspect?: string | null;
+}
+export interface TutorialSection { id: string; heading: string; blurb: string; items: TutorialWalkthrough[] }
+
+export async function getTutorials(): Promise<TutorialSection[] | null> {
+  const { data, error } = await supabase.from('app_setting').select('value').eq('key', 'tutorials').maybeSingle();
+  if (error) return null;
+  const v = (data as any)?.value;
+  if (!v) return null;
+  try { return (typeof v === 'string' ? JSON.parse(v) : v) as TutorialSection[]; } catch { return null; }
+}
+
+export async function saveTutorials(sections: TutorialSection[]): Promise<void> {
+  const { error } = await supabase.from('app_setting').upsert({ key: 'tutorials', value: JSON.stringify(sections) });
+  if (error) throw error;
+}
+
 /** Post a message to a Slack channel via the bot token (server-side). */
 export async function slackSend(channel: string, text: string): Promise<{ channel: string; ts: string }> {
   const { data, error } = await supabase.functions.invoke('slack-send', { body: { channel, text } });
