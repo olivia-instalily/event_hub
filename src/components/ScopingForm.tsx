@@ -11,20 +11,30 @@ import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
 const money = (n: number | null | undefined) =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 
-// Who returned the budget (from the Slack approval). Renders their profile circle — matched to a
-// known profile when the Slack name lines up, else a stable per-name color — with the full name on
-// hover. Nothing renders until a decision has come back.
+// Who returned the budget (from the Slack approval). The stored value is a Slack username (e.g.
+// "olivia"), which we reconcile to the real EventHub profile so the circle shows the profile's
+// initials/color and the hover shows the profile's full name. Falls back to the raw Slack name if
+// there's no match. Nothing renders until a decision has come back.
 function DeciderTag({ who }: { who: string | null }) {
   const { profiles } = useProfile();
   if (!who) return null;
-  const prof = profiles.find((p) => p.name.toLowerCase() === who.toLowerCase() || (p.email ?? "").toLowerCase() === who.toLowerCase());
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const w = norm(who);
+  // Candidate handles for a profile: full name, email local-part, and each name token.
+  const cands = (p: { name: string; email: string | null }) =>
+    [p.name, (p.email ?? "").split("@")[0] ?? "", ...p.name.split(/\s+/)].map(norm).filter(Boolean);
+  const prof =
+    profiles.find((p) => cands(p).includes(w)) ??
+    profiles.find((p) => cands(p).some((c) => c.length >= 3 && (c.startsWith(w) || w.startsWith(c))));
+
+  const name = prof?.name ?? who;
   const raw = (prof?.color ?? "").trim();
   const hex = raw.startsWith("#");
-  let h = 0; for (let i = 0; i < who.length; i++) h = (h * 31 + who.charCodeAt(i)) | 0;
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   const cls = hex ? "" : (raw || PROFILE_COLORS[Math.abs(h) % PROFILE_COLORS.length]);
   return (
-    <span className="font-normal text-gray-400 inline-flex items-center gap-1">· set by
-      <span title={prof?.name ?? who} style={hex ? { backgroundColor: raw } : undefined} className={`w-5 h-5 rounded-full text-white text-[11px] font-medium inline-flex items-center justify-center ${cls}`}>{initials(who)}</span>
+    <span title={`Set by ${name}`} className="font-normal text-gray-400 inline-flex items-center gap-1">· set by
+      <span style={hex ? { backgroundColor: raw } : undefined} className={`w-5 h-5 rounded-full text-white text-[11px] font-medium inline-flex items-center justify-center ${cls}`}>{initials(name)}</span>
     </span>
   );
 }
