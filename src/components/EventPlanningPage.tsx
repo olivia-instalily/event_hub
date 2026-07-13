@@ -930,11 +930,22 @@ function BudgetTracker({ budget, eventId, eventBudgetTarget = null, engagements 
   const [targetInput, setTargetInput] = useState(seedTarget != null ? String(seedTarget) : "");
   const [filter, setFilter] = useState<"all" | BudgetStatus>("all");
 
-  // Persist the assigned-budget seed so the rest of the app sees the same target.
+  // The approval (and thus the assigned budget) loads async, so `seedTarget` can become non-null
+  // AFTER mount. useState only seeds once, so sync the local target when the seed arrives — but
+  // never clobber a value the user has already typed here.
+  useEffect(() => {
+    if (seedTarget == null) return;
+    setTarget((cur) => (cur == null ? seedTarget : cur));
+    setTargetInput((cur) => (cur === "" ? String(seedTarget) : cur));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedTarget]);
+
+  // Persist the assigned-budget seed so the rest of the app sees the same target (fires once the
+  // approval loads, not only at mount).
   useEffect(() => {
     if (budget.targetAmount == null && assignedBudget != null) void setBudgetTarget(budget.id, assignedBudget);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [assignedBudget, budget.targetAmount, budget.id]);
   const [newLabel, setNewLabel] = useState("");
   const [newAmount, setNewAmount] = useState("");
   const [dropFile, setDropFile] = useState<File | null>(null);
@@ -3824,9 +3835,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             onChange={(patch) => setPlan((p) => (p ? { ...p, coverImageUrl: patch.cover, ...(patch.custom !== undefined ? { customCoverUrl: patch.custom } : {}) } : p))}
           />
         </div>
-        {plan.linearProjectUrl && (
-          <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} className="absolute bottom-4 right-6" />
-        )}
+        <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} className="absolute bottom-4 right-6" onSynced={() => setReload((x) => x + 1)} />
       </div>
 
       {wrapped && !reopened ? (

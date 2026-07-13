@@ -6,7 +6,9 @@ import { validateGoogleClaims, signSession, verifySession, parseCookies, type Go
 
 const COOKIE = "eh_session";
 const TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
-const PROFILE_COLORS = ["#3b82f6", "#10b981", "#8b5cf6", "#f43f5e", "#f59e0b", "#14b8a6", "#d946ef", "#6366f1"];
+// Tailwind bg-class strings (NOT hex) — the UI applies profile.color as a className (see
+// src/lib/profile.tsx PROFILE_COLORS). A hex value here renders an invisible avatar.
+const PROFILE_COLORS = ["bg-blue-500", "bg-emerald-500", "bg-violet-500", "bg-rose-500", "bg-amber-500", "bg-teal-500", "bg-fuchsia-500", "bg-indigo-500"];
 const oauthClient = new OAuth2Client();
 
 function clientId(): string {

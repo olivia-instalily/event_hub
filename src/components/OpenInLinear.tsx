@@ -5,14 +5,19 @@ import { checkLinearProject, syncEventToLinear } from "../lib/db";
 // "Open in Linear" that never leads to a dead page. A Linear project can be deleted out from under us
 // in Linear itself; before navigating, we verify it still exists. If it's gone, we say so and offer a
 // one-click re-sync that recreates the project and pushes every deliverable back into it.
+//
+// When the event isn't synced yet (projectUrl is null), the same button becomes "Sync to Linear":
+// one click creates the project, pushes every deliverable, and opens it.
 export function OpenInLinear({
   eventId,
   projectUrl,
   className,
+  onSynced,
 }: {
   eventId: string;
-  projectUrl: string;
+  projectUrl: string | null;
   className?: string;
+  onSynced?: (url: string | null) => void;
 }) {
   const [url, setUrl] = useState(projectUrl);
   const [checking, setChecking] = useState(false);
@@ -62,9 +67,38 @@ export function OpenInLinear({
     }
   };
 
+  // First-time sync from the corner button: create the project, push deliverables, open it.
+  const sync = async () => {
+    setErr(null); setMsg(null);
+    const tab = window.open("", "_blank");
+    setResyncing(true);
+    try {
+      const res = await syncEventToLinear(eventId);
+      setUrl(res.projectUrl ?? null);
+      setMsg(`Created in Linear — ${res.synced} ${res.synced === 1 ? "issue" : "issues"} synced`);
+      if (res.projectUrl && tab) tab.location.href = res.projectUrl; else tab?.close();
+      onSynced?.(res.projectUrl ?? null);
+    } catch (e: any) {
+      tab?.close();
+      setErr(e?.message ?? String(e));
+    } finally {
+      setResyncing(false);
+    }
+  };
+
   return (
     <div className={className}>
-      {deleted ? (
+      {!url ? (
+        <button
+          onClick={sync}
+          disabled={resyncing}
+          title="Create this event's project in Linear and push every deliverable into it"
+          className="inline-flex items-center gap-1 text-[15px] text-purple-600 hover:text-purple-800 disabled:opacity-60"
+        >
+          {resyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
+          Sync to Linear <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+      ) : deleted ? (
         <div className="flex flex-col items-end gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 shadow-sm">
           <div className="flex items-center gap-1.5 text-[13px] text-amber-800">
             <AlertTriangle className="w-4 h-4 shrink-0" /> This event's Linear project was deleted.

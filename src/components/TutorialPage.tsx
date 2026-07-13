@@ -23,6 +23,8 @@ interface Walkthrough {
   length: string;                // duration, e.g. "1:10"
   embedUrl: string | null;       // Arcade embed URL; null until recorded
   status: Status;
+  aspect?: string;               // CSS padding-bottom from Arcade's snippet (e.g. "calc(64.7368% + 41px)")
+                                 // when the demo isn't 16:9; omit to use the default 16:9 player box.
 }
 
 interface Section { heading: string; blurb: string; items: Walkthrough[] }
@@ -42,7 +44,7 @@ const SECTIONS: Section[] = [
     heading: "Planning the event",
     blurb: "Working an event through to the day-of.",
     items: [
-      { title: "Budget flow", when: "Scoping a target and tracking spend against it.", icon: DollarSign, length: "1:20", embedUrl: "https://demo.arcade.software/vk5LA3UpZIH0yNDbKZlV?embed&embed_mobile=tab&embed_desktop=inline&show_copy_link=true", status: "ready" },
+      { title: "Budget flow", when: "Scoping a target and tracking spend against it.", icon: DollarSign, length: "1:20", embedUrl: "https://demo.arcade.software/vk5LA3UpZIH0yNDbKZlV?embed&embed_mobile=tab&embed_desktop=inline&show_copy_link=true", status: "ready", aspect: "calc(64.7368% + 41px)" },
       { title: "Phases", when: "Laying out the timeline and its deliverables.", icon: GitBranch, length: "1:00", embedUrl: null, status: "soon" },
       { title: "Sync with Linear", when: "Mirroring deliverables into Linear as issues.", icon: Activity, length: "0:45", embedUrl: null, status: "soon" },
       { title: "Calendar", when: "Putting the event on the shared company calendar.", icon: CalendarDays, length: "0:40", embedUrl: null, status: "soon" },
@@ -98,13 +100,18 @@ export function TutorialPage() {
       <div className="grid gap-6 lg:grid-cols-[1.9fr_1fr]">
         {/* Player (left) */}
         <div>
-          <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-gray-900">
+          {/* Player box: 16:9 by default, or the demo's own aspect ratio (Arcade's padding-bottom)
+              when it isn't 16:9, so taller demos aren't cropped. */}
+          <div
+            className={`relative w-full overflow-hidden rounded-xl border border-border bg-gray-900 ${selected && isPlayable(selected) && selected.aspect ? "" : "aspect-video"}`}
+            style={selected && isPlayable(selected) && selected.aspect ? { paddingBottom: selected.aspect, height: 0 } : undefined}
+          >
             {selected && isPlayable(selected) ? (
               <iframe
                 key={selected.title}
                 src={selected.embedUrl!}
                 title={selected.title}
-                className="w-full h-full"
+                className="absolute inset-0 w-full h-full"
                 allowFullScreen
                 allow="clipboard-write; autoplay; fullscreen; picture-in-picture"
               />
