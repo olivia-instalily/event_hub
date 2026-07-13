@@ -8,6 +8,7 @@ import { type EventPlanning, type Deliverable, type OutreachTemplate, type Engag
 import { fundingFor } from "../lib/scoping";
 import { canonicalPhaseFor } from "../lib/phaseMerge";
 import { SourceMaterials } from "./SourceMaterials";
+import { regenerateFromMaterials } from "../lib/regenerate";
 import { LocationInput } from "./LocationEdit";
 import { TagStack } from "./TagStack";
 
@@ -56,8 +57,8 @@ const TABS: { key: Tab; label: string; icon: typeof BookOpen }[] = [
   { key: "outreach", label: "Outreach", icon: Mail },
 ];
 
-export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview }: {
-  plan: EventPlanning; eventId: string; onExit: () => void; onOpenEvent?: (id: string) => void; onReview?: () => void;
+export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview, onApplied }: {
+  plan: EventPlanning; eventId: string; onExit: () => void; onOpenEvent?: (id: string) => void; onReview?: () => void; onApplied?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("walkthrough");
   const [spinOpen, setSpinOpen] = useState(false);
@@ -171,7 +172,7 @@ export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview }: {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         {/* MAIN */}
         <div className="space-y-6 min-w-0">
-          <SourceMaterials items={plan.sourceMaterials} />
+          <SourceMaterials items={plan.sourceMaterials} onRegenerate={async () => { const msg = await regenerateFromMaterials(plan, { template: true }); onApplied?.(); return msg; }} />
           {/* Header — pattern facts, not instance facts */}
           <div className="bg-white rounded-2xl border border-gray-200 p-6">
             <div className="flex items-center gap-2 mb-3">

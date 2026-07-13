@@ -6,9 +6,28 @@ import { fundingFor, leadTimeCheck, buildScopingSummary, type ScopingForm as Sco
 import { buildEventDeepLink } from "../lib/deepLink";
 import { postApprovalRequest, submitBudgetApproval, migrateScopingApprovalIfNeeded, getBudgetApproval, assignBudget, reopenBudgetApproval, listSlackChannels, type BudgetApproval, type EventPlanning } from "../lib/db";
 import { Button } from "@instalily/ui/button";
+import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
 
 const money = (n: number | null | undefined) =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+
+// Who returned the budget (from the Slack approval). Renders their profile circle — matched to a
+// known profile when the Slack name lines up, else a stable per-name color — with the full name on
+// hover. Nothing renders until a decision has come back.
+function DeciderTag({ who }: { who: string | null }) {
+  const { profiles } = useProfile();
+  if (!who) return null;
+  const prof = profiles.find((p) => p.name.toLowerCase() === who.toLowerCase() || (p.email ?? "").toLowerCase() === who.toLowerCase());
+  const raw = (prof?.color ?? "").trim();
+  const hex = raw.startsWith("#");
+  let h = 0; for (let i = 0; i < who.length; i++) h = (h * 31 + who.charCodeAt(i)) | 0;
+  const cls = hex ? "" : (raw || PROFILE_COLORS[Math.abs(h) % PROFILE_COLORS.length]);
+  return (
+    <span className="font-normal text-gray-400 inline-flex items-center gap-1">· set by
+      <span title={prof?.name ?? who} style={hex ? { backgroundColor: raw } : undefined} className={`w-5 h-5 rounded-full text-white text-[11px] font-medium inline-flex items-center justify-center ${cls}`}>{initials(who)}</span>
+    </span>
+  );
+}
 
 // Default Slack budget channel the scoping summary posts to (overridable per-send).
 const DEFAULT_SLACK_CHANNEL = "C0ASQSS0CQP";
@@ -233,7 +252,7 @@ export function ScopingForm({ plan, scoping, roughTotal, onChange, onClose }: {
         {/* Returned budget + comment — locks as the target once set */}
         {submitted && (
           <div id="scoping-budget-return" className="mt-4 rounded-lg border border-gray-300 p-3">
-            <p className="text-sm font-medium mb-1 inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-gray-400" /> Returned budget <span className="text-gray-400 font-normal">· Karim / admin</span></p>
+            <p className="text-sm font-medium mb-1 inline-flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-gray-400" /> Returned budget <DeciderTag who={approval?.deciderRef ?? null} /></p>
             {locked ? (
               <>
                 <p className="text-lg">{money(plan.eventBudgetTarget)} <span className="text-[15px] text-gray-400">— locked target, owner can't edit</span></p>

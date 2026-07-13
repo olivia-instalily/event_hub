@@ -24,7 +24,7 @@ import {
   setSettleState, setEventVerdict, saveDebriefNotes, settleEvent, setRoleAssignments, type SettleState,
   listEventTags, type EventPersonTag,
   type PersonView, type PeopleStats,
-  setEventAgenda, setEventReflections, setEventPattern, extractBrief,
+  setEventAgenda, setEventReflections,
   listEventUpdates, recordEventUpdate, detectUpdate, syncGmail, summarizeCorrespondence,
   ejectPage, regeneratePageDraft, setPageFields, promoteToLive, listDevelopers, addDeveloper, removeDeveloper,
   type EventUpdate, type DetectedUpdate, type PageState, type Developer,
@@ -49,6 +49,7 @@ import { EventPageBuilder } from "./EventPageBuilder";
 import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
 import { StaffingEditor } from "./StaffingEditor";
+import { regenerateFromMaterials as runRegenerate } from "../lib/regenerate";
 import { GCalSync } from "./GCalSync";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
@@ -3097,7 +3098,7 @@ function BudgetCard({ plan, scoping, roughTotal, onOpenScoping, onOpenBudget }: 
             {hasAssigned ? (
               <p className="text-sm mt-0.5">{money(assigned)} <span className="text-gray-400">· set by {approval?.deciderRef ? `@${approval.deciderRef}` : "admin"}</span></p>
             ) : (
-              <p className="text-[15px] text-gray-400 mt-0.5">{submitted ? "Awaiting Karim's assignment." : "Pending scoping submission."}</p>
+              <p className="text-[15px] text-gray-400 mt-0.5">{submitted ? "Awaiting budget assignment." : "Pending scoping submission."}</p>
             )}
             {approval?.status === "declined" && approval.declineReason && <p className="text-[15px] text-gray-500 mt-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 inline-flex items-start gap-1"><MessageSquare className="w-3 h-3 mt-0.5 shrink-0" /> &ldquo;{approval.declineReason}&rdquo;</p>}
           </div>
@@ -3737,74 +3738,18 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   if (!plan) return <div>{back}<p className="text-gray-500 py-12 text-center">Loading planning view…</p></div>;
 
   // A template renders in pattern mode (walkthrough-forward, no live/ops affordances).
-  if (plan.isTemplate) return <TemplateView plan={plan} eventId={eventId} onExit={onBack} onOpenEvent={onOpenEvent} onReview={onReview} />;
+  if (plan.isTemplate) return <TemplateView key={version} plan={plan} eventId={eventId} onExit={onBack} onOpenEvent={onOpenEvent} onReview={onReview} onApplied={() => setReload((r) => r + 1)} />;
 
   const headcount = plan.capacity != null ? `${plan.rsvp ?? 0} / ${plan.capacity} expected` : plan.rsvp != null ? `${plan.rsvp} expected` : "—";
   // One "wrapped" concept: a settled event (backfill / post-event tail) OR a macro_stage Wrapped one.
   const wrapped = plan.settleState === "settled" || plan.macroStage === "Wrapped";
 
-  // Re-run AI extraction on the attached source materials and ADD anything missing (phases +
-  // deliverables). Non-destructive: never removes or overwrites existing phases/deliverables, so a
-  // sparse first pass can be topped up without losing edits. Only reads text-based materials.
+  // Re-run AI extraction on the attached materials and ADD anything missing (shared util; events
+  // fill phases + deliverables). Non-destructive; refresh after so the view reflects new content.
   const regenerateFromMaterials = async (): Promise<string> => {
-    // Re-read every material we CAN parse — text directly, PDFs via pdf.js, spreadsheets via
-    // SheetJS — and fold them all into one brief. Word/PowerPoint/Numbers/images have no
-    // extractable text (rejected even at drop time), so they're counted as skipped.
-    const texts: string[] = [];
-    let skipped = 0;
-    for (const m of plan.sourceMaterials) {
-      const n = m.name.toLowerCase();
-      const t = (m.type || "").toLowerCase();
-      const isWorkbook = /\.(xlsx|xls|xlsm|ods)$/.test(n);
-      const isPdf = /\.pdf$/.test(n) || t.includes("pdf");
-      const isTextual = t.startsWith("text") || /\.(md|markdown|txt|csv|tsv|json|log|ya?ml)$/.test(n);
-      if (!isWorkbook && !isPdf && !isTextual) { skipped++; continue; }
-      try {
-        const blob = await fetch(m.url).then((r) => r.blob());
-        const file = new File([blob], m.name, { type: m.type || blob.type });
-        let text = "";
-        if (isWorkbook) text = await (await import("../lib/workbook")).readWorkbookAsText(file);
-        else if (isPdf) text = await (await import("../lib/pdfText")).readPdfText(file);
-        else text = await file.text();
-        if (text.trim()) texts.push(`# ${m.name}\n${text}`); else skipped++;
-      } catch { skipped++; }
-    }
-    if (!texts.length) return skipped ? `Couldn't read any of the ${skipped} attached file${skipped === 1 ? "" : "s"}.` : "No materials to regenerate from.";
-    const ex = await extractBrief(texts.join("\n\n"));
-
-    // Phases: append any new names (by case-insensitive name) after the current highest order.
-    const existing = new Set(plan.phases.map((p) => p.name.toLowerCase()));
-    const exPhaseNames = [...ex.phases];
-    for (const d of ex.deliverables) if (d.phase && !exPhaseNames.includes(d.phase)) exPhaseNames.push(d.phase);
-    const newPhases = exPhaseNames.filter((n) => n && !existing.has(n.toLowerCase()));
-    let maxOrder = plan.phases.reduce((mx, p) => Math.max(mx, p.order), -1);
-    if (newPhases.length) {
-      const merged = [...plan.phases.map((p) => ({ name: p.name, order: p.order })), ...newPhases.map((n) => ({ name: n, order: ++maxOrder }))];
-      await setEventPattern(eventId, { phases: merged });
-    }
-
-    // Deliverables: add any not already present (by phase|title).
-    const seen = new Set(plan.deliverables.map((d) => `${(d.phase ?? "").toLowerCase()}|${d.title.trim().toLowerCase()}`));
-    const firstPhase = ex.phases[0] ?? plan.phases[0]?.name ?? "Planning";
-    let addedDeliverables = 0;
-    for (const d of ex.deliverables) {
-      const title = d.title?.trim();
-      if (!title) continue;
-      const phase = d.phase || firstPhase;
-      const key = `${phase.toLowerCase()}|${title.toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      await addDeliverable(eventId, { title, phase, ownerRole: null, dueDate: null, offsetStart: d.offsetStart ?? null, offsetEnd: d.offsetEnd ?? null }).catch(() => {});
-      addedDeliverables++;
-    }
-
+    const msg = await runRegenerate(plan, { template: false });
     setReload((r) => r + 1);
-    const skippedNote = skipped ? ` (${skipped} file${skipped === 1 ? "" : "s"} couldn't be read.)` : "";
-    if (!newPhases.length && !addedDeliverables) return `Up to date — nothing new to add.${skippedNote}`;
-    const parts: string[] = [];
-    if (newPhases.length) parts.push(`${newPhases.length} phase${newPhases.length === 1 ? "" : "s"}`);
-    if (addedDeliverables) parts.push(`${addedDeliverables} deliverable${addedDeliverables === 1 ? "" : "s"}`);
-    return `Added ${parts.join(" · ")}.${skippedNote}`;
+    return msg;
   };
 
   return (
@@ -3943,7 +3888,15 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         </>
       ) : (
       <>
-      {reopened && <div className="mb-3"><button onClick={() => setReopened(false)} className="text-[13px] text-gray-500 hover:text-gray-900">← Back to wrapped view</button></div>}
+      {/* Close workspace — return to the wrapped/closed view. Only for events that were closed at
+          some point (wrapped) and are currently reopened; available at any time while reopened. */}
+      {wrapped && reopened && (
+        <div className="mb-3 flex justify-end">
+          <button onClick={() => setReopened(false)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50">
+            <Lock className="w-4 h-4" /> Close workspace
+          </button>
+        </div>
+      )}
       {/* Tabs — brand Tabs (line variant = underline-on-active). Content switch stays below. */}
       <div className="border-b border-gray-200 mb-6">
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
@@ -3956,7 +3909,9 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
       </div>
 
       <div key={`${tab}-${version}`}>
-        {tab === "overview" && (plan.setupComplete
+        {/* A reopened wrapped event skips the setup wizard — it already has a full history; land on
+            the actual page (Overview), not the from-scratch setup flow. */}
+        {tab === "overview" && ((plan.setupComplete || wrapped)
           ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} />
           : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}

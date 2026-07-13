@@ -1597,7 +1597,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
                 <h3 className="font-medium">Budget <span className="text-gray-400 font-normal text-sm">· rough cost (scoping input)</span></h3>
                 {ingest.budgetSource && <span className={`text-[13px] uppercase tracking-wide rounded px-1.5 py-0.5 ${ingest.budgetLowConfidence ? 'bg-amber-100 text-amber-700' : 'text-gray-400 bg-gray-100'}`}>{ingest.budgetSource === 'file' ? 'from budget file' : 'from brief · low confidence'}</span>}
               </div>
-              <p className="text-[15px] text-gray-400 mb-3">Not the assigned budget — Karim's locked target is set later in the scoping flow.</p>
+              <p className="text-[15px] text-gray-400 mb-3">Not the assigned budget — the locked target is set later in the scoping flow.</p>
 
               {ingest.conflict ? (
                 <div ref={conflictRef} className="scroll-mt-4 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
