@@ -662,7 +662,7 @@ function TagFilter({ value, onChange, className = "" }: { value: string; onChang
   );
 }
 
-export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview, onBackfill }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void; onBackfill: (text?: string, files?: File[]) => void }) {
+export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview, onBackfill, initialTemplate = false }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void; onBackfill: (text?: string, files?: File[]) => void; initialTemplate?: boolean }) {
   // Files dropped on the page open the modal already processing — the first paint is the
   // "reading…" state. A resumed review (re-opened after generating) lands straight back on
   // the review screen with the cached extraction, no reprocessing.
@@ -874,7 +874,9 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
     // Template vs event: the extractor's specificity decides when present (a pattern/how-to
     // with no concrete date → template); else fall back to no-date / many-[brackets].
     const bracketCount = briefs[0]?.text ? (briefs[0].text!.match(/\[[^\]]+\]/g) || []).length : 0;
-    const isTemplate = ex ? (ex.specificity === "template" || !fields.date) : (!fields.date || bracketCount >= 3);
+    // initialTemplate: the drop chooser's "Template only" option forces template mode regardless of
+    // what the content looks like (a playbook often reads like a dated brief).
+    const isTemplate = initialTemplate || (ex ? (ex.specificity === "template" || !fields.date) : (!fields.date || bracketCount >= 3));
 
     // Phases + deliverables: from the LLM (definite action items, untimed allowed), else regex.
     let phases: IngestPhase[];
@@ -1803,14 +1805,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   const [bookmarkedEvents, setBookmarkedEvents] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines' | 'calendar'>('cards');
-  // Status is a multi-select: all three on by default, click one to toggle it off. The "All" button
-  // (furthest left) re-selects all three. Templates is a separate exclusive view (a different entity list).
+  // Status is single-select: "All" (all three) OR exactly one of future / in-process / past — kept
+  // as a Set so the filtering logic below stays the same. Templates is a separate exclusive view.
   const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
   const [templatesView, setTemplatesView] = useState(false);
-  const toggleStatus = (s: EventStatus) => {
-    setTemplatesView(false);
-    setSelectedStatuses((prev) => { const next = new Set(prev); if (next.has(s)) next.delete(s); else next.add(s); return next; });
-  };
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
@@ -2025,21 +2023,25 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           >
             All
           </button>
-          {(['future', 'in-process', 'past'] as EventStatus[]).map((s) => (
-            <button
-              key={s}
-              onClick={() => toggleStatus(s)}
-              aria-pressed={!templatesView && selectedStatuses.has(s)}
-              title={!templatesView && selectedStatuses.has(s) ? 'Showing — click to hide' : 'Hidden — click to show'}
-              className={`px-2 py-1 rounded-lg border transition-all ${
-                !templatesView && selectedStatuses.has(s)
-                  ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
-                  : 'bg-white border-border text-gray-700 hover:bg-gray-50'
-              }`}
-            >
-              {s === 'future' ? 'Future' : s === 'in-process' ? 'In-Process' : 'Past'}
-            </button>
-          ))}
+          {(['future', 'in-process', 'past'] as EventStatus[]).map((s) => {
+            const active = !templatesView && selectedStatuses.size === 1 && selectedStatuses.has(s);
+            const label = s === 'future' ? 'Future' : s === 'in-process' ? 'In-Process' : 'Past';
+            return (
+              <button
+                key={s}
+                onClick={() => { setTemplatesView(false); setSelectedStatuses(new Set([s])); }}
+                aria-pressed={active}
+                title={`Show only ${label}`}
+                className={`px-2 py-1 rounded-lg border transition-all ${
+                  active
+                    ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                    : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
           <button
             onClick={() => setTemplatesView(true)}
             aria-pressed={templatesView}

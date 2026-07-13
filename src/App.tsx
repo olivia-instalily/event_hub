@@ -48,6 +48,7 @@ export default function Component() {
   // never switches to Events mid-drop. events feeds the modal's dedup + template matching.
   const [createOpen, setCreateOpen] = useState(false);
   const [createFiles, setCreateFiles] = useState<File[] | null>(null);
+  const [createAsTemplate, setCreateAsTemplate] = useState(false); // drop chooser "Template only" → force template mode
   const [pastChooserFiles, setPastChooserFiles] = useState<File[] | null>(null);
   const [backfill, setBackfill] = useState<{ text?: string; files: File[] | null } | null>(null);
   const [modalEvents, setModalEvents] = useState<EventListItem[]>([]);
@@ -69,10 +70,11 @@ export default function Component() {
     // Open the flow as an overlay on the CURRENT page — no setActivePage, so the background you
     // dropped onto (Home, Budget, …) stays put. suspect → ask backfill-vs-create first.
     if (suspect) setPastChooserFiles(files);
-    else { setCreateFiles(files); setCreateOpen(true); }
+    else { setCreateAsTemplate(false); setCreateFiles(files); setCreateOpen(true); }
   };
-  // Backfill-vs-create resolution for a past-looking drop (mirrors EventsPage's chooser).
-  const chooseInProcess = () => { const f = pastChooserFiles; setPastChooserFiles(null); setCreateFiles(f); setCreateOpen(true); };
+  // "Looks like ___" chooser resolution for a drop that reads like a past event or a playbook.
+  const chooseInProcess = () => { const f = pastChooserFiles; setPastChooserFiles(null); setCreateAsTemplate(false); setCreateFiles(f); setCreateOpen(true); };
+  const chooseTemplate = () => { const f = pastChooserFiles; setPastChooserFiles(null); setCreateAsTemplate(true); setCreateFiles(f); setCreateOpen(true); };
   const chooseBackfill = async () => {
     const files = pastChooserFiles ?? []; setPastChooserFiles(null);
     const c = await Promise.all(files.map(classifyDropFile));
@@ -126,6 +128,7 @@ export default function Component() {
   // so the background stays where you were. Navigation to the new event happens only on create.
   const createEvent = async () => {
     await loadModalEvents();
+    setCreateAsTemplate(false);
     setCreateFiles(null);
     setCreateOpen(true);
   };
@@ -223,11 +226,12 @@ export default function Component() {
       {pastChooserFiles && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setPastChooserFiles(null)}>
           <div className="bg-white rounded-2xl border border-border max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2 mb-1"><AlertCircle className="w-5 h-5 text-amber-600" /><h2 className="text-lg">Looks like a backfilled event</h2></div>
-            <p className="text-sm text-gray-600 mb-5">This reads like a past event (a debrief/recap). Backfilling records what happened and updates the template. Is this a past event, or one you're still planning?</p>
+            <div className="flex items-center gap-2 mb-1"><AlertCircle className="w-5 h-5 text-amber-600" /><h2 className="text-lg">What should I make from this?</h2></div>
+            <p className="text-sm text-gray-600 mb-5">This reads like a past event or a reusable playbook. Pick one — a template is a reusable Event Type with no date, no event created.</p>
             <div className="flex flex-col gap-2">
               <button onClick={chooseBackfill} className="w-full px-3 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-black text-left">Past event — backfill it <span className="text-gray-300">· → wrapped record</span></button>
-              <button onClick={chooseInProcess} className="w-full px-3 py-2 rounded-lg border border-border bg-white text-sm text-gray-800 hover:bg-gray-50 text-left">In-process / upcoming — create it <span className="text-gray-400">· → plan it</span></button>
+              <button onClick={chooseInProcess} className="w-full px-3 py-2 rounded-lg border border-border bg-white text-sm text-gray-800 hover:bg-gray-50 text-left">Upcoming event — plan it <span className="text-gray-400">· → planning event</span></button>
+              <button onClick={chooseTemplate} className="w-full px-3 py-2 rounded-lg border border-border bg-white text-sm text-gray-800 hover:bg-gray-50 text-left">Template only — no event <span className="text-gray-400">· → reusable Event Type</span></button>
               <button onClick={() => setPastChooserFiles(null)} className="text-sm text-gray-500 hover:text-gray-800 mt-1">Cancel</button>
             </div>
           </div>
@@ -238,10 +242,11 @@ export default function Component() {
         <CreateEventModal
           events={modalEvents}
           initialFiles={createFiles}
+          initialTemplate={createAsTemplate}
           onFilesConsumed={() => setCreateFiles(null)}
-          onClose={() => { setCreateOpen(false); setCreateFiles(null); }}
-          onBackfill={(text, files) => { setCreateOpen(false); setCreateFiles(null); setBackfill({ text, files: files ?? null }); }}
-          onCreated={(id) => { setCreateOpen(false); setCreateFiles(null); openEvent(id, 'events'); }}
+          onClose={() => { setCreateOpen(false); setCreateFiles(null); setCreateAsTemplate(false); }}
+          onBackfill={(text, files) => { setCreateOpen(false); setCreateFiles(null); setCreateAsTemplate(false); setBackfill({ text, files: files ?? null }); }}
+          onCreated={(id) => { setCreateOpen(false); setCreateFiles(null); setCreateAsTemplate(false); openEvent(id, 'events'); }}
         />
       )}
 
