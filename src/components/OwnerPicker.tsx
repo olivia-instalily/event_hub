@@ -32,7 +32,7 @@ export function OwnerPicker({ eventId, owners, onChange }: {
   owners: Owner[];
   onChange: (owners: Owner[]) => void;
 }) {
-  const { profiles } = useProfile();
+  const { profiles, refresh } = useProfile();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -48,6 +48,9 @@ export function OwnerPicker({ eventId, owners, onChange }: {
   const filtered = profiles.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.email ?? "").toLowerCase().includes(q));
 
   useLayoutEffect(() => { if (open) setPos(computePos(btnRef.current, 224, 320)); }, [open]);
+  // Re-pull profiles each time the picker opens so a teammate who signed in (SSO auto-creates their
+  // profile) shows up without a full page reload.
+  useEffect(() => { if (open) void refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
   useEffect(() => {
     if (!open) return;
     const reposition = () => setPos(computePos(btnRef.current, 224, 320));

@@ -562,6 +562,10 @@ export async function updateProfile(id: string, fields: { name?: string; email?:
   const { error } = await supabase.from('profile').update(patch).eq('id', id);
   if (error) throw error;
 }
+export async function setProfileAdmin(id: string, isAdmin: boolean): Promise<void> {
+  const { error } = await supabase.from('profile').update({ is_admin: isAdmin }).eq('id', id);
+  if (error) throw error;
+}
 export async function deleteProfile(id: string): Promise<void> {
   const { error } = await supabase.from('profile').delete().eq('id', id);
   if (error) throw error;
@@ -1186,13 +1190,23 @@ export interface ExtractedBrief {
  *  the result feeds a TEMPLATE (e.g. backfill) — forces phase-by-function + name generalization even
  *  for a dated brief. */
 export async function extractBrief(text: string, opts?: { templateMode?: boolean }): Promise<ExtractedBrief> {
-  const { data, error } = await supabase.functions.invoke('extract-brief', { body: { text, templateMode: !!opts?.templateMode } });
-  if (error) {
-    const msg = (data as any)?.error ?? error.message ?? String(error);
-    throw new Error(msg);
+  // Retry once on failure. A single transient blip (Anthropic 429/529, a slow call, a malformed
+  // JSON response) would otherwise throw → the caller silently falls back to the regex parser,
+  // which yields drastically less (≈1 phase, a fraction of the deliverables). One retry turns most
+  // of those blips into a clean extraction.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const { data, error } = await supabase.functions.invoke('extract-brief', { body: { text, templateMode: !!opts?.templateMode } });
+      if (error) throw new Error((data as any)?.error ?? error.message ?? String(error));
+      if ((data as any)?.error) throw new Error((data as any).error);
+      return data as ExtractedBrief;
+    } catch (e) {
+      lastErr = e;
+    }
   }
-  if ((data as any)?.error) throw new Error((data as any).error);
-  return data as ExtractedBrief;
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 // A debrief is a DIFFERENT document than a brief — backward-looking. Its own extractor returns

@@ -9,6 +9,7 @@ import { LocationInput } from "./LocationEdit";
 import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage } from "./EventPlanningPage";
 import { PhaseRail, PHASE_COLORS } from "./TemplateView";
+import { unsupportedFileMessage } from "../lib/fileSupport";
 import { ConfirmModal } from "./Modal";
 import { BackfillModal } from "./BackfillModal";
 import { TAG_CATEGORIES, tagColor, tagBadgeVariant } from "../lib/tags";
@@ -767,8 +768,17 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
   const processDrop = async (files: File[]) => {
     setMode('processing');
     const classified = await Promise.all(files.map(classifyDropFile));
-    // Every dropped file, kept to attach to the event for reference.
-    const materials = classified.filter((c) => c.file).map((c) => ({ name: c.name, file: c.file as File, kind: c.kind }));
+    // Unsupported binaries (Word/PowerPoint/Numbers/…) can't be read as text — flag each with the
+    // format-specific export hint and leave it out (same guidance as dropping onto an event).
+    const unsupportedNames = new Set<string>();
+    const unsupportedMsgs = new Set<string>();
+    for (const c of classified) {
+      if (!c.file) continue;
+      const msg = unsupportedFileMessage(c.file);
+      if (msg) { unsupportedNames.add(c.name); unsupportedMsgs.add(msg); }
+    }
+    // Every dropped (readable) file, kept to attach to the event for reference.
+    const materials = classified.filter((c) => c.file && !unsupportedNames.has(c.name)).map((c) => ({ name: c.name, file: c.file as File, kind: c.kind }));
     const briefs = classified.filter((c) => c.kind === "brief");
     const budgets = classified.filter((c) => c.kind === "budget");
     const covers = classified.filter((c) => c.kind === "cover");
@@ -776,8 +786,9 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
     // Nothing is dropped silently: unknowns AND the unused extras of any multi-file type
     // (we only consume the first brief/budget/cover) land in the unsorted pile.
     const extras = [...briefs.slice(1), ...budgets.slice(1), ...covers.slice(1)].map((c) => c.name);
-    const unsorted = [...classified.filter((c) => c.kind === "unknown").map((c) => c.name), ...extras];
+    const unsorted = [...classified.filter((c) => c.kind === "unknown" && !unsupportedNames.has(c.name)).map((c) => c.name), ...extras];
     const warnings: string[] = [];
+    for (const m of unsupportedMsgs) warnings.push(m); // format-specific "export as …" guidance
     if (briefs.length > 1) warnings.push(`${briefs.length} files looked like briefs — using the first; the rest are in unsorted.`);
     if (budgets.length > 1) warnings.push(`${budgets.length} files looked like budgets — using the first; the rest are in unsorted.`);
     if (covers.length > 1) warnings.push(`${covers.length} images dropped — using the first as the cover; the rest are in unsorted.`);

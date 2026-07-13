@@ -24,7 +24,7 @@ import {
   setSettleState, setEventVerdict, saveDebriefNotes, settleEvent, setRoleAssignments, type SettleState,
   listEventTags, type EventPersonTag,
   type PersonView, type PeopleStats,
-  setEventAgenda, setEventReflections,
+  setEventAgenda, setEventReflections, setEventPattern, extractBrief,
   listEventUpdates, recordEventUpdate, detectUpdate, syncGmail, summarizeCorrespondence,
   ejectPage, regeneratePageDraft, setPageFields, promoteToLive, listDevelopers, addDeveloper, removeDeveloper,
   type EventUpdate, type DetectedUpdate, type PageState, type Developer,
@@ -3743,6 +3743,70 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   // One "wrapped" concept: a settled event (backfill / post-event tail) OR a macro_stage Wrapped one.
   const wrapped = plan.settleState === "settled" || plan.macroStage === "Wrapped";
 
+  // Re-run AI extraction on the attached source materials and ADD anything missing (phases +
+  // deliverables). Non-destructive: never removes or overwrites existing phases/deliverables, so a
+  // sparse first pass can be topped up without losing edits. Only reads text-based materials.
+  const regenerateFromMaterials = async (): Promise<string> => {
+    // Re-read every material we CAN parse — text directly, PDFs via pdf.js, spreadsheets via
+    // SheetJS — and fold them all into one brief. Word/PowerPoint/Numbers/images have no
+    // extractable text (rejected even at drop time), so they're counted as skipped.
+    const texts: string[] = [];
+    let skipped = 0;
+    for (const m of plan.sourceMaterials) {
+      const n = m.name.toLowerCase();
+      const t = (m.type || "").toLowerCase();
+      const isWorkbook = /\.(xlsx|xls|xlsm|ods)$/.test(n);
+      const isPdf = /\.pdf$/.test(n) || t.includes("pdf");
+      const isTextual = t.startsWith("text") || /\.(md|markdown|txt|csv|tsv|json|log|ya?ml)$/.test(n);
+      if (!isWorkbook && !isPdf && !isTextual) { skipped++; continue; }
+      try {
+        const blob = await fetch(m.url).then((r) => r.blob());
+        const file = new File([blob], m.name, { type: m.type || blob.type });
+        let text = "";
+        if (isWorkbook) text = await (await import("../lib/workbook")).readWorkbookAsText(file);
+        else if (isPdf) text = await (await import("../lib/pdfText")).readPdfText(file);
+        else text = await file.text();
+        if (text.trim()) texts.push(`# ${m.name}\n${text}`); else skipped++;
+      } catch { skipped++; }
+    }
+    if (!texts.length) return skipped ? `Couldn't read any of the ${skipped} attached file${skipped === 1 ? "" : "s"}.` : "No materials to regenerate from.";
+    const ex = await extractBrief(texts.join("\n\n"));
+
+    // Phases: append any new names (by case-insensitive name) after the current highest order.
+    const existing = new Set(plan.phases.map((p) => p.name.toLowerCase()));
+    const exPhaseNames = [...ex.phases];
+    for (const d of ex.deliverables) if (d.phase && !exPhaseNames.includes(d.phase)) exPhaseNames.push(d.phase);
+    const newPhases = exPhaseNames.filter((n) => n && !existing.has(n.toLowerCase()));
+    let maxOrder = plan.phases.reduce((mx, p) => Math.max(mx, p.order), -1);
+    if (newPhases.length) {
+      const merged = [...plan.phases.map((p) => ({ name: p.name, order: p.order })), ...newPhases.map((n) => ({ name: n, order: ++maxOrder }))];
+      await setEventPattern(eventId, { phases: merged });
+    }
+
+    // Deliverables: add any not already present (by phase|title).
+    const seen = new Set(plan.deliverables.map((d) => `${(d.phase ?? "").toLowerCase()}|${d.title.trim().toLowerCase()}`));
+    const firstPhase = ex.phases[0] ?? plan.phases[0]?.name ?? "Planning";
+    let addedDeliverables = 0;
+    for (const d of ex.deliverables) {
+      const title = d.title?.trim();
+      if (!title) continue;
+      const phase = d.phase || firstPhase;
+      const key = `${phase.toLowerCase()}|${title.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      await addDeliverable(eventId, { title, phase, ownerRole: null, dueDate: null, offsetStart: d.offsetStart ?? null, offsetEnd: d.offsetEnd ?? null }).catch(() => {});
+      addedDeliverables++;
+    }
+
+    setReload((r) => r + 1);
+    const skippedNote = skipped ? ` (${skipped} file${skipped === 1 ? "" : "s"} couldn't be read.)` : "";
+    if (!newPhases.length && !addedDeliverables) return `Up to date — nothing new to add.${skippedNote}`;
+    const parts: string[] = [];
+    if (newPhases.length) parts.push(`${newPhases.length} phase${newPhases.length === 1 ? "" : "s"}`);
+    if (addedDeliverables) parts.push(`${addedDeliverables} deliverable${addedDeliverables === 1 ? "" : "s"}`);
+    return `Added ${parts.join(" · ")}.${skippedNote}`;
+  };
+
   return (
     <div {...pageDrag} className="relative">
       {/* Dropping a file on an open event adds it as project knowledge for THIS event — not a new one. */}
@@ -3760,7 +3824,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
       )}
       {back}
 
-      <SourceMaterials items={plan.sourceMaterials} className="mb-6" onDelete={async (m) => { await deleteSourceMaterial(eventId, m.name).catch(() => {}); setReload((r) => r + 1); }} />
+      <SourceMaterials items={plan.sourceMaterials} className="mb-6" onDelete={async (m) => { await deleteSourceMaterial(eventId, m.name).catch(() => {}); setReload((r) => r + 1); }} onRegenerate={regenerateFromMaterials} />
 
       {/* Header */}
       <div className="relative bg-white rounded-2xl border border-border p-8 mb-6">

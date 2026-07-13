@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileText, Image as ImageIcon, Table, Paperclip, ExternalLink, X, Eye } from "lucide-react";
+import { FileText, Image as ImageIcon, Table, Paperclip, ExternalLink, X, Eye, RefreshCw, Loader2 } from "lucide-react";
 import { type SourceMaterial } from "../lib/db";
 
 type Kind = "image" | "pdf" | "text" | "other";
@@ -19,21 +19,47 @@ function iconFor(m: SourceMaterial) {
 
 /** The original files dropped to create this event/template — shown at the top for reference,
  *  previewable in place (image / text / PDF render inline; anything else opens out). */
-export function SourceMaterials({ items, className = "", onDelete, label = "Source materials", hint = "dropped to create this" }: { items: SourceMaterial[]; className?: string; onDelete?: (m: SourceMaterial) => Promise<void> | void; label?: string; hint?: string }) {
+export function SourceMaterials({ items, className = "", onDelete, onRegenerate, label = "Source materials", hint = "dropped to create this" }: { items: SourceMaterial[]; className?: string; onDelete?: (m: SourceMaterial) => Promise<void> | void; onRegenerate?: () => Promise<string | void>; label?: string; hint?: string }) {
   const [preview, setPreview] = useState<SourceMaterial | null>(null);
   const [confirming, setConfirming] = useState<SourceMaterial | null>(null);
   const [busy, setBusy] = useState(false);
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [regenMsg, setRegenMsg] = useState<string | null>(null);
   if (!items.length) return null;
+  const doRegenerate = async () => {
+    if (!onRegenerate || regenBusy) return;
+    setRegenBusy(true); setRegenMsg(null);
+    try {
+      const msg = await onRegenerate();
+      if (msg) { setRegenMsg(msg); setTimeout(() => setRegenMsg(null), 6000); }
+    } catch (e: any) {
+      setRegenMsg(e?.message ?? "Regenerate failed."); setTimeout(() => setRegenMsg(null), 6000);
+    } finally { setRegenBusy(false); }
+  };
   const doDelete = async () => {
     if (!confirming || !onDelete) return;
     setBusy(true);
     try { await onDelete(confirming); } finally { setBusy(false); setConfirming(null); }
   };
   return (
-    <div className={`bg-white rounded-2xl border border-gray-200 p-4 ${className}`}>
+    <div className={`relative bg-white rounded-2xl border border-gray-200 p-4 ${className}`}>
       <div className="flex items-center gap-2 mb-3 text-sm text-gray-500">
         <Paperclip className="w-4 h-4" /> {label} <span className="text-gray-300">· {hint}</span>
       </div>
+      {onRegenerate && (
+        <div className="absolute bottom-3 right-3 flex items-center gap-2">
+          {regenMsg && <span className="text-[13px] text-gray-500 max-w-[16rem] truncate" title={regenMsg}>{regenMsg}</span>}
+          <button
+            onClick={doRegenerate}
+            disabled={regenBusy}
+            title="Regenerate phases & deliverables from these materials (adds anything missing; won't remove your edits)"
+            aria-label="Regenerate from materials"
+            className="w-8 h-8 rounded-full border border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50 flex items-center justify-center disabled:opacity-60"
+          >
+            {regenBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          </button>
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         {items.map((m, i) => {
           const Icon = iconFor(m);

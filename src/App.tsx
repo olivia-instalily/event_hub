@@ -11,6 +11,7 @@ import { PeoplePage } from './components/PeoplePage';
 import { VendorsPage } from './components/VendorsPage';
 import { BudgetPage } from './components/BudgetPage';
 import { TutorialPage } from './components/TutorialPage';
+import { PeopleAdminPage } from './components/PeopleAdminPage';
 import { CalendarPage } from './components/CalendarPage';
 import { ProfileProvider } from './lib/profile';
 import { ProfileSwitcher } from './components/ProfileSwitcher';
@@ -28,7 +29,7 @@ export default function Component() {
   // opens straight to the event (no flash of Home first).
   const { status: authStatus, user: authUser } = useAuth();
   const [deepLink] = useState(() => (typeof window !== 'undefined' ? parseDeepLink(window.location.search) : null));
-  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar' | 'tutorial'>(deepLink ? 'events' : 'home');
+  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar' | 'tutorial' | 'admin'>(deepLink ? 'events' : 'home');
   // Lifted so navigation can leave the Events page and return to the same event detail.
   const [selectedEventId, setSelectedEventId] = useState<string | null>(deepLink?.eventId ?? null);
   // When set (and on the People page), People is scoped to this event with a Back button.
@@ -112,7 +113,7 @@ export default function Component() {
     }
   };
 
-  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar' | 'tutorial') => {
+  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'budget' | 'calendar' | 'tutorial' | 'admin') => {
     setActivePage(page);
     setPeopleEventFilter(null); // manual nav = unscoped
     if (page === 'events') {
@@ -189,7 +190,7 @@ export default function Component() {
                 </TabsList>
               </Tabs>
             </div>
-            <ProfileSwitcher onOpenTutorial={() => setActivePage('tutorial')} />
+            <ProfileSwitcher onOpenTutorial={() => setActivePage('tutorial')} onOpenAdmin={() => setActivePage('admin')} />
           </div>
         </div>
       </nav>
@@ -214,6 +215,7 @@ export default function Component() {
         {activePage === 'budget' && <BudgetPage onOpenEvent={(id) => openEvent(id, 'budget')} />}
         {activePage === 'calendar' && <CalendarPage onOpenEvent={(id) => openEvent(id, 'calendar')} />}
         {activePage === 'tutorial' && <TutorialPage />}
+        {activePage === 'admin' && <PeopleAdminPage />}
       </div>
 
       {/* Create / backfill flow — hosted here (not inside a page) so it overlays whatever page is

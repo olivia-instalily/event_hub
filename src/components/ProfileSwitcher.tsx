@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Plus, Check, Trash2, X, Pencil, HelpCircle, LogOut } from "lucide-react";
+import { ChevronDown, Plus, Check, Trash2, X, Pencil, HelpCircle, LogOut, ShieldCheck } from "lucide-react";
 import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
 import { useAuth } from "../lib/auth";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
@@ -31,7 +31,7 @@ function colorFor(name: string): string {
   return PROFILE_COLORS[Math.abs(h) % PROFILE_COLORS.length];
 }
 
-export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => void }) {
+export function ProfileSwitcher({ onOpenTutorial, onOpenAdmin }: { onOpenTutorial?: () => void; onOpenAdmin?: () => void }) {
   const { profiles, current, setCurrent, refresh, locked } = useProfile();
   const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
@@ -76,6 +76,9 @@ export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => voi
             <div className="absolute right-0 z-40 mt-1 w-48 bg-white border border-border rounded-lg shadow-lg p-1">
               {onOpenTutorial && (
                 <button onClick={() => { setOpen(false); onOpenTutorial(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><HelpCircle className="w-4 h-4" /> Tutorial</button>
+              )}
+              {onOpenAdmin && current?.isAdmin && (
+                <button onClick={() => { setOpen(false); onOpenAdmin(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><ShieldCheck className="w-4 h-4" /> People &amp; access</button>
               )}
               <button onClick={() => { setOpen(false); void signOut(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><LogOut className="w-4 h-4" /> Sign out</button>
             </div>
@@ -141,9 +144,14 @@ export function ProfileSwitcher({ onOpenTutorial }: { onOpenTutorial?: () => voi
               )}
             </div>
 
-            {onOpenTutorial && (
+            {(onOpenTutorial || (onOpenAdmin && current?.isAdmin)) && (
               <div className="border-t border-gray-100 mt-1 pt-1">
-                <button onClick={() => { setOpen(false); onOpenTutorial(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><HelpCircle className="w-4 h-4" /> Tutorial</button>
+                {onOpenTutorial && (
+                  <button onClick={() => { setOpen(false); onOpenTutorial(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><HelpCircle className="w-4 h-4" /> Tutorial</button>
+                )}
+                {onOpenAdmin && current?.isAdmin && (
+                  <button onClick={() => { setOpen(false); onOpenAdmin(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><ShieldCheck className="w-4 h-4" /> People &amp; access</button>
+                )}
               </div>
             )}
           </div>

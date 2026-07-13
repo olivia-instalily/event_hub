@@ -240,6 +240,10 @@ droppedForTemplate. No real name may survive in a deliverable.`
     const resp = await (client.messages.create as any)({
       model: 'claude-haiku-4-5',
       max_tokens: 16000,
+      // Pin low temperature: extraction is a structural task, not a creative one. At the default
+      // (1.0) the same brief yields a different phase/deliverable breakdown run-to-run (sometimes
+      // one phase, sometimes five) — deterministic-ish output keeps drops consistent.
+      temperature: 0,
       system,
       messages: [{ role: 'user', content: `Event brief:\n${text}` }],
       output_config: { format: { type: 'json_schema', schema: SCHEMA } },
