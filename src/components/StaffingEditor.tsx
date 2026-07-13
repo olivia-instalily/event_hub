@@ -40,10 +40,13 @@ function Avatar({ name, color }: { name: string; color: string | null }) {
 }
 
 // Single-select assignee dropdown for one role. Opens in a portal so the card never clips it.
-function AssigneePicker({ team, current, onPick }: {
+// Assignees are picked from accounts (profiles) only — no free-text. Exported so the settle flow
+// reuses the exact same control for "who filled this role."
+export function AssigneePicker({ team, current, onPick, disabled = false }: {
   team: Profile[];
   current: string | null;         // currently-assigned person's name, if any
   onPick: (name: string | null) => void;
+  disabled?: boolean;             // read-only (e.g. once the event is settled)
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -81,7 +84,8 @@ function AssigneePicker({ team, current, onPick }: {
       <button
         ref={btnRef}
         onClick={() => setOpen((v) => !v)}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-1.5 py-0.5 text-sm transition-colors ${assigned ? "border-gray-200 hover:bg-gray-50" : "border-dashed border-gray-300 text-gray-400 hover:bg-gray-50"}`}
+        disabled={disabled}
+        className={`inline-flex items-center gap-1.5 rounded-full border px-1.5 py-0.5 text-sm transition-colors disabled:cursor-default disabled:opacity-70 ${assigned ? "border-gray-200 hover:bg-gray-50" : "border-dashed border-gray-300 text-gray-400 hover:bg-gray-50"}`}
       >
         {assigned ? (
           <><Avatar name={assigned.name} color={assigned.color} /> <span className="text-gray-800">{assigned.name}</span></>

@@ -88,7 +88,7 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
         </div>
         <button
           onClick={onCreateEvent}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-black rounded-lg hover:bg-gray-300 transition-colors shrink-0"
+          className="flex items-center gap-2 px-4 py-2 bg-muted text-foreground rounded-lg hover:brightness-95 hover:shadow-sm transition shrink-0"
         >
           <Plus className="w-4 h-4" />
           Create Event

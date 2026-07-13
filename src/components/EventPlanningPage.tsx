@@ -5,13 +5,13 @@ import { SourceMaterials } from "./SourceMaterials";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2,
+  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, deleteEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
@@ -48,8 +48,10 @@ import { FileDrop } from "./FileDrop";
 import { EventPageBuilder } from "./EventPageBuilder";
 import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
-import { StaffingEditor } from "./StaffingEditor";
+import { StaffingEditor, AssigneePicker } from "./StaffingEditor";
+import { useProfile } from "../lib/profile";
 import { regenerateFromMaterials as runRegenerate } from "../lib/regenerate";
+import { ConfirmModal } from "./Modal";
 import { GCalSync } from "./GCalSync";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
@@ -1729,11 +1731,18 @@ function deriveMarkers(plan: EventPlanning): { markers: OvMarker[]; currentKey: 
       const dayOfIdx = markers.findIndex((m) => m.view === "day-of");
       markers.splice(dayOfIdx >= 0 ? dayOfIdx : markers.length, 0, { key: "day-before", label: "Day before", view: "day-before", kind: "secondary", phaseName: cover?.name ?? null, date: addDays(ev, -DAY_BEFORE_WINDOW), color });
     }
-    // Post-event node is invented only when there's post-event work and no phase already covers it.
+    // Post-event work with no phase tagged "post": rather than spawn a SEPARATE "Post-event" node
+    // beside the final phase (which reads as two distinct end stages), fold post-event INTO the last
+    // phase so the timeline's final node IS the post-event view. Only invent a standalone node when
+    // the last phase is the day-of (post genuinely comes after it).
     const postItems = plan.deliverables.filter((d) => d.offsetStart != null && d.offsetStart > 0);
-    if (postItems.length > 0 && !markers.some((m) => m.view === "post")) {
-      const last = markers[markers.length - 1];
-      markers.push({ key: "post", label: "Post-event", view: "post", kind: "secondary", phaseName: null, date: addDays(ev, 1), color: last?.color ?? NEUTRAL_COLOR });
+    if (postItems.length > 0 && !markers.some((m) => m.view === "post") && markers.length > 0) {
+      const lastIdx = markers.length - 1;
+      if (markers[lastIdx].view === "planning") {
+        markers[lastIdx] = { ...markers[lastIdx], view: "post" };
+      } else {
+        markers.push({ key: "post", label: "Post-event", view: "post", kind: "secondary", phaseName: null, date: addDays(ev, 1), color: markers[lastIdx].color ?? NEUTRAL_COLOR });
+      }
     }
   }
   // No date → no "you are here" (don't fabricate a position); default view falls to planning.
@@ -2570,11 +2579,22 @@ function SettlingTracker({ plan, spent, target, onApplied }: { plan: EventPlanni
   const [verdict, setVerdict] = useState(plan.verdict ?? "");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [confirmSettle, setConfirmSettle] = useState(false); // unassigned-roles "are you sure" gate
   // Roles → people: the owner resolves each staff role to a person as part of settling.
   const roles = plan.staffRoles ?? [];
   const [assigns, setAssigns] = useState<Record<string, string>>(plan.roleAssignments ?? {});
   const unassigned = roles.filter((r) => !(assigns[r] ?? "").trim()).length;
-  const saveAssigns = () => setRoleAssignments(plan.id, assigns).catch(() => {});
+  // Assignees are chosen from accounts (profiles), @instalily.ai only — same control as Staffing.
+  const { profiles } = useProfile();
+  const team = profiles.filter((p) => (p.email ?? "").toLowerCase().endsWith("@instalily.ai"));
+  const assignRole = (role: string, name: string | null) => {
+    setAssigns((prev) => {
+      const next = { ...prev };
+      if (name) next[role] = name; else delete next[role];
+      setRoleAssignments(plan.id, next).catch(() => {});
+      return next;
+    });
+  };
 
   const saveVerdict = () => { if ((verdict.trim() || null) !== (plan.verdict ?? null)) setEventVerdict(plan.id, verdict).catch(() => {}); };
   const markDebriefed = async () => { setBusy(true); try { await setSettleState(plan.id, "debriefed"); onApplied(); } finally { setBusy(false); } };
@@ -2628,13 +2648,11 @@ function SettlingTracker({ plan, spent, target, onApplied }: { plan: EventPlanni
             {roles.map((r) => (
               <div key={r} className="flex items-center gap-2">
                 <span className="text-sm text-gray-600 w-32 shrink-0 truncate" title={r}>{r}</span>
-                <input
-                  value={assigns[r] ?? ""}
-                  onChange={(e) => setAssigns((p) => ({ ...p, [r]: e.target.value }))}
-                  onBlur={saveAssigns}
+                <AssigneePicker
+                  team={team}
+                  current={assigns[r] || null}
                   disabled={state === "settled"}
-                  placeholder="Who filled this?"
-                  className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 disabled:bg-gray-50 disabled:text-gray-500"
+                  onPick={(name) => assignRole(r, name)}
                 />
               </div>
             ))}
@@ -2646,11 +2664,25 @@ function SettlingTracker({ plan, spent, target, onApplied }: { plan: EventPlanni
         <p className="text-[12px] text-gray-400">Final spend {money(spent)}{target != null && <> of {money(target)} target</>}.</p>
         <div className="flex items-center gap-2">
           {state === "just_wrapped" && <button onClick={markDebriefed} disabled={busy} className="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">Mark debriefed</button>}
-          {state === "debriefed" && <button onClick={settle} disabled={busy || unassigned > 0} title={unassigned > 0 ? "Assign all roles to settle" : undefined} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">{busy ? "Settling…" : unassigned > 0 ? `Assign ${unassigned} role${unassigned === 1 ? "" : "s"} to settle` : "Settle & write back"}</button>}
+          {/* Assigning people is no longer required to settle — unassigned roles just prompt a confirm. */}
+          {state === "debriefed" && <button onClick={() => { if (unassigned > 0) setConfirmSettle(true); else void settle(); }} disabled={busy} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">{busy ? "Settling…" : "Settle & write back"}</button>}
           {state === "settled" && <span className="inline-flex items-center gap-1 text-sm text-emerald-700"><Check className="w-4 h-4" /> Settled</span>}
         </div>
       </div>
       {msg && <p className="text-[12px] text-gray-500 mt-2">{msg}</p>}
+
+      {confirmSettle && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/30 p-4" onClick={() => !busy && setConfirmSettle(false)}>
+          <div className="bg-white rounded-2xl border border-border max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg mb-1">Settle without everyone tagged?</h3>
+            <p className="text-sm text-gray-600 mb-5">{unassigned} role{unassigned === 1 ? "" : "s"} {unassigned === 1 ? "isn't" : "aren't"} assigned to a person. You can settle now and tag them later.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmSettle(false)} disabled={busy} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+              <button onClick={() => { setConfirmSettle(false); void settle(); }} disabled={busy} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50">Settle anyway</button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -2671,7 +2703,11 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
   }, [plan.id, future]);
 
   const rsvp = plan.rsvp ?? stats?.registered ?? null;
-  const checkedIn = stats?.checkedIn ?? null;
+  // Turnout = check-in scans. Past events usually have a guest list but were never scanned in, so a
+  // raw 0 is misleading — fall back to the number of people on the list (the attendance record for a
+  // backfilled event). Future previews keep the true 0 (nobody's attended yet).
+  const scanned = stats?.checkedIn ?? 0;
+  const checkedIn = (!future && scanned === 0) ? (stats?.total ?? null) : (stats?.checkedIn ?? null);
   const showPct = rsvp && checkedIn != null ? Math.round((checkedIn / rsvp) * 100) : null;
   const lines = plan.budget?.lines ?? [];
   const spent = lines.filter((l) => l.status === "paid").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
@@ -3369,9 +3405,12 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
   if (plan.staffRoles.length) synth.push(`${plan.staffRoles.length} open role${plan.staffRoles.length === 1 ? "" : "s"}`);
   const synthDigest = synth.join(" · ");
 
+  // Past by DATE (not phase-navigation temporal): a done event should read as a record to complete,
+  // not an active plan — so it gets the completeness panel and never nags for scoping.
+  const pastByDate = !!plan.date && plan.date < new Date().toISOString().slice(0, 10);
   // Scoping is the gate for planning: nag until it's submitted (skip past/locked events).
   const scopingSubmitted = approval != null;
-  const showScopingNag = !scopingSubmitted && !locked && temporal !== "past";
+  const showScopingNag = !scopingSubmitted && !locked && temporal !== "past" && !pastByDate;
 
   const expectedTurnout = plan.rsvp ?? plan.headcount ?? null;
   const showRate = plan.heuristics.find((h) => /show|rsvp|turn ?out|%/.test(h.toLowerCase())) ?? null;
@@ -3382,7 +3421,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
     <div className="space-y-6">
       {/* Past or locked → "what would make this a complete record" (+ drop-to-fill), so any
           done event can be finished into a complete record. Upcoming → the GCal prompt. */}
-      {(locked || temporal === "past") ? (
+      {(locked || temporal === "past" || pastByDate) ? (
         <CompletenessPanel plan={plan} eventId={eventId} onApplied={onApplied} />
       ) : (
         // Always mount GCalSync in the active planning view — it self-hides (returns null) when
@@ -3647,6 +3686,24 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "page", label: "Page" },
 ];
 
+// Top-right "⋮" menu on the event page. For now it holds only Delete; add items here later.
+function EventMenu({ onDelete }: { onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-800" aria-label="Event menu"><MoreVertical className="w-5 h-5" /></button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-40 mt-1 w-44 bg-white border border-border rounded-lg shadow-lg p-1">
+            <button onClick={() => { setOpen(false); onDelete(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-red-50 text-sm text-red-600"><Trash2 className="w-4 h-4" /> Delete event</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Props) {
   const [plan, setPlan] = useState<EventPlanning | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3739,11 +3796,14 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   // Back steps to the Overview tab first (e.g. from the Budget tab), then out of the event.
   // Matches the Events status pills (Future/In-Process/Past) in size + style, so the top-left
   // control keeps the same placement/sizing when switching between the list and an event.
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const back = (
     <button onClick={() => { if (tab !== "overview") setTab("overview"); else onBack(); }} className="inline-flex items-center gap-1 mb-6 px-2 py-1 rounded-lg bg-white border border-border text-gray-700 hover:bg-gray-50 transition-colors">
       <ChevronLeft className="w-4 h-4" /> {tab !== "overview" ? "Overview" : "Previous"}
     </button>
   );
+  // Delete this event (same confirm + cascade as deleting from the events list); back to the list after.
+  const doDelete = async () => { try { await deleteEvent(eventId); onBack(); } catch (e: any) { setError(e?.message ?? String(e)); } };
 
   if (error) return <div>{back}<p className="text-red-600 bg-red-50 border border-red-200 rounded-lg p-4">Couldn’t load event: {error}</p></div>;
   if (!plan) return <div>{back}<p className="text-gray-500 py-12 text-center">Loading planning view…</p></div>;
@@ -3767,6 +3827,18 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
 
   return (
     <div {...pageDrag} className="relative">
+      {/* Top-right event menu (⋮) — Delete for now, same confirm + cascade as the list. */}
+      <div className="absolute top-0 right-0 z-20"><EventMenu onDelete={() => setConfirmDelete(true)} /></div>
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete event?"
+          message={`Permanently delete “${plan.title}” and everything attached to it (budget, vendors, planning, attendee links). This can’t be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={doDelete}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
       {/* Dropping a file on an open event adds it as project knowledge for THIS event — not a new one. */}
       {dropOver && (
         <div className="fixed inset-0 z-[90] bg-primary/5 border-4 border-dashed border-primary/40 flex items-center justify-center pointer-events-none">
@@ -3870,7 +3942,9 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 <button key={k} onClick={() => setWrappedView(k)} className={`px-3 py-1 rounded-md text-sm transition-colors ${wrappedView === k ? "bg-white shadow-sm text-gray-900" : "text-gray-500 hover:text-gray-800"}`}>{label}</button>
               ))}
             </div>
-            <button onClick={() => setReopened(true)} className="text-[13px] text-gray-400 hover:text-gray-700">Reopen workspace</button>
+            <button onClick={() => setReopened(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 shrink-0">
+              <LockOpen className="w-4 h-4" /> Reopen workspace
+            </button>
           </div>
           {wrappedView === "template" ? (
             <WrappedTemplate plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenEvent={onOpenEvent} />
@@ -3901,17 +3975,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         </>
       ) : (
       <>
-      {/* Close workspace — return to the wrapped/closed view. Only for events that were closed at
-          some point (wrapped) and are currently reopened; available at any time while reopened. */}
-      {wrapped && reopened && (
-        <div className="mb-3 flex justify-end">
-          <button onClick={() => setReopened(false)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50">
-            <Lock className="w-4 h-4" /> Close workspace
-          </button>
-        </div>
-      )}
-      {/* Tabs — brand Tabs (line variant = underline-on-active). Content switch stays below. */}
-      <div className="border-b border-gray-200 mb-6">
+      {/* Tabs — brand Tabs (line variant = underline-on-active). "Close workspace" sits on this same
+          line (right side) so it mirrors "Reopen workspace" on the wrapped view's toggle row — the
+          control keeps the same format, size, and position when toggling between the two views. */}
+      <div className="border-b border-gray-200 mb-6 flex items-center justify-between gap-3">
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
           <TabsList variant="line">
             {TABS.map((tt) => (
@@ -3919,6 +3986,11 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             ))}
           </TabsList>
         </Tabs>
+        {wrapped && reopened && (
+          <button onClick={() => setReopened(false)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 shrink-0 my-1.5">
+            <Lock className="w-4 h-4" /> Close workspace
+          </button>
+        )}
       </div>
 
       <div key={`${tab}-${version}`}>

@@ -66,6 +66,7 @@ export interface EventListItem {
   macroStage: string | null; // set ⇒ an event we're actively planning (routes to the planning view)
   isTemplate: boolean; // a reusable Event Type (open slots), not a concrete instance
   finalRecordComplete: boolean; // post-event reflections deliverable is Done → a complete record
+  settled: boolean; // settle_state === 'settled' → fully wrapped/settled (shows a green marker, sits in Past)
 }
 
 export interface Speaker {
@@ -158,9 +159,10 @@ function statusFromMacroStage(stage: string): EventStatus {
   return 'in-process';
 }
 
-// Resolve an event's coarse status: a manual override wins, then macro_stage, then
-// the series status, then the date.
+// Resolve an event's coarse status: a fully-settled event is past (terminal), then a manual
+// override, then macro_stage, then the series status, then the date.
 function resolveStatus(row: any, series: SeriesJoin): EventStatus {
+  if (row.settle_state === 'settled') return 'past';
   const o = row.status;
   if (o === 'future' || o === 'in-process' || o === 'past') return o;
   if (row.macro_stage) return statusFromMacroStage(row.macro_stage);
@@ -208,6 +210,7 @@ function toListItem(row: any): EventListItem {
     macroStage: row.macro_stage ?? null,
     isTemplate: row.is_template ?? false,
     finalRecordComplete: false, // set by listEvents from the reflection-deliverable status
+    settled: row.settle_state === 'settled',
   };
 }
 
@@ -1072,10 +1075,14 @@ export interface OwnerTodo { id: string; title: string; eventId: string; eventNa
 export async function listOwnerTodos(profileId: string): Promise<OwnerTodo[]> {
   const { data: owned, error: oErr } = await supabase
     .from('event_owner')
-    .select('event:event ( id, name, is_template, phases )')
+    .select('event:event ( id, name, is_template, phases, settle_state, macro_stage, event_date )')
     .eq('profile_id', profileId);
   if (oErr) throw oErr;
-  const events = (owned ?? []).map((r: any) => r.event).filter((e: any) => e && !e.is_template);
+  // Home shows only LIVE work: drop templates, wrapped/settled events, and anything past by date —
+  // a backfilled/finished event's open to-dos aren't upcoming work and shouldn't nag on Home.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const events = (owned ?? []).map((r: any) => r.event).filter((e: any) =>
+    e && !e.is_template && e.settle_state !== 'settled' && e.macro_stage !== 'Wrapped' && !(e.event_date && e.event_date < todayIso));
   const nameById = new Map<string, string>(events.map((e: any) => [e.id, e.name]));
   const phasesById = new Map<string, { name: string; order: number }[]>(events.map((e: any) => [e.id, Array.isArray(e.phases) ? e.phases : []]));
   const ids = [...nameById.keys()];
@@ -1732,7 +1739,7 @@ export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, macro_stage, owning_team, status, is_template, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
+      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, macro_stage, settle_state, owning_team, status, is_template, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
     )
     .order('id');
   if (error) throw error;

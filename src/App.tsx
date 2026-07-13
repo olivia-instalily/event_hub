@@ -20,6 +20,12 @@ import { useAuth } from './lib/auth';
 import { LoginScreen } from './components/LoginScreen';
 import { proxiedBackend } from './lib/supabase';
 
+// Nav logo + the hover "shuffle" set. On hover the cube rapidly swaps to random alternates for a
+// little animation, then snaps back to LOGO_MAIN on leave. Put the extra SVGs in public/logos/ and
+// list their paths here (edit these to match your filenames).
+const LOGO_MAIN = '/logo.svg';
+const LOGO_ALTS = ['/logo1.svg', '/logo2.svg', '/logo3.svg', '/logo4.svg'];
+
 export type PeopleStatusFilter = 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers';
 export type EventFilter = { id: string; name: string; tag?: string | null; status?: PeopleStatusFilter };
 
@@ -42,6 +48,11 @@ export default function Component() {
   const [eventOrigin, setEventOrigin] = useState<Page>('events');
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
+
+  // Logo hover: swap to ONE random alternate on hover and hold it; revert to the main logo on leave.
+  const [logoSrc, setLogoSrc] = useState(LOGO_MAIN);
+  const shuffleLogo = () => { if (LOGO_ALTS.length) setLogoSrc(LOGO_ALTS[Math.floor(Math.random() * LOGO_ALTS.length)]); };
+  const resetLogo = () => setLogoSrc(LOGO_MAIN);
 
   // Create-event flow, hosted at the app root so it overlays whatever page you're on. Dropping a
   // file (or hitting a "Create Event" button) opens the modal over the current page — the background
@@ -178,7 +189,7 @@ export default function Component() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <button onClick={() => navTo('home')} className="text-[1.35rem] mr-8 inline-flex items-center gap-2 leading-none hover:opacity-70 transition-opacity" title="Home"><img src="/logo.svg" alt="" className="h-7 w-auto" /> EventHub</button>
+              <button onClick={() => navTo('home')} onMouseEnter={shuffleLogo} onMouseLeave={resetLogo} className="text-[1.35rem] mr-12 inline-flex items-center gap-1 leading-none" title="Home"><img src={logoSrc} alt="" className="h-8 w-auto" />EventHub</button>
               {/* mr-8 mirrors EventHub's left gap, so an equal buffer is always kept to the
                   right of the menu — even when the window narrows it won't crowd the profile. */}
               <Tabs className="mr-8" value={activePage} onValueChange={(v) => navTo(v as typeof activePage)}>

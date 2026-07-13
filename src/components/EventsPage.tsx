@@ -2096,7 +2096,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           <button onClick={() => setBackfillOpen(true)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border bg-white text-sm text-gray-700 hover:bg-gray-50">
             Backfill past event
           </button>
-          <Button onClick={openCreateFresh}>
+          <Button onClick={openCreateFresh} className="bg-muted text-foreground hover:bg-muted hover:brightness-95 hover:shadow-sm transition">
             <Plus className="w-4 h-4" />
             Create Event
           </Button>
@@ -2264,7 +2264,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
               <h2 className="text-xl mb-2 flex items-center gap-1.5">
                 <span>{event.title}</span>
-                {event.finalRecordComplete && <span title="Final record complete" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                {(event.settled || event.finalRecordComplete) && <span title={event.settled ? "Settled" : "Final record complete"} className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
               </h2>
               {event.seriesName && <p className="text-gray-500 text-sm mb-4">{event.seriesName}</p>}
 
@@ -2383,7 +2383,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                       <div>
                         <p className="font-medium flex items-center gap-1.5">
                           <span>{event.title}</span>
-                          {event.finalRecordComplete && <span title="Final record complete" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                          {(event.settled || event.finalRecordComplete) && <span title={event.settled ? "Settled" : "Final record complete"} className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
                         </p>
                         {event.seriesName && <p className="text-sm text-gray-500">{event.seriesName}</p>}
                       </div>
