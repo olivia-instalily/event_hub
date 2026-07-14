@@ -192,7 +192,7 @@ export default function Component() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <button onClick={() => navTo('home')} onMouseEnter={shuffleLogo} onMouseLeave={resetLogo} className="text-[1.35rem] mr-12 inline-flex items-center gap-1 leading-none" title="Home"><img src={logoSrc} alt="" className="h-8 w-auto" />EventHub</button>
+              <button onClick={() => navTo('home')} onMouseEnter={shuffleLogo} onMouseLeave={resetLogo} className="text-[1.35rem] font-semibold mr-12 inline-flex items-center gap-1 leading-none" title="Home"><img src={logoSrc} alt="" className="h-8 w-auto" />EventHub</button>
               {/* mr-8 mirrors EventHub's left gap, so an equal buffer is always kept to the
                   right of the menu — even when the window narrows it won't crowd the profile. */}
               <Tabs className="mr-8" value={activePage} onValueChange={(v) => navTo(v as typeof activePage)}>

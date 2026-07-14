@@ -2276,7 +2276,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
               <h2 className="text-xl mb-2 flex items-center gap-1.5">
                 <span>{event.title}</span>
-                {(event.settled || event.finalRecordComplete) && <span title={event.settled ? "Settled" : "Final record complete"} className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                {(event.settled && event.finalRecordComplete) && <span title="Settled · complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
               </h2>
               {event.seriesName && <p className="text-gray-500 text-sm mb-4">{event.seriesName}</p>}
 
@@ -2395,7 +2395,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                       <div>
                         <p className="font-medium flex items-center gap-1.5">
                           <span>{event.title}</span>
-                          {(event.settled || event.finalRecordComplete) && <span title={event.settled ? "Settled" : "Final record complete"} className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                          {(event.settled && event.finalRecordComplete) && <span title="Settled · complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
                         </p>
                         {event.seriesName && <p className="text-sm text-gray-500">{event.seriesName}</p>}
                       </div>
