@@ -106,6 +106,28 @@ const SEED: TutorialSection[] = [
 const STATUS_LABEL: Record<Status, string> = { ready: "", soon: "Soon", planned: "Planned" };
 const isPlayable = (w: TutorialWalkthrough) => w.status === "ready" && !!w.embedUrl;
 
+const fmtDuration = (sec: number): string => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
+
+// Best-effort auto-duration from a pasted video URL. Works for providers whose public oEmbed
+// returns a duration (Loom, Vimeo). Arcade (interactive walkthrough — no public duration) and
+// YouTube (needs an API key) return null → the duration stays whatever the editor typed.
+async function fetchVideoDuration(url: string): Promise<string | null> {
+  try {
+    const loom = url.match(/loom\.com\/(?:share|embed)\/([a-z0-9]+)/i);
+    if (loom) {
+      const r = await fetch(`https://www.loom.com/v1/oembed?url=${encodeURIComponent(`https://www.loom.com/share/${loom[1]}`)}`);
+      const j = await r.json();
+      return typeof j?.duration === "number" ? fmtDuration(j.duration) : null;
+    }
+    if (/vimeo\.com\//i.test(url)) {
+      const r = await fetch(`https://vimeo.com/api/oembed.json?url=${encodeURIComponent(url)}`);
+      const j = await r.json();
+      return typeof j?.duration === "number" ? fmtDuration(j.duration) : null;
+    }
+    return null; // Arcade / YouTube / unknown → keep the manual value
+  } catch { return null; }
+}
+
 function StatusBadge({ item }: { item: TutorialWalkthrough }) {
   if (isPlayable(item)) return <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[12px] text-gray-600"><PlayCircle className="w-3 h-3" /> {item.length}</span>;
   const cls = item.status === "soon" ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-500";
@@ -261,8 +283,22 @@ function Editor({ sections: initial, onCancel, onSaved }: {
   const removeSection = (sid: string) => setSections((prev) => prev.filter((s) => s.id !== sid));
   const addItem = (sid: string) => setSections((prev) => prev.map((s) => (s.id === sid ? { ...s, items: [...s.items, { id: newId(), title: "New walkthrough", when: "", icon: pickIcon("New walkthrough", usedIcons()), length: "—", embedUrl: null, status: "soon" }] } : s)));
   const removeItem = (sid: string, wid: string) => setSections((prev) => prev.map((s) => (s.id === sid ? { ...s, items: s.items.filter((w) => w.id !== wid) } : s)));
-  // Setting a video URL flips status to ready; clearing it drops back to "soon".
-  const setVideo = (sid: string, wid: string, url: string) => patchItem(sid, wid, { embedUrl: url.trim() || null, status: url.trim() ? "ready" : "soon" });
+  // Setting a video URL flips status to ready; clearing it drops back to "soon". Best-effort: pull
+  // the duration from the provider (Loom/Vimeo) and auto-fill the length — without clobbering a
+  // duration you typed yourself. Arcade/YouTube can't be read, so those keep the manual value.
+  const setVideo = (sid: string, wid: string, url: string) => {
+    const u = url.trim();
+    patchItem(sid, wid, { embedUrl: u || null, status: u ? "ready" : "soon" });
+    if (!u) return;
+    void fetchVideoDuration(u).then((dur) => {
+      if (!dur) return;
+      setSections((prev) => prev.map((s) => s.id !== sid ? s : { ...s, items: s.items.map((w) => {
+        if (w.id !== wid) return w;
+        const manual = w.length && w.length !== "—" && w.length.trim();
+        return manual ? w : { ...w, length: dur };
+      }) }));
+    }).catch(() => {});
+  };
   const moveItemToSection = (wid: string, fromSid: string, toSid: string) => {
     if (fromSid === toSid) return;
     setSections((prev) => {

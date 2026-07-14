@@ -1,4 +1,4 @@
-import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, ChevronDown, ChevronLeft, ChevronRight, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight, Sparkles, BadgeCheck } from "lucide-react";
+import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, ChevronDown, ChevronLeft, ChevronRight, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight, Sparkles, BadgeCheck, Loader2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
@@ -10,6 +10,7 @@ import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage, ingestEventDoc, completenessFields } from "./EventPlanningPage";
 import { PhaseRail, PHASE_COLORS } from "./TemplateView";
 import { unsupportedFileMessage } from "../lib/fileSupport";
+import { NewEventDropZone } from "./NewEventDropZone";
 import { ConfirmModal } from "./Modal";
 import { BackfillModal } from "./BackfillModal";
 import { TAG_CATEGORIES, tagColor, tagBadgeVariant } from "../lib/tags";
@@ -582,6 +583,7 @@ interface EventsPageProps {
   initialFiles?: File[] | null; // files dropped anywhere on the page → ingest straight into review
   looksPast?: boolean; // the global drop sniffed a past event → ask (backfill vs in-process) first
   onFilesConsumed?: () => void; // called once the dropped files have been handed to the modal
+  onNewEventFiles?: (files: File[]) => void; // top-of-page "create a new event" drop zone → app create/backfill flow
 }
 
 /** Create-event entry flow: choose ownership, describe, optionally start from a past event. */
@@ -913,7 +915,10 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
     // Secondary duplicate guard (same-files is already handled earlier, before extraction): the
     // drop's files are new, but its title + date + type match an event we already have → surface the
     // notice instead of the create form (the user can still override, or add these files as context).
-    const dupEvents: DupEvent[] = events.map((e) => ({ id: e.id, title: e.title, date: e.date, tags: e.tags, isTemplate: e.isTemplate }));
+    // Overlap suggestions stay within the same class: a template-only creation is only ever
+    // compared against other TEMPLATES (never an actual event instance), and an event only against
+    // events. Filter the candidate pool up front so this holds no matter what the matcher does.
+    const dupEvents: DupEvent[] = events.filter((e) => e.isTemplate === isTemplate).map((e) => ({ id: e.id, title: e.title, date: e.date, tags: e.tags, isTemplate: e.isTemplate }));
     const match = findDuplicateEvent({ name: fields.name, date: fields.date || null, tag, isTemplate }, dupEvents);
     if (match) { setDup(match); setDupFiles(null); setMode("duplicate"); return; }
     setMode("review");
@@ -1806,7 +1811,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
   );
 }
 
-export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, openCreate = false, initialFiles = null, looksPast = false, onFilesConsumed }: EventsPageProps) {
+export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, openCreate = false, initialFiles = null, looksPast = false, onFilesConsumed, onNewEventFiles }: EventsPageProps) {
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1923,15 +1928,16 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     } catch (e: any) { setDropToast(`${title}: ${e?.message ?? String(e)}`); }
     finally { setDropBusyId(null); }
   };
-  // Drop-zone props shared by cards and lines. stopPropagation keeps it from bubbling to the
-  // app-level global drop (which would create a NEW event instead of enriching this one).
-  // A per-event drop target. Every handler stops propagation — including onDragEnter — so the
-  // app-level "Drop a brief… to create an event" overlay never triggers while you're over a row/card;
-  // the drop attaches to THIS event instead of starting the create flow.
+  // A per-event drop target (card/row). The `data-event-drop` marker lets the app-level overlay
+  // detect "over a row" and hide itself, so hovering a card shows THAT card's highlight (add to it)
+  // instead of the full-screen "create" overlay. dragenter/over do NOT stopPropagation (the app
+  // needs to see them to suppress its overlay); only the DROP stops propagation, so it attaches to
+  // this event instead of firing the app's create flow.
   const dropZone = (id: string, title: string) => ({
-    onDragEnter: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(id); },
-    onDragOver: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(id); },
-    onDragLeave: (e: React.DragEvent) => { e.stopPropagation(); setDragOverId((cur) => (cur === id ? null : cur)); },
+    "data-event-drop": id,
+    onDragEnter: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); setDragOverId(id); },
+    onDragOver: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); setDragOverId(id); },
+    onDragLeave: () => setDragOverId((cur) => (cur === id ? null : cur)),
     onDrop: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(null); void filesFromDrop(e.dataTransfer).then((fs) => { if (fs.length) void handleEventDrop(id, title, fs); }); },
   });
 
@@ -2025,10 +2031,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     // loaded. Wait for it so we pick the right view instead of flashing the recap view; once
     // loaded, a still-missing event falls through to the recap view's "Event not found".
     if (!sel && loading) return <div><p className="text-gray-500 py-12 text-center">Loading…</p></div>;
-    // If this event was just generated from a brief, Back returns to its review/generation
-    // page (reopened from cache — no reprocessing); otherwise Back goes to the list.
+    // If this EVENT was just generated from a brief, Back returns to its review/generation page
+    // (reopened from cache — no reprocessing). Templates are excluded: a just-made template's Back
+    // goes to wherever you came from (the list/dashboard), not back into the review modal.
     const onBack = () => {
-      if (reviewCache && reviewCache.eventId === selectedEventId) {
+      if (reviewCache && reviewCache.eventId === selectedEventId && !reviewCache.ingest.isTemplate) {
         setSelectedEventId(null);
         setResumeIngest(reviewCache.ingest);
         setCreateOpen(true);
@@ -2056,6 +2063,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           <button onClick={() => setDropToast(null)} className="text-gray-400 hover:text-white" aria-label="Dismiss"><X className="w-4 h-4" /></button>
         </div>
       )}
+
+      {onNewEventFiles && <div className="mb-6"><NewEventDropZone onFiles={onNewEventFiles} onClick={openCreateFresh} /></div>}
 
       {/* Status Tabs */}
       <div className="flex items-center justify-between mb-6">
@@ -2396,6 +2405,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                         <p className="font-medium flex items-center gap-1.5">
                           <span>{event.title}</span>
                           {(event.settled && event.finalRecordComplete) && <span title="Settled · complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                          {dropBusyId === event.id && <span className="inline-flex items-center gap-1 text-[12px] font-normal text-gray-500 shrink-0"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing…</span>}
                         </p>
                         {event.seriesName && <p className="text-sm text-gray-500">{event.seriesName}</p>}
                       </div>

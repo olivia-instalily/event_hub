@@ -4,13 +4,14 @@ import { listEvents, deleteEvent, listOwnerTodos, type EventListItem, type Owner
 import { useProfile, initials } from "../lib/profile";
 import { TagStack } from "./TagStack";
 import { ConfirmModal } from "./Modal";
+import { NewEventDropZone } from "./NewEventDropZone";
 
 const NOT_CAPTURED = "Not captured";
 // Phase color dots — same palette/order as the phase tracker (by phase order).
 const PHASE_DOT = ["bg-blue-500", "bg-violet-500", "bg-amber-500", "bg-emerald-500", "bg-rose-500", "bg-teal-500"];
 
 /** Profile-dependent landing page: events assigned to the current profile + a (future) todos rail. */
-export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId: string) => void; onCreateEvent: () => void }) {
+export function HomePage({ onOpenEvent, onCreateEvent, onNewEventFiles }: { onOpenEvent: (eventId: string) => void; onCreateEvent: () => void; onNewEventFiles?: (files: File[]) => void }) {
   const { current } = useProfile();
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +95,8 @@ export function HomePage({ onOpenEvent, onCreateEvent }: { onOpenEvent: (eventId
           Create Event
         </button>
       </div>
+
+      {onNewEventFiles && <div className="mb-8"><NewEventDropZone onFiles={onNewEventFiles} onClick={onCreateEvent} /></div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Your events */}

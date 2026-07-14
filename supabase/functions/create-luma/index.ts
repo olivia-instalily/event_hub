@@ -37,6 +37,29 @@ function zonedToUtcIso(dateStr: string, timeStr: string, tz: string): string {
   return new Date(guess - offset).toISOString();
 }
 
+// Carry an EventHub cover onto the Luma event. Luma's cover_url only accepts images already on its
+// CDN, so upload the external cover first (create-upload-url → PUT bytes → use file_url). Best-effort.
+async function uploadCoverToLuma(apiKey: string, coverUrl: string): Promise<string | null> {
+  try {
+    const img = await fetch(coverUrl);
+    if (!img.ok) return null;
+    const ct = (img.headers.get('content-type') || '').toLowerCase();
+    const contentType = ct.includes('png') ? 'image/png' : 'image/jpeg';
+    const bytes = new Uint8Array(await img.arrayBuffer());
+    const up = await fetch('https://public-api.luma.com/v1/images/create-upload-url', {
+      method: 'POST',
+      headers: { 'x-luma-api-key': apiKey, 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ content_type: contentType }),
+    });
+    if (!up.ok) return null;
+    const { upload_url, file_url } = (await up.json()) as { upload_url?: string; file_url?: string };
+    if (!upload_url || !file_url) return null;
+    const put = await fetch(upload_url, { method: 'PUT', headers: { 'content-type': contentType }, body: bytes });
+    if (!put.ok) return null;
+    return file_url;
+  } catch { return null; }
+}
+
 async function lumaGet(apiKey: string, apiId: string) {
   const url = new URL('https://public-api.luma.com/v1/event/get');
   url.searchParams.set('api_id', apiId);
@@ -84,7 +107,9 @@ Deno.serve(async (req) => {
     const descParts = [description, location ? `Location: ${location}` : null].filter(Boolean);
     // Only a publicly-fetchable cover can be pushed to Luma — skip data:/local URLs.
     const coverRaw = (body.coverUrl ?? ev?.cover_image_url ?? null) as string | null;
-    const inCover = coverRaw && /^https?:\/\//i.test(coverRaw) && !/127\.0\.0\.1|localhost/.test(coverRaw) ? coverRaw : null;
+    const externalCover = coverRaw && /^https?:\/\//i.test(coverRaw) && !/127\.0\.0\.1|localhost/.test(coverRaw) ? coverRaw : null;
+    // Upload the cover to Luma's CDN and use that URL (an external cover_url is rejected/ignored).
+    const inCover = externalCover ? await uploadCoverToLuma(lumaKey, externalCover) : null;
 
     const baseBody: Record<string, unknown> = {
       name, start_at, timezone: tz,

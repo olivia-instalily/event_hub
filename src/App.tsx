@@ -48,6 +48,18 @@ export default function Component() {
   const [eventOrigin, setEventOrigin] = useState<Page>('events');
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
+  // Bulletproof reset for the global "drop to create" overlay: a drop handled by a child (e.g. an
+  // event row that stopPropagation()s to backfill itself) never reaches the app-level onDrop, which
+  // would otherwise leave the overlay stuck. Window capture-phase listeners fire regardless, so the
+  // overlay always clears on any drop / dragend / Escape.
+  useEffect(() => {
+    const reset = () => { dragDepth.current = 0; setDragOver(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') reset(); };
+    window.addEventListener('drop', reset, true);
+    window.addEventListener('dragend', reset, true);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('drop', reset, true); window.removeEventListener('dragend', reset, true); window.removeEventListener('keydown', onKey); };
+  }, []);
 
   // Logo hover: swap to ONE random alternate on hover and hold it; revert to the main logo on leave.
   const [logoSrc, setLogoSrc] = useState(LOGO_MAIN);
@@ -175,10 +187,14 @@ export default function Component() {
     <ProfileProvider forcedProfileId={proxiedBackend ? (authUser?.profileId || null) : null}>
     <div
       className="min-h-screen bg-white"
-      onDragEnter={(e) => { if (hasFiles(e)) { e.preventDefault(); dragDepth.current++; setDragOver(true); } }}
-      onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
-      onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragOver(false); }}
-      onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current = 0; setDragOver(false); void filesFromDrop(e.dataTransfer).then(onAppDrop); }}
+      onDragEnter={(e) => { if (hasFiles(e)) e.preventDefault(); }}
+      // Show the global "drop to create" overlay UNLESS the cursor is over an event card/row
+      // (marked data-event-drop) — those add to that event's context instead. Driven by dragOver
+      // (fires continuously) so it stays in sync as you move on/off a row.
+      onDragOver={(e) => { if (!hasFiles(e)) return; e.preventDefault(); const overZone = !!(e.target as HTMLElement)?.closest?.('[data-event-drop], [data-new-event-drop]'); setDragOver(!overZone); }}
+      onDragLeave={(e) => { if (e.relatedTarget === null) setDragOver(false); }}
+      // Only fires for drops NOT on an event row (rows stopPropagation to handle their own) → create.
+      onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); setDragOver(false); void filesFromDrop(e.dataTransfer).then(onAppDrop); }}
       // Escape hatch: a plain click clears the overlay if it ever gets stuck (it's pointer-events-none,
       // so this fires from the page underneath).
       onClick={() => { if (dragOver) { dragDepth.current = 0; setDragOver(false); } }}
@@ -213,13 +229,14 @@ export default function Component() {
       </nav>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {activePage === 'home' && <HomePage onOpenEvent={(id) => openEvent(id, 'home')} onCreateEvent={createEvent} />}
+        {activePage === 'home' && <HomePage onOpenEvent={(id) => openEvent(id, 'home')} onCreateEvent={createEvent} onNewEventFiles={onAppDrop} />}
         {activePage === 'events' && (
           <EventsPage
             key={eventsNonce}
             selectedEventId={selectedEventId}
             setSelectedEventId={setSelectedFromEvents}
             onViewPeople={viewPeopleForEvent}
+            onNewEventFiles={onAppDrop}
           />
         )}
         {activePage === 'people' && (

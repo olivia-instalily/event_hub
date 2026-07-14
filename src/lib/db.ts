@@ -1586,6 +1586,14 @@ export async function attachLuma(
   return data as any;
 }
 
+/** Break the Luma link on an event: clears the stored Luma id/url/name/cover so it's no longer
+ *  synced. Leaves the displayed cover and any already-pulled attendees in place. Re-link anytime
+ *  with attachLuma (a new URL overwrites), or create a fresh Luma event. */
+export async function unlinkLuma(eventId: string): Promise<void> {
+  const { error } = await supabase.from('event').update({ luma_event_id: null, luma_url: null, luma_name: null, luma_cover_url: null }).eq('id', eventId);
+  if (error) throw error;
+}
+
 /** Manual, add-only Luma re-pull for a single (wrapped/past) event — pulls in late guest additions
  *  only, never overwriting or removing existing attendees. Hits the luma-sync cloud function with an
  *  eventId (same endpoint the background sync uses; App fires it prefix-and-all). */

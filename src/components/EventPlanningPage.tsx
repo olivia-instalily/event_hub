@@ -11,7 +11,7 @@ import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, deleteEvent,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, deleteEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
@@ -207,7 +207,31 @@ function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: str
     finally { setBusy(false); }
   };
 
-  if (url) return <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"><Link2 className="w-4 h-4" /> Luma</a>;
+  const unlink = async () => {
+    setBusy(true); setErr(null);
+    try { await unlinkLuma(eventId); setUrl(null); setMode("idle"); setInput(""); }
+    catch (e: any) { setErr(e?.message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+
+  // Linked: the Luma link + a ⋮ menu to relink (attach a different URL) or unlink. The relink path
+  // reuses the "attach" input below; a new URL overwrites the link.
+  if (url && mode !== "attach") return (
+    <span className="relative inline-flex items-center gap-1">
+      <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"><Link2 className="w-4 h-4" /> Luma</a>
+      <button onClick={() => setMode(mode === "menu" ? "idle" : "menu")} title="Change or unlink" className="text-gray-300 hover:text-gray-700"><MoreVertical className="w-4 h-4" /></button>
+      {mode === "menu" && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setMode("idle")} />
+          <div className="absolute left-0 top-full z-40 mt-1 w-40 rounded-lg border border-border bg-white p-1 text-sm shadow-lg">
+            <button onClick={() => { setInput(url ?? ""); setMode("attach"); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-gray-700 hover:bg-gray-50"><Link2 className="w-4 h-4" /> Relink…</button>
+            <button onClick={() => void unlink()} disabled={busy} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-red-600 hover:bg-gray-50 disabled:opacity-50"><X className="w-4 h-4" /> {busy ? "Unlinking…" : "Unlink"}</button>
+          </div>
+        </>
+      )}
+      {err && <span className="text-[13px] text-red-600">{err}</span>}
+    </span>
+  );
 
   if (mode === "menu") return (
     <span className="inline-flex items-center gap-1">
