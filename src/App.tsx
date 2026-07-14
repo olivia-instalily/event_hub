@@ -179,6 +179,9 @@ export default function Component() {
       onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
       onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragOver(false); }}
       onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current = 0; setDragOver(false); void filesFromDrop(e.dataTransfer).then(onAppDrop); }}
+      // Escape hatch: a plain click clears the overlay if it ever gets stuck (it's pointer-events-none,
+      // so this fires from the page underneath).
+      onClick={() => { if (dragOver) { dragDepth.current = 0; setDragOver(false); } }}
     >
       {dragOver && (
         <div className="fixed inset-0 z-[100] bg-gray-200/70 border-4 border-dashed border-gray-400 flex items-center justify-center pointer-events-none">

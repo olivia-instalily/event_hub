@@ -204,16 +204,24 @@ function parsePhasesAndDeliverables(text: string): { phases: IngestPhase[]; deli
       phases.push({ name: current, order: order++ });
       continue;
     }
-    const content = (line.match(/^[-*]\s+(.*)/)?.[1] ?? line).replace(/\*\*/g, "").trim();
-    if (!content) continue;
+    // Only LIST ITEMS are task candidates — never free prose. Prose paragraphs (e.g. an intro that
+    // happens to say "coffee afterward") otherwise match a schedule keyword and get slurped in as a
+    // bogus deliverable. Also skip prose-length lines.
+    const bullet = line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)/);
+    if (!bullet) continue;
+    const content = bullet[1].replace(/\*\*/g, "").trim();
+    if (!content || content.length > 140) continue;
     const off = parseOffset(content);
     if (off && current) deliverables.push({ title: content.slice(0, 120), phase: current, offsetStart: off.start, offsetEnd: off.end });
   }
   // Fallback: no sections → infer phases from offsets (pre-event / day-of / post-event).
   if (!phases.length) {
     for (const raw of text.split(/\r?\n/)) {
-      const content = (raw.trim().match(/^[-*]\s+(.*)/)?.[1] ?? raw.trim()).replace(/\*\*/g, "").trim();
-      const off = content ? parseOffset(content) : null;
+      const b = raw.trim().match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)/);
+      if (!b) continue; // list items only — never free prose
+      const content = b[1].replace(/\*\*/g, "").trim();
+      if (!content || content.length > 140) continue;
+      const off = parseOffset(content);
       if (!off) continue;
       const phase = off.start < 0 ? "Pre-event" : off.start === 0 ? "Day-of" : "Post-event";
       deliverables.push({ title: content.slice(0, 120), phase, offsetStart: off.start, offsetEnd: off.end });
@@ -1917,7 +1925,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   };
   // Drop-zone props shared by cards and lines. stopPropagation keeps it from bubbling to the
   // app-level global drop (which would create a NEW event instead of enriching this one).
+  // A per-event drop target. Every handler stops propagation — including onDragEnter — so the
+  // app-level "Drop a brief… to create an event" overlay never triggers while you're over a row/card;
+  // the drop attaches to THIS event instead of starting the create flow.
   const dropZone = (id: string, title: string) => ({
+    onDragEnter: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(id); },
     onDragOver: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(id); },
     onDragLeave: (e: React.DragEvent) => { e.stopPropagation(); setDragOverId((cur) => (cur === id ? null : cur)); },
     onDrop: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(null); void filesFromDrop(e.dataTransfer).then((fs) => { if (fs.length) void handleEventDrop(id, title, fs); }); },

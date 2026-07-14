@@ -2210,6 +2210,8 @@ function WrappedTemplate({ plan, eventId, onApplied, onOpenEvent }: { plan: Even
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false); // additions applied → show a condensed confirmation
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [regenMsg, setRegenMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!templateId) { setTmpl(null); setLoading(false); return; }
@@ -2257,6 +2259,20 @@ function WrappedTemplate({ plan, eventId, onApplied, onOpenEvent }: { plan: Even
     } finally { setBusy(false); }
   };
   const dismiss = () => setDone(false);
+  // Regenerate the paired template's pattern from THIS (settled) event's source materials.
+  const regenerate = async () => {
+    if (!tmpl) return;
+    setRegenBusy(true); setRegenMsg(null);
+    try {
+      const msg = await runRegenerate(tmpl, { template: true, source: plan });
+      const fresh = await getEventPlanning(tmpl.id).catch(() => null);
+      if (fresh) setTmpl(fresh);
+      setRegenMsg(msg);
+      setTimeout(() => setRegenMsg(null), 6000);
+      onApplied();
+    } catch (e: any) { setRegenMsg(e?.message ?? String(e)); setTimeout(() => setRegenMsg(null), 6000); }
+    finally { setRegenBusy(false); }
+  };
 
   if (loading) return <p className="text-sm text-gray-400">Loading template…</p>;
   if (!templateId || !tmpl) {
@@ -2280,6 +2296,19 @@ function WrappedTemplate({ plan, eventId, onApplied, onOpenEvent }: { plan: Even
   }
   return (
     <div className="space-y-6">
+      {/* Header card — regenerate the template's pattern from this event's dropped materials. */}
+      <div className="bg-white rounded-2xl border border-border p-4 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="font-medium truncate">{tmpl.title}</h3>
+          <p className="text-[13px] text-gray-500">Template · regenerate its pattern from this event's materials.</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {regenMsg && <span className="text-[13px] text-gray-500 max-w-[16rem] truncate" title={regenMsg}>{regenMsg}</span>}
+          <button onClick={regenerate} disabled={regenBusy} title="Regenerate the template from this event's materials" aria-label="Regenerate template" className="w-8 h-8 rounded-full border border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-50 flex items-center justify-center disabled:opacity-60">
+            {regenBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
       {done ? (
         // Persistent confirmation — stays until explicitly closed (or a page refresh). Links to
         // the template it was added to.
@@ -3335,7 +3364,7 @@ function StringListEditor({ title, initial, onSave, variant, addLabel, placehold
   );
 }
 
-function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number }) {
+function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean }) {
   const facts = buildFacts(plan);
   // Phase-aware view: the timeline's date-derived "now" sets the default; clicking a node
   // previews another phase's view (Overview-internal state, not tab navigation).
@@ -3358,7 +3387,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
   const temporal: "past" | "current" | "future" = selIdx === curIdx ? "current" : selIdx > curIdx ? "future" : "past";
   // A settled event is LOCKED: the timeline becomes a static record and the body collapses to a
   // read-only rundown — no moving between phases.
-  const locked = plan.settleState === "settled";
+  // A settled event is read-only — UNLESS its workspace was reopened, which restores the live,
+  // click-through timeline + phase-aware body (as with an active event).
+  const locked = plan.settleState === "settled" && !reopened;
   // Use the cached digest; only regenerate on Resync (which also pulls Gmail).
   const [summary, setSummary] = useState<string | null>(plan.overviewSummary);
   const [resyncing, setResyncing] = useState(false);
@@ -3997,7 +4028,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         {/* Skip the setup wizard for anything that's already run: setup-complete, wrapped, or past by
             date. Those land on the actual page (Overview), not the from-scratch setup flow. */}
         {tab === "overview" && ((plan.setupComplete || wrapped || pastByDate)
-          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} />
+          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} />
           : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}

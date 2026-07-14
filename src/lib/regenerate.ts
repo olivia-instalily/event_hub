@@ -5,11 +5,15 @@
 // template page. Reads text, PDFs (pdf.js), and spreadsheets (SheetJS); other binaries are skipped.
 import { extractBrief, setEventPattern, addDeliverable, setEventStaffRoles, type EventPlanning } from "./db";
 
-export async function regenerateFromMaterials(plan: EventPlanning, opts: { template: boolean }): Promise<string> {
+// `plan` is what gets WRITTEN (phases/deliverables/pattern). `opts.source` is where the source
+// MATERIALS are read from — defaults to `plan`, but for a template paired to a settled event the
+// materials live on the event, so pass the event as `source` and the template as `plan`.
+export async function regenerateFromMaterials(plan: EventPlanning, opts: { template: boolean; source?: EventPlanning }): Promise<string> {
+  const source = opts.source ?? plan;
   // 1) Gather text from every readable material.
   const texts: string[] = [];
   let skipped = 0;
-  for (const m of plan.sourceMaterials) {
+  for (const m of source.sourceMaterials) {
     const n = m.name.toLowerCase();
     const t = (m.type || "").toLowerCase();
     const isWorkbook = /\.(xlsx|xls|xlsm|ods)$/.test(n);

@@ -4,7 +4,7 @@ import {
   ListChecks, DollarSign, UserCircle, Mail, BookOpen, ArrowRight, X, ExternalLink, FileText, Plus, Pencil, Check, GripVertical,
 } from "lucide-react";
 import { DndContext, closestCorners, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
-import { type EventPlanning, type Deliverable, type OutreachTemplate, type EngagementWithCandidates, eventsFromTemplate, spinUpFromTemplate, type TemplateChild, addDeliverable, deleteDeliverable, setDeliverablePhase, setEventStaffRoles, setEventOutreach, addEngagement, deleteEngagement } from "../lib/db";
+import { type EventPlanning, type Deliverable, type OutreachTemplate, type EngagementWithCandidates, eventsFromTemplate, spinUpFromTemplate, type TemplateChild, addDeliverable, deleteDeliverable, setDeliverablePhase, setEventStaffRoles, setEventOutreach, setEventPattern, addEngagement, deleteEngagement } from "../lib/db";
 import { fundingFor } from "../lib/scoping";
 import { canonicalPhaseFor } from "../lib/phaseMerge";
 import { SourceMaterials } from "./SourceMaterials";
@@ -70,6 +70,14 @@ export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview, onA
   const [roles, setRoles] = useState(plan.staffRoles);
   const [outreach, setOutreach] = useState(plan.outreach);
   const [dels, setDels] = useState<Deliverable[]>(plan.deliverables);
+  const [phaseRows, setPhaseRows] = useState(plan.phases);
+  const addPhase = (name: string) => {
+    const n = name.trim();
+    if (!n || phaseRows.some((p) => p.name.toLowerCase() === n.toLowerCase())) return;
+    const next = [...phaseRows, { name: n, order: phaseRows.reduce((mx, p) => Math.max(mx, p.order), -1) + 1 }];
+    setPhaseRows(next);
+    setEventPattern(eventId, { phases: next }).catch(() => {});
+  };
   const [engagements, setEngagements] = useState<EngagementWithCandidates[]>(plan.engagements);
   const [jumpKey, setJumpKey] = useState<string | null>(null);
   const addRole = (r: string) => { const next = [...roles, r]; setRoles(next); setEventStaffRoles(eventId, next).catch(() => {}); };
@@ -89,7 +97,8 @@ export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview, onA
   // Walkthrough → Deliverables: open that tab and scroll to the matching deliverable.
   const jumpToDeliverable = (label: string) => { setJumpKey(normKey(label)); setTab("deliverables"); };
 
-  const phases = useMemo(() => enrichPhases(plan), [plan]);
+  // Use the LOCAL phase list + deliverables so add-phase / add-deliverable reflect immediately.
+  const phases = useMemo(() => enrichPhases({ phases: phaseRows, walkthrough: plan.walkthrough, deliverables: dels }), [phaseRows, plan.walkthrough, dels]);
   const funding = fundingFor(plan.tags);
 
   useEffect(() => { eventsFromTemplate(eventId).then(setChildren).catch(() => setChildren([])); }, [eventId]);
@@ -218,7 +227,7 @@ export function TemplateView({ plan, eventId, onExit, onOpenEvent, onReview, onA
             </div>
             <div className="p-6">
               {tab === "walkthrough" && <Walkthrough plan={plan} phases={phases} phaseRefs={phaseRefs} onJumpDeliverable={jumpToDeliverable} />}
-              {tab === "deliverables" && <Deliverables items={dels} phases={phases} jumpKey={jumpKey} onAdd={addDel} onRemove={removeDel} onMove={moveDel} />}
+              {tab === "deliverables" && <Deliverables items={dels} phases={phases} jumpKey={jumpKey} onAdd={addDel} onRemove={removeDel} onMove={moveDel} onAddPhase={addPhase} />}
               {tab === "budget" && <Budget plan={plan} engagements={engagements} onAdd={addCost} onRemove={removeCost} />}
               {tab === "roles" && <Roles roles={roles} plan={plan} onAdd={addRole} />}
               {tab === "outreach" && <Outreach items={outreach} onAdd={addOutreach} onUpdate={updateOutreach} onRemove={removeOutreach} />}
@@ -480,11 +489,13 @@ function DraggableRow({ id, children }: { id: string; children: (h: { setNodeRef
   return <>{children({ setNodeRef, attributes, listeners, style, isDragging })}</>;
 }
 
-function Deliverables({ items, phases, jumpKey, onAdd, onRemove, onMove }: { items: Deliverable[]; phases: Phase[]; jumpKey: string | null; onAdd: (title: string, phase: string) => void; onRemove: (id: string) => void; onMove?: (id: string, phase: string) => void }) {
+function Deliverables({ items, phases, jumpKey, onAdd, onRemove, onMove, onAddPhase }: { items: Deliverable[]; phases: Phase[]; jumpKey: string | null; onAdd: (title: string, phase: string) => void; onRemove: (id: string) => void; onMove?: (id: string, phase: string) => void; onAddPhase?: (name: string) => void }) {
   const refs = useRef<Record<string, HTMLLIElement | null>>({});
   const [highlight, setHighlight] = useState<string | null>(null);
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
   const [title, setTitle] = useState("");
+  const [addingPhase, setAddingPhase] = useState(false);
+  const [phaseName, setPhaseName] = useState("");
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor));
 
   // On a jump from the walkthrough, scroll to and highlight the matching deliverable.
@@ -560,6 +571,18 @@ function Deliverables({ items, phases, jumpKey, onAdd, onRemove, onMove }: { ite
           </DroppableSection>
         );
       })}
+      {/* Add a new phase to the template — it appears as its own section you can add deliverables to. */}
+      {onAddPhase && (
+        addingPhase ? (
+          <div className="flex items-center gap-2">
+            <input autoFocus value={phaseName} onChange={(e) => setPhaseName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && phaseName.trim()) { onAddPhase(phaseName); setPhaseName(""); setAddingPhase(false); } if (e.key === "Escape") { setPhaseName(""); setAddingPhase(false); } }} placeholder="New phase (e.g. Networking & wrap)" className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+            <button onClick={() => { if (phaseName.trim()) { onAddPhase(phaseName); setPhaseName(""); setAddingPhase(false); } }} disabled={!phaseName.trim()} className="px-2.5 py-1 bg-gray-900 text-white rounded text-[15px] disabled:opacity-40">Add phase</button>
+            <button onClick={() => { setPhaseName(""); setAddingPhase(false); }} className="text-[15px] text-gray-500 hover:text-gray-900">Cancel</button>
+          </div>
+        ) : (
+          <button onClick={() => setAddingPhase(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-gray-300 text-sm text-gray-600 hover:bg-gray-50"><Plus className="w-4 h-4" /> Add phase</button>
+        )
+      )}
     </div>
     </DndContext>
   );
