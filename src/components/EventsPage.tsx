@@ -2,15 +2,14 @@ import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, Chevr
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, extractForBackfill, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
 import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage, ingestEventDoc, completenessFields } from "./EventPlanningPage";
 import { PhaseRail, PHASE_COLORS } from "./TemplateView";
-import { unsupportedFileMessage, readFilesText } from "../lib/fileSupport";
-import { type BackfillExtract } from "../lib/backfill";
+import { unsupportedFileMessage } from "../lib/fileSupport";
 import { NewEventDropZone } from "./NewEventDropZone";
 import { useProfile } from "../lib/profile";
 import { ConfirmModal } from "./Modal";
@@ -1928,7 +1927,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [dropBusyId, setDropBusyId] = useState<string | null>(null);
   const [dropToast, setDropToast] = useState<string | null>(null);
-  const [enrichTarget, setEnrichTarget] = useState<{ plan: EventPlanning; ex: BackfillExtract; files: File[] } | null>(null);
+  const [enrichTarget, setEnrichTarget] = useState<{ plan: EventPlanning; files: File[] } | null>(null);
   useEffect(() => { if (!dropToast) return; const t = setTimeout(() => setDropToast(null), 6000); return () => clearTimeout(t); }, [dropToast]);
   const handleEventDrop = async (id: string, title: string, files: File[]) => {
     if (!files.length) return;
@@ -1936,10 +1935,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     try {
       const plan = await getEventPlanning(id);
       if (!plan) { setDropToast(`${title}: couldn't load the event.`); return; }
-      // Past/wrapped event → extract in the BACKGROUND (the block keeps its "Processing…" spinner and
-      // the rest of the page stays usable); when done, pop the review pre-loaded (no re-processing).
+      // Past/wrapped event → open the enrich review as a bottom "Processing…" pill (extracts in the
+      // background, auto-opens to review when done). The page stays fully usable meanwhile.
       const isPast = plan.settleState === "settled" || plan.macroStage === "Wrapped" || (!!plan.date && plan.date < new Date().toISOString().slice(0, 10));
-      if (isPast) { const text = await readFilesText(files); const ex = await extractForBackfill(text); setEnrichTarget({ plan, ex, files }); return; }
+      if (isPast) { setEnrichTarget({ plan, files }); return; }
       // Active event → quick silent gap-fill.
       const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
       let applied = 0;
@@ -2083,8 +2082,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       {enrichTarget && (
         <BackfillModal
           enrich={{ eventId: enrichTarget.plan.id, plan: enrichTarget.plan }}
-          initialExtract={enrichTarget.ex}
           initialFiles={enrichTarget.files}
+          startMinimized
           onClose={() => setEnrichTarget(null)}
           onCreated={() => { setEnrichTarget(null); void load(); }}
         />

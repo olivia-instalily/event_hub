@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Paperclip, Loader2, Check, X, AlertCircle } from "lucide-react";
 import {
   extractForBackfill, listTemplates, backfillWrappedEvent, createTemplateFromExtract, applyTemplateAdditions,
-  uploadDocument, setEventMaterials, addSourceMaterial, enrichExistingEvent, type SourceMaterial, type EventPlanning,
+  uploadDocument, setEventMaterials, addSourceMaterial, addBudgetActuals, enrichExistingEvent, type SourceMaterial, type EventPlanning,
 } from "../lib/db";
+import { parseBudgetText } from "./BudgetImport";
 import {
   matchTemplates, completenessGaps, templateAdditions, hasAdditions,
   type BackfillExtract, type TemplateLite, type TemplateMatch, type TemplateAdditions,
 } from "../lib/backfill";
-import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
+import { unsupportedFileMessage, isWorkbookFile, readFilesText } from "../lib/fileSupport";
 import { useProfile } from "../lib/profile";
 
 // Backfill a past event by dropping its debrief/brief. Extract → classify + match a template
@@ -16,8 +17,11 @@ import { useProfile } from "../lib/profile";
 // adopt/extend the one template. No-propagation: extending a template never rewrites siblings.
 type Choice = string; // template id | "new" | "none"
 
-export function BackfillModal({ onClose, onCreated, initialText, initialFiles, initialExtract, enrich }: { onClose: () => void; onCreated: (eventId: string) => void; initialText?: string; initialFiles?: File[] | null; initialExtract?: BackfillExtract; enrich?: { eventId: string; plan: EventPlanning } }) {
+export function BackfillModal({ onClose, onCreated, initialText, initialFiles, initialExtract, enrich, startMinimized }: { onClose: () => void; onCreated: (eventId: string) => void; initialText?: string; initialFiles?: File[] | null; initialExtract?: BackfillExtract; enrich?: { eventId: string; plan: EventPlanning }; startMinimized?: boolean }) {
   const [stage, setStage] = useState<"input" | "extracting" | "review" | "saving">("input");
+  // Minimized = show only a small bottom "Processing…" pill (click to open) while extracting; the
+  // modal auto-expands once it reaches the review screen.
+  const [minimized, setMinimized] = useState(!!startMinimized);
   const [text, setText] = useState(initialText ?? "");
   // The dropped file(s) that generated this backfill → kept as tagged source materials.
   const [attachFiles, setAttachFiles] = useState<File[]>(initialFiles ?? []);
@@ -77,23 +81,29 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
     } catch { setErr("Couldn't read that file — paste the text instead."); }
   };
 
-  // Mount: a PRE-EXTRACTED result (background list-drop) opens straight to review — no re-processing;
-  // otherwise raw initialText is processed here.
+  // Mount: pre-extracted → straight to review; else read dropped files (or use initialText) and
+  // extract in the background — the modal shows a bottom pill (minimized) until it hits review.
   useEffect(() => {
     if (initialExtract) {
       const ex = enrich ? mergeWithPlan(initialExtract, enrich.plan) : initialExtract;
       setX(ex);
       setOwnerProfileId(enrich?.plan.owners[0]?.id ?? matchOwner(ex.owner));
       setStage("review");
+    } else if (initialFiles && initialFiles.length && !initialText?.trim()) {
+      setStage("extracting");
+      void readFilesText(initialFiles).then((t) => { setText(t); return run(t); });
     } else if (initialText?.trim()) { void run(); }
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, []);
+  // Auto-expand from the pill once extraction lands on the review screen.
+  useEffect(() => { if (stage === "review") setMinimized(false); }, [stage]);
 
-  const run = async () => {
-    if (!text.trim()) return;
+  const run = async (override?: string) => {
+    const src = override ?? text;
+    if (!src.trim()) { setStage("input"); return; }
     setStage("extracting"); setErr(null);
     try {
-      const [rawEx, tmpls] = await Promise.all([extractForBackfill(text), listTemplates()]);
+      const [rawEx, tmpls] = await Promise.all([extractForBackfill(src), listTemplates()]);
       // Enrich mode: merge the extract with the existing event so the review shows the full picture.
       const ex = enrich ? mergeWithPlan(rawEx, enrich.plan) : rawEx;
       const ms = matchTemplates(tmpls, { format: ex.format, tag: ex.tag });
@@ -123,7 +133,17 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
       if (enrich) {
         await enrichExistingEvent(enrich.eventId, merged, ownerProfileId);
         for (const f of attachFiles) {
-          try { const url = await uploadDocument(f); await addSourceMaterial(enrich.eventId, { name: f.name, url, type: f.type || "text/plain" }); } catch { /* non-fatal */ }
+          let url: string | null = null;
+          try { url = await uploadDocument(f); await addSourceMaterial(enrich.eventId, { name: f.name, url, type: f.type || "text/plain" }); } catch { /* non-fatal */ }
+          // A CSV / spreadsheet → import its rows as final-spend budget lines (deterministic table
+          // parse; the LLM review only handles prose, so tables would otherwise be lost).
+          if (/\.(csv|tsv|xlsx?|ods)$/i.test(f.name) || /csv|excel|spreadsheet/i.test(f.type)) {
+            try {
+              const t = isWorkbookFile(f) ? await (await import("../lib/workbook")).readWorkbookAsText(f) : await f.text();
+              const lines = parseBudgetText(t).filter((l) => l.label?.trim() && l.amount != null);
+              if (lines.length) await addBudgetActuals(enrich.eventId, lines.map((l) => ({ label: l.label, amount: l.amount })), url);
+            } catch { /* skip */ }
+          }
         }
         onCreated(enrich.eventId);
         return;
@@ -149,6 +169,15 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
   };
 
   const field = "px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
+  // Minimized: just a small bottom pill while it processes (click to open early). Auto-expands to the
+  // review screen when extraction finishes.
+  if (minimized) {
+    return (
+      <button onClick={() => setMinimized(false)} className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[95] inline-flex items-center gap-2 rounded-full bg-gray-900 text-white text-sm px-4 py-2 shadow-lg hover:bg-black">
+        <Loader2 className="w-4 h-4 animate-spin" /> {enrich ? `Processing “${enrich.plan.title}”…` : "Processing…"} <span className="text-gray-400">· click to open</span>
+      </button>
+    );
+  }
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
@@ -182,7 +211,7 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
             </div>
             <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder="…or paste the debrief / brief text" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
             <div className="flex items-center gap-2">
-              <button onClick={run} disabled={stage === "extracting" || !text.trim()} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50 inline-flex items-center gap-1">
+              <button onClick={() => void run()} disabled={stage === "extracting" || !text.trim()} className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50 inline-flex items-center gap-1">
                 {stage === "extracting" ? <><Loader2 className="w-4 h-4 animate-spin" /> Reading…</> : "Process"}
               </button>
               {err && <span className="text-sm text-red-600">{err}</span>}

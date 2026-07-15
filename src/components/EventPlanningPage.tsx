@@ -59,7 +59,7 @@ import { OpenInLinear } from "./OpenInLinear";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
 import { parseVendors } from "../lib/vendorImport";
-import { unsupportedFileMessage, isWorkbookFile, readFilesText } from "../lib/fileSupport";
+import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
 import { BackfillModal } from "./BackfillModal";
 import { filesFromDrop } from "../lib/drop";
 import { EventSetup } from "./EventSetup";
@@ -3788,12 +3788,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
     // Dropping a doc onto a PAST/wrapped event = enrich it → open the review-and-edit (same as
     // backfill), pre-merged with this event. An ACTIVE event keeps the quick silent gap-fill.
     const isPast = plan.settleState === "settled" || plan.macroStage === "Wrapped" || (!!plan.date && plan.date < new Date().toISOString().slice(0, 10));
-    if (isPast) {
-      setDropBusy(true); setDropMsg(null);
-      try { const text = await readFilesText(files); setEnrichDrop({ text, files }); }
-      finally { setDropBusy(false); }
-      return;
-    }
+    if (isPast) { setEnrichDrop({ files }); return; } // modal opens as a bottom pill, extracts, then review
     setDropBusy(true); setDropMsg(null);
     try {
       const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
@@ -3864,7 +3859,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   // control keeps the same placement/sizing when switching between the list and an event.
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
-  const [enrichDrop, setEnrichDrop] = useState<{ text: string; files: File[] } | null>(null);
+  const [enrichDrop, setEnrichDrop] = useState<{ files: File[] } | null>(null);
   // Clear imported/derived content back to a clean slate (keeps identity); refresh after.
   const doReset = async () => { try { await resetEvent(eventId); } finally { setConfirmReset(false); setReload((r) => r + 1); } };
   const back = (
@@ -3912,8 +3907,8 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
       {enrichDrop && (
         <BackfillModal
           enrich={{ eventId, plan }}
-          initialText={enrichDrop.text}
           initialFiles={enrichDrop.files}
+          startMinimized
           onClose={() => setEnrichDrop(null)}
           onCreated={() => { setEnrichDrop(null); setReload((r) => r + 1); }}
         />
