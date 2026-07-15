@@ -47,8 +47,11 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
     date: p.date ?? ex.date,
     location: p.location ?? ex.location,
     owner: ex.owner ?? (p.owners[0]?.name ?? null),
-    headcount: p.rsvp ?? p.headcount ?? ex.headcount,
-    turnoutActual: p.checkedIn ?? ex.turnoutActual,
+    // Turnout: prefer the brief's explicit numbers (the doc you just dropped); the event's existing
+    // (Luma) value is surfaced as a conflict in the review so you resolve it rather than it silently
+    // overwriting — or being overwritten.
+    headcount: ex.headcount ?? p.rsvp ?? p.headcount,
+    turnoutActual: ex.turnoutActual ?? p.checkedIn,
     verdict: p.verdict?.trim() ? p.verdict : ex.verdict,
     staffRoles: dedup([...p.staffRoles, ...ex.staffRoles]),
     lessons: dedup([...p.reflections, ...ex.lessons]),
@@ -228,8 +231,16 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
                 <label className="flex flex-col gap-1 sm:col-span-2"><span className="text-[12px] text-gray-500">Name</span><input value={x.name} onChange={(e) => edit({ name: e.target.value })} className={`${field} w-full`} /></label>
                 <label className="flex flex-col gap-1"><span className="text-[12px] text-gray-500">Date</span><input type="date" value={x.date ?? ""} onChange={(e) => edit({ date: e.target.value || null })} className={`${field} w-full`} /></label>
                 <label className="flex flex-col gap-1"><span className="text-[12px] text-gray-500">Location</span><input value={x.location ?? ""} onChange={(e) => edit({ location: e.target.value || null })} placeholder="Venue / city" className={`${field} w-full`} /></label>
-                <label className="flex flex-col gap-1"><span className="text-[12px] text-gray-500">Invited</span><input type="number" value={x.headcount ?? ""} onChange={(e) => edit({ headcount: e.target.value === "" ? null : Number(e.target.value) })} placeholder="#" className={`${field} w-full`} /></label>
-                <label className="flex flex-col gap-1"><span className="text-[12px] text-gray-500">Attended</span><input type="number" value={x.turnoutActual ?? ""} onChange={(e) => edit({ turnoutActual: e.target.value === "" ? null : Number(e.target.value) })} placeholder="#" className={`${field} w-full`} /></label>
+                <label className="flex flex-col gap-1"><span className="text-[12px] text-gray-500">Invited</span><input type="number" value={x.headcount ?? ""} onChange={(e) => edit({ headcount: e.target.value === "" ? null : Number(e.target.value) })} placeholder="#" className={`${field} w-full`} />
+                  {(() => { const luma = enrich ? (enrich.plan.rsvp ?? enrich.plan.headcount ?? null) : null; return luma != null && luma !== x.headcount ? (
+                    <button type="button" onClick={() => edit({ headcount: luma })} className="text-[11px] text-amber-700 inline-flex items-center gap-1 text-left"><AlertCircle className="w-3 h-3 shrink-0" /> Luma/event has {luma} — use it</button>
+                  ) : null; })()}
+                </label>
+                <label className="flex flex-col gap-1"><span className="text-[12px] text-gray-500">Attended</span><input type="number" value={x.turnoutActual ?? ""} onChange={(e) => edit({ turnoutActual: e.target.value === "" ? null : Number(e.target.value) })} placeholder="#" className={`${field} w-full`} />
+                  {(() => { const luma = enrich ? (enrich.plan.checkedIn ?? null) : null; return luma != null && luma !== x.turnoutActual ? (
+                    <button type="button" onClick={() => edit({ turnoutActual: luma })} className="text-[11px] text-amber-700 inline-flex items-center gap-1 text-left"><AlertCircle className="w-3 h-3 shrink-0" /> Luma/event has {luma} — use it</button>
+                  ) : null; })()}
+                </label>
               </div>
               {/* Owner — matched to a profile; confirm when the match isn't exact. */}
               <div className="flex flex-col gap-1">
