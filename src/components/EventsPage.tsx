@@ -7,10 +7,11 @@ import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
 import { canonicalCity } from "../lib/cities";
-import { EventPlanningPage, ingestEventDoc, completenessFields } from "./EventPlanningPage";
+import { EventPlanningPage } from "./EventPlanningPage";
 import { PhaseRail, PHASE_COLORS } from "./TemplateView";
 import { unsupportedFileMessage } from "../lib/fileSupport";
 import { NewEventDropZone } from "./NewEventDropZone";
+import { useEventDrop } from "./useEventDrop";
 import { useProfile } from "../lib/profile";
 import { ConfirmModal } from "./Modal";
 import { BackfillModal } from "./BackfillModal";
@@ -1923,45 +1924,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       .catch((e) => setError(e.message ?? String(e)))
       .finally(() => setLoading(false));
 
-  // Drop files/folders straight onto an event in the list to backfill/enrich it — no need to open it.
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
-  const [dropBusyId, setDropBusyId] = useState<string | null>(null);
-  const [dropToast, setDropToast] = useState<string | null>(null);
-  const [enrichTarget, setEnrichTarget] = useState<{ plan: EventPlanning; files: File[] } | null>(null);
-  useEffect(() => { if (!dropToast) return; const t = setTimeout(() => setDropToast(null), 6000); return () => clearTimeout(t); }, [dropToast]);
-  const handleEventDrop = async (id: string, title: string, files: File[]) => {
-    if (!files.length) return;
-    setDropBusyId(id); setDropToast(null);
-    try {
-      const plan = await getEventPlanning(id);
-      if (!plan) { setDropToast(`${title}: couldn't load the event.`); return; }
-      // Past/wrapped event → open the enrich review as a bottom "Processing…" pill (extracts in the
-      // background, auto-opens to review when done). The page stays fully usable meanwhile.
-      const isPast = plan.settleState === "settled" || plan.macroStage === "Wrapped" || (!!plan.date && plan.date < new Date().toISOString().slice(0, 10));
-      if (isPast) { setEnrichTarget({ plan, files }); return; }
-      // Active event → quick silent gap-fill.
-      const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
-      let applied = 0;
-      for (const file of files) {
-        try { const r = await ingestEventDoc(id, file, gapKeys); if (r.applied) applied++; } catch { /* skip one bad file */ }
-      }
-      setDropToast(`${title}: processed ${files.length} file${files.length === 1 ? "" : "s"}${applied ? `, ${applied} applied` : " — nothing new"}.`);
-      if (applied) await load();
-    } catch (e: any) { setDropToast(`${title}: ${e?.message ?? String(e)}`); }
-    finally { setDropBusyId(null); }
-  };
-  // A per-event drop target (card/row). The `data-event-drop` marker lets the app-level overlay
-  // detect "over a row" and hide itself, so hovering a card shows THAT card's highlight (add to it)
-  // instead of the full-screen "create" overlay. dragenter/over do NOT stopPropagation (the app
-  // needs to see them to suppress its overlay); only the DROP stops propagation, so it attaches to
-  // this event instead of firing the app's create flow.
-  const dropZone = (id: string, title: string) => ({
-    "data-event-drop": id,
-    onDragEnter: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); setDragOverId(id); },
-    onDragOver: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); setDragOverId(id); },
-    onDragLeave: () => setDragOverId((cur) => (cur === id ? null : cur)),
-    onDrop: (e: React.DragEvent) => { if (!Array.from(e.dataTransfer.types).includes("Files")) return; e.preventDefault(); e.stopPropagation(); setDragOverId(null); void filesFromDrop(e.dataTransfer).then((fs) => { if (fs.length) void handleEventDrop(id, title, fs); }); },
-  });
+  // Drop a doc/folder onto an event card/row to add to it (shared with Home, etc.).
+  const { dropZone, dragOverId, dropBusyId, overlays: dropOverlays } = useEventDrop(() => void load());
 
   // Reload on mount and whenever we return from an event view, so edits made inside an
   // event (e.g. formats) are reflected on its card.
@@ -2078,24 +2042,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   return (
     <div>
-      {/* Drop onto a PAST event → review-and-edit enrich (merges the doc into that event). */}
-      {enrichTarget && (
-        <BackfillModal
-          enrich={{ eventId: enrichTarget.plan.id, plan: enrichTarget.plan }}
-          initialFiles={enrichTarget.files}
-          startMinimized
-          onClose={() => setEnrichTarget(null)}
-          onCreated={() => { setEnrichTarget(null); void load(); }}
-        />
-      )}
-
-      {/* Result of a drop-onto-a-line backfill */}
-      {dropToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[95] inline-flex items-center gap-2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg">
-          <span>{dropToast}</span>
-          <button onClick={() => setDropToast(null)} className="text-gray-400 hover:text-white" aria-label="Dismiss"><X className="w-4 h-4" /></button>
-        </div>
-      )}
+      {/* Drop-onto-a-card enrich modal + result toast (shared hook). */}
+      {dropOverlays}
 
       {onNewEventFiles && <div className="mb-6"><NewEventDropZone onFiles={onNewEventFiles} onClick={openCreateFresh} /></div>}
 

@@ -5,6 +5,7 @@ import { useProfile, initials } from "../lib/profile";
 import { TagStack } from "./TagStack";
 import { ConfirmModal } from "./Modal";
 import { NewEventDropZone } from "./NewEventDropZone";
+import { useEventDrop } from "./useEventDrop";
 
 const NOT_CAPTURED = "Not captured";
 // Phase color dots — same palette/order as the phase tracker (by phase order).
@@ -26,6 +27,9 @@ export function HomePage({ onOpenEvent, onCreateEvent, onNewEventFiles }: { onOp
   };
 
   const [todos, setTodos] = useState<OwnerTodo[]>([]);
+  // Drop a doc/folder onto an event card here too (shared with the Events list).
+  const reload = () => { listEvents().then(setEvents).catch(() => {}); };
+  const { dropZone, dragOverId, dropBusyId, overlays: dropOverlays } = useEventDrop(reload);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,11 +79,18 @@ export function HomePage({ onOpenEvent, onCreateEvent, onNewEventFiles }: { onOp
 
   return (
     <div>
+      {dropOverlays}
       <div className="flex items-center justify-between gap-3 mb-8">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 cursor-default select-none">
           {current && (
-            <span className={`flex items-center justify-center w-10 h-10 rounded-full text-white text-sm ${current.color ?? "bg-gray-500"}`}>
-              {initials(current.name)}
+            <span className="group relative">
+              <span className={`flex items-center justify-center w-10 h-10 rounded-full text-white text-sm ${current.color ?? "bg-gray-500"}`}>
+                {initials(current.name)}
+              </span>
+              {/* Full-name tooltip on hover — styled bubble instead of the browser default. */}
+              <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-gray-900 px-2.5 py-1 text-xs text-white opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
+                {current.name}
+              </span>
             </span>
           )}
           <div>
@@ -117,9 +128,11 @@ export function HomePage({ onOpenEvent, onCreateEvent, onNewEventFiles }: { onOp
               {myEvents.map((event) => (
                 <div
                   key={event.id}
+                  {...dropZone(event.id, event.title)}
                   onClick={() => onOpenEvent(event.id)}
-                  className="group relative text-left bg-white rounded-2xl border border-border p-6 hover:shadow-md transition-shadow overflow-hidden flex flex-col cursor-pointer"
+                  className={`group relative text-left bg-white rounded-2xl p-6 hover:shadow-md transition-shadow overflow-hidden flex flex-col cursor-pointer ${dragOverId === event.id ? 'border ring-2 ring-gray-400 border-gray-400 bg-gray-50' : 'border border-border'}`}
                 >
+                  {dropBusyId === event.id && <div className="absolute inset-0 z-20 bg-white/70 flex items-center justify-center text-sm text-gray-600">Processing…</div>}
                   <button
                     onClick={(e) => { e.stopPropagation(); setDeleteTarget(event); }}
                     className="absolute top-2 right-2 z-10 p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 rounded-lg transition-colors opacity-0 group-hover:opacity-100"

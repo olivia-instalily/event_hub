@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Paperclip, Loader2, Check, X, AlertCircle } from "lucide-react";
+import { Paperclip, Loader2, Check, X, AlertCircle, Minus } from "lucide-react";
 import {
   extractForBackfill, listTemplates, backfillWrappedEvent, createTemplateFromExtract, applyTemplateAdditions,
   uploadDocument, setEventMaterials, addSourceMaterial, addBudgetActuals, enrichExistingEvent, type SourceMaterial, type EventPlanning,
@@ -16,6 +16,29 @@ import { useProfile } from "../lib/profile";
 // (propose, don't auto-merge) → completeness prompt (not a block) → create the wrapped record,
 // adopt/extend the one template. No-propagation: extending a template never rewrites siblings.
 type Choice = string; // template id | "new" | "none"
+
+// A dropped file that looks like a budget table (spreadsheet/CSV) → parse its rows deterministically.
+const isBudgetFile = (f: File) => /\.(csv|tsv|xlsx?|ods)$/i.test(f.name) || /csv|excel|spreadsheet/i.test(f.type);
+const budgetKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+type ActualLine = { line: string; amount: number | null };
+// Read budget lines straight from the dropped spreadsheet(s) — the LLM review only handles prose, so
+// tables would otherwise be lost. Surfaced in the review (with conflicts) rather than applied silently.
+async function parseBudgetFromFiles(files: File[]): Promise<ActualLine[]> {
+  const out: ActualLine[] = [];
+  for (const f of files) {
+    if (!isBudgetFile(f)) continue;
+    try {
+      const t = isWorkbookFile(f) ? await (await import("../lib/workbook")).readWorkbookAsText(f) : await f.text();
+      for (const l of parseBudgetText(t)) if (l.label?.trim() && l.amount != null) out.push({ line: l.label, amount: l.amount });
+    } catch { /* skip an unreadable file */ }
+  }
+  return out;
+}
+// Merge two actuals lists, deduping by label — `primary` wins on collisions.
+function mergeActuals(primary: ActualLine[], extra: ActualLine[]): ActualLine[] {
+  const seen = new Set(primary.map((l) => budgetKey(l.line)));
+  return [...primary, ...extra.filter((l) => l.line && !seen.has(budgetKey(l.line)))];
+}
 
 export function BackfillModal({ onClose, onCreated, initialText, initialFiles, initialExtract, enrich, startMinimized }: { onClose: () => void; onCreated: (eventId: string) => void; initialText?: string; initialFiles?: File[] | null; initialExtract?: BackfillExtract; enrich?: { eventId: string; plan: EventPlanning }; startMinimized?: boolean }) {
   const [stage, setStage] = useState<"input" | "extracting" | "review" | "saving">("input");
@@ -35,7 +58,15 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
   const [tmplQuery, setTmplQuery] = useState(""); // search OTHER templates by name (don't list them all)
   const [excluded, setExcluded] = useState<Set<string>>(new Set()); // addition items the user unchecked
   const [ownerProfileId, setOwnerProfileId] = useState<string | null>(null); // reviewer-confirmed owner
+  const [confirmClose, setConfirmClose] = useState(false); // "you'll lose progress" guard on close
+  // Where the current mouse-press started. A backdrop click only closes if the press BEGAN on the
+  // backdrop — so selecting text in a field and releasing outside the modal never dismisses it.
+  const pressOnBackdrop = useRef(false);
   const { profiles } = useProfile();
+
+  // Closing loses in-flight extraction / an unsaved review — confirm first. Nothing to lose on the
+  // empty input screen, so close straight away there.
+  const requestClose = () => { if (stage === "input") onClose(); else setConfirmClose(true); };
 
   // Edit any extracted field in place before creating. All review inputs write straight to `x`.
   const edit = (patch: Partial<BackfillExtract>) => setX((p) => (p ? { ...p, ...patch } : p));
@@ -109,6 +140,12 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
       const [rawEx, tmpls] = await Promise.all([extractForBackfill(src), listTemplates()]);
       // Enrich mode: merge the extract with the existing event so the review shows the full picture.
       const ex = enrich ? mergeWithPlan(rawEx, enrich.plan) : rawEx;
+      // Pull budget rows out of any dropped spreadsheet so they show in the review (with conflict flags
+      // vs. the event's current budget) instead of being applied silently at save time.
+      if (enrich && attachFiles.length) {
+        const fileBudget = await parseBudgetFromFiles(attachFiles);
+        if (fileBudget.length) ex.actuals = mergeActuals(fileBudget, ex.actuals);
+      }
       const ms = matchTemplates(tmpls, { format: ex.format, tag: ex.tag });
       setX(ex); setTemplates(tmpls); setMatches(ms);
       setOwnerProfileId(enrich?.plan.owners[0]?.id ?? matchOwner(ex.owner)); // keep existing owner; else best-guess
@@ -135,19 +172,14 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
       // Enrich mode: apply to the EXISTING event, attach the docs as context, done.
       if (enrich) {
         await enrichExistingEvent(enrich.eventId, merged, ownerProfileId);
+        let budgetDocUrl: string | null = null;
         for (const f of attachFiles) {
-          let url: string | null = null;
-          try { url = await uploadDocument(f); await addSourceMaterial(enrich.eventId, { name: f.name, url, type: f.type || "text/plain" }); } catch { /* non-fatal */ }
-          // A CSV / spreadsheet → import its rows as final-spend budget lines (deterministic table
-          // parse; the LLM review only handles prose, so tables would otherwise be lost).
-          if (/\.(csv|tsv|xlsx?|ods)$/i.test(f.name) || /csv|excel|spreadsheet/i.test(f.type)) {
-            try {
-              const t = isWorkbookFile(f) ? await (await import("../lib/workbook")).readWorkbookAsText(f) : await f.text();
-              const lines = parseBudgetText(t).filter((l) => l.label?.trim() && l.amount != null);
-              if (lines.length) await addBudgetActuals(enrich.eventId, lines.map((l) => ({ label: l.label, amount: l.amount })), url);
-            } catch { /* skip */ }
-          }
+          try { const url = await uploadDocument(f); await addSourceMaterial(enrich.eventId, { name: f.name, url, type: f.type || "text/plain" }); if (isBudgetFile(f)) budgetDocUrl = budgetDocUrl ?? url; } catch { /* non-fatal */ }
         }
+        // Apply the reviewed budget lines — conflicts were resolved in the review (kept current or took
+        // the dropped value). addBudgetActuals updates matching lines and leaves untouched ones alone.
+        const budgetLines = merged.actuals.filter((a) => a.line?.trim() && a.amount != null).map((a) => ({ label: a.line, amount: a.amount }));
+        if (budgetLines.length) { try { await addBudgetActuals(enrich.eventId, budgetLines, budgetDocUrl); } catch { /* skip */ } }
         onCreated(enrich.eventId);
         return;
       }
@@ -184,18 +216,37 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
-      onClick={onClose}
+      // Only a click that BOTH started and ended on the backdrop closes it — a text-selection drag
+      // that starts in a field and releases out here won't (its press began inside the modal).
+      onMouseDown={(e) => { pressOnBackdrop.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && pressOnBackdrop.current) requestClose(); }}
       // Keep drags inside the modal — don't let them bubble to the app-level "drop to create" overlay.
       onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); }}
       onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
       onDragLeave={(e) => { e.stopPropagation(); }}
       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); }}
     >
-      <div className="bg-white rounded-2xl border border-border max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+      <div className="relative bg-white rounded-2xl border border-border max-w-2xl w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-xl">{enrich ? `Add to “${enrich.plan.title}”` : "Backfill a past event"}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+          <div className="flex items-center gap-1">
+            {/* Minimize back to the bottom pill — keeps the modal mounted so no progress is lost. */}
+            <button onClick={() => setMinimized(true)} className="text-gray-400 hover:text-gray-700" aria-label="Minimize"><Minus className="w-5 h-5" /></button>
+            <button onClick={requestClose} className="text-gray-400 hover:text-gray-700" aria-label="Close"><X className="w-5 h-5" /></button>
+          </div>
         </div>
+        {confirmClose && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-black/40 p-4" onClick={(e) => { e.stopPropagation(); setConfirmClose(false); }}>
+            <div className="bg-white rounded-xl border border-border max-w-xs w-full p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <p className="font-medium mb-1">Discard this?</p>
+              <p className="text-sm text-gray-600 mb-4">You'll lose the extracted review for this drop. You can minimize instead to keep it running.</p>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setConfirmClose(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Keep editing</button>
+                <button onClick={onClose} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700">Discard</button>
+              </div>
+            </div>
+          </div>
+        )}
         <p className="text-sm text-gray-500 mb-4">{enrich ? "Drop a debrief or brief for this event. EventHub extracts everything and merges it in — review and correct below before it's applied." : "Drop its debrief or brief. EventHub creates the wrapped record, fills what it can, and builds on the matching template. Nothing's created until you confirm."}</p>
 
         {(stage === "input" || stage === "extracting") && (
@@ -265,6 +316,8 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, i
             <AgendaEditor items={x.agenda} onChange={(agenda) => edit({ agenda })} />
             {/* Lessons */}
             <ListEditor label="Lessons" placeholder="Add a learning" items={x.lessons} onChange={(lessons) => edit({ lessons })} />
+            {/* Budget — enrich only: reconcile the dropped doc's lines against the event's current budget. */}
+            {enrich && <BudgetEditor items={x.actuals} existing={enrich.plan.budget?.lines ?? []} onChange={(actuals) => edit({ actuals })} />}
 
             {/* template match — suggest only RELEVANT templates; search for any other. (New records only.) */}
             {!enrich && (() => {
@@ -359,6 +412,52 @@ function ListEditor({ label, placeholder, items, onChange }: { label: string; pl
       <div className="flex items-center gap-2">
         <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder={placeholder} className={`${rowInput} flex-1`} />
         <button onClick={add} disabled={!draft.trim()} className="text-[13px] text-gray-500 hover:text-gray-900 disabled:opacity-40">Add</button>
+      </div>
+    </div>
+  );
+}
+
+// Editable budget actuals with conflict resolution. Each dropped line is checked against the event's
+// current budget: same label + different amount → flag it and let the reviewer keep the current value
+// (or leave the dropped value). Lines not present in the drop are left untouched (noted, not shown).
+function BudgetEditor({ items, existing, onChange }: { items: ActualLine[]; existing: { label: string | null; confirmedAmount: number | null }[]; onChange: (v: ActualLine[]) => void }) {
+  const [label, setLabel] = useState("");
+  const [amt, setAmt] = useState("");
+  const currentByLabel = new Map(existing.filter((e) => e.label).map((e) => [budgetKey(e.label!), e.confirmedAmount] as const));
+  const add = () => { const l = label.trim(); if (!l) return; onChange([...items, { line: l, amount: amt.trim() === "" ? null : Number(amt) }]); setLabel(""); setAmt(""); };
+  const touched = new Set(items.map((i) => budgetKey(i.line)));
+  const untouched = existing.filter((e) => e.label && !touched.has(budgetKey(e.label)));
+  const money = (n: number | null | undefined) => (n == null ? "—" : `$${n.toLocaleString()}`);
+  return (
+    <div>
+      <p className="text-[13px] font-medium text-gray-700 mb-1">Budget actuals <span className="text-gray-400 font-normal">· {items.length}</span></p>
+      {items.length > 0 && (
+        <ul className="space-y-1 mb-2">
+          {items.map((it, i) => {
+            const cur = currentByLabel.get(budgetKey(it.line));
+            const conflict = cur != null && cur !== it.amount;
+            return (
+              <li key={i} className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2">
+                  <input value={it.line} onChange={(e) => onChange(items.map((v, j) => (j === i ? { ...v, line: e.target.value } : v)))} className={`${rowInput} flex-1`} />
+                  <input type="number" value={it.amount ?? ""} onChange={(e) => onChange(items.map((v, j) => (j === i ? { ...v, amount: e.target.value === "" ? null : Number(e.target.value) } : v)))} placeholder="$" className={`${rowInput} w-28`} />
+                  <button onClick={() => onChange(items.filter((_, j) => j !== i))} className="text-gray-300 hover:text-red-600" aria-label="Remove"><X className="w-3.5 h-3.5" /></button>
+                </div>
+                {conflict && (
+                  <span className="text-[11px] text-amber-700 inline-flex items-center gap-1 pl-1"><AlertCircle className="w-3 h-3 shrink-0" /> Event currently has {money(cur)} — dropped doc says {money(it.amount)}.
+                    <button type="button" onClick={() => onChange(items.map((v, j) => (j === i ? { ...v, amount: cur } : v)))} className="underline hover:text-amber-900">keep current</button>
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {untouched.length > 0 && <p className="text-[11px] text-gray-400 mb-2">{untouched.length} existing budget line{untouched.length === 1 ? "" : "s"} not in this doc — kept as-is.</p>}
+      <div className="flex items-center gap-2">
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Add a budget line" className={`${rowInput} flex-1`} />
+        <input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="$" className={`${rowInput} w-28`} />
+        <button onClick={add} disabled={!label.trim()} className="text-[13px] text-gray-500 hover:text-gray-900 disabled:opacity-40">Add</button>
       </div>
     </div>
   );
