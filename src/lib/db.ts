@@ -1269,6 +1269,8 @@ export async function extractForBackfill(text: string): Promise<BackfillExtract>
     for (const re of res) { const m = text.match(re); if (m) { const n = Number(m[1]); if (!Number.isNaN(n)) return n; } }
     return null;
   };
+  // "N attended of M invited" is a common recap phrasing — pull both explicitly so we don't confuse
+  // invited-vs-attended (e.g. "54 attended of 62 invited" must give invited 62, attended 54).
   const rsvpN = firstNum(/(\d+)\s*(?:rsvps?|registered|expected|sign[- ]?ups?|invited)\b/i, /\b(?:rsvps?|invited)\b\D{0,15}(\d+)/i);
   const checkedN = firstNum(/(\d+)\s*(?:checked[- ]?in|check[- ]?ins?|showed\s*up|attended|turnout)\b/i, /\b(?:checked[- ]?in|attended)\b\D{0,15}(\d+)/i);
   // Grab an explicit "Field: value" line (handles **bold** markdown) when the LLM misses it.
@@ -1280,8 +1282,10 @@ export async function extractForBackfill(text: string): Promise<BackfillExtract>
     owner: (b?.owner && b.owner.trim()) || grab(/(?:owner|organi[sz]er|host)\**\s*[:：]\s*(.+)/i),
     format: b?.format || null,
     tag: b?.tag ?? null,
-    headcount: b?.headcount ?? rsvpN,
-    turnoutActual: d?.outcome?.turnoutActual ?? checkedN,
+    // Explicit "invited"/"attended" numbers in the text win — the LLM's headcount field conflates
+    // invited vs. attended (it'll latch onto "dinner for 54" / "54 attended" and lose the 62 invited).
+    headcount: rsvpN ?? b?.headcount ?? null,
+    turnoutActual: checkedN ?? d?.outcome?.turnoutActual ?? null,
     budgetTotal: b?.budgetTotal ?? null,
     verdict: d?.outcome?.verdict || '',
     // Phase set = the brief's phases PLUS any distinct phase the deliverables were assigned to
