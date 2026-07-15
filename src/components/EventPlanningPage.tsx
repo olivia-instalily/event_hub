@@ -11,7 +11,7 @@ import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, deleteEvent,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, deleteEvent, resetEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
@@ -3742,8 +3742,8 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "page", label: "Page" },
 ];
 
-// Top-right "⋮" menu on the event page. For now it holds only Delete; add items here later.
-function EventMenu({ onDelete }: { onDelete: () => void }) {
+// Top-right "⋮" menu on the event page.
+function EventMenu({ onReset, onDelete }: { onReset: () => void; onDelete: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -3751,7 +3751,8 @@ function EventMenu({ onDelete }: { onDelete: () => void }) {
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-40 mt-1 w-44 bg-white border border-border rounded-lg shadow-lg p-1">
+          <div className="absolute right-0 z-40 mt-1 w-48 bg-white border border-border rounded-lg shadow-lg p-1">
+            <button onClick={() => { setOpen(false); onReset(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><RefreshCw className="w-4 h-4" /> Reset event</button>
             <button onClick={() => { setOpen(false); onDelete(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-red-50 text-sm text-red-600"><Trash2 className="w-4 h-4" /> Delete event</button>
           </div>
         </>
@@ -3862,7 +3863,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   // Matches the Events status pills (Future/In-Process/Past) in size + style, so the top-left
   // control keeps the same placement/sizing when switching between the list and an event.
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [enrichDrop, setEnrichDrop] = useState<{ text: string; files: File[] } | null>(null);
+  // Clear imported/derived content back to a clean slate (keeps identity); refresh after.
+  const doReset = async () => { try { await resetEvent(eventId); } finally { setConfirmReset(false); setReload((r) => r + 1); } };
   const back = (
     <button onClick={() => { if (tab !== "overview") setTab("overview"); else onBack(); }} className="inline-flex items-center gap-1 mb-6 px-2 py-1 rounded-lg bg-white border border-border text-gray-700 hover:bg-gray-50 transition-colors">
       <ChevronLeft className="w-4 h-4" /> {tab !== "overview" ? "Overview" : "Previous"}
@@ -3894,7 +3898,17 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   return (
     <div {...pageDrag} className="relative">
       {/* Top-right event menu (⋮) — Delete for now, same confirm + cascade as the list. */}
-      <div className="absolute top-0 right-0 z-20"><EventMenu onDelete={() => setConfirmDelete(true)} /></div>
+      <div className="absolute top-0 right-0 z-20"><EventMenu onReset={() => setConfirmReset(true)} onDelete={() => setConfirmDelete(true)} /></div>
+      {confirmReset && (
+        <ConfirmModal
+          title="Reset event?"
+          message={`Clear all imported content for “${plan.title}” — deliverables, phases, roles, run of show, learnings, budget lines, vendors, turnout, verdict, and attached docs. Keeps the name, date, location, tags, and owners. This can’t be undone.`}
+          confirmLabel="Reset"
+          danger
+          onConfirm={doReset}
+          onClose={() => setConfirmReset(false)}
+        />
+      )}
       {enrichDrop && (
         <BackfillModal
           enrich={{ eventId, plan }}

@@ -1415,6 +1415,23 @@ export async function enrichExistingEvent(eventId: string, x: BackfillExtract, o
   } catch { /* non-fatal */ }
 }
 
+/** Reset an event's IMPORTED / derived content back to a clean slate — deliverables (except the
+ *  locked post-event reflection), phases, roles, agenda, learnings, walkthrough, outreach, budget
+ *  lines, vendors, turnout, verdict, and attached source docs. Keeps the event's IDENTITY (name,
+ *  date, location, tags, format, owners) and lifecycle. Use after a bad folder drop to start over. */
+export async function resetEvent(eventId: string): Promise<void> {
+  await supabase.from('deliverable').delete().eq('event_id', eventId).eq('locked', false).then(() => {}, () => {});
+  await supabase.from('engagement').delete().eq('event_id', eventId).then(() => {}, () => {});
+  const { data: bud } = await supabase.from('budget').select('id').eq('event_id', eventId).limit(1);
+  const budgetId = (bud as any)?.[0]?.id as string | undefined;
+  if (budgetId) await supabase.from('budget_line').delete().eq('budget_id', budgetId).then(() => {}, () => {});
+  await supabase.from('event').update({
+    phases: [], staff_roles: [], reflections: [], heuristics: [], walkthrough: [], outreach: [], agenda: [],
+    role_assignments: {}, source_materials: [], rsvp: null, checked_in: null, headcount: null, verdict: null,
+    overview_summary: null,
+  }).eq('id', eventId).then(() => {}, () => {});
+}
+
 /** Point an event at an existing template (adopt it). */
 export async function adoptTemplate(eventId: string, templateId: string): Promise<void> {
   const { error } = await supabase.from('event').update({ modeled_on_event_id: templateId }).eq('id', eventId);
