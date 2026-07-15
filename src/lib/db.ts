@@ -1508,9 +1508,31 @@ export async function enrichEventFromExtract(eventId: string, x: BackfillExtract
     try { await setEventAgenda(eventId, x.agenda); filled.push('agenda'); }
     catch (e) { console.error('enrichEventFromExtract: agenda fill failed', String(e)); }
   }
-  if (want.has('roles') && x.staffRoles.length) {
-    try { await setEventStaffRoles(eventId, x.staffRoles); filled.push('roles'); }
-    catch (e) { console.error('enrichEventFromExtract: roles fill failed', String(e)); }
+  // Roles are additive — a dropped debrief often names who covered what. Merge in any NEW roles
+  // regardless of whether roles was a requested gap; dedup case-insensitively against existing.
+  if (x.staffRoles?.length) {
+    try {
+      const { data: rr } = await supabase.from('event').select('staff_roles').eq('id', eventId).maybeSingle();
+      const cur: string[] = Array.isArray((rr as any)?.staff_roles) ? (rr as any).staff_roles : [];
+      const seen = new Set(cur.map((s) => s.trim().toLowerCase()));
+      const merged = [...cur];
+      for (const r of x.staffRoles) { const t = (r ?? '').trim(); if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); merged.push(t); } }
+      if (merged.length > cur.length) { await setEventStaffRoles(eventId, merged); filled.push('roles'); }
+    } catch (e) { console.error('enrichEventFromExtract: roles fill failed', String(e)); }
+  }
+  // Owner — if the event has none yet, assign the named owner matched to a profile.
+  if (x.owner) {
+    try {
+      const { data: ow } = await supabase.from('event_owner').select('profile_id').eq('event_id', eventId).limit(1);
+      if (!((ow as any)?.length)) {
+        const profs = await listProfiles();
+        const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const w = norm(x.owner);
+        const m = profs.find((p) => p.name.toLowerCase() === x.owner!.trim().toLowerCase() || norm((p.email ?? '').split('@')[0]) === w)
+          ?? profs.find((p) => { const n = norm(p.name); return n.length >= 3 && (n === w || n.startsWith(w) || w.startsWith(n)); });
+        if (m) { await addEventOwner(eventId, m.id); filled.push('owner'); }
+      }
+    } catch (e) { console.error('enrichEventFromExtract: owner fill failed', String(e)); }
   }
   if (want.has('budget') && x.actuals.some((a) => a.line)) {
     try { await addBudgetActuals(eventId, x.actuals.filter((a) => a.line).map((a) => ({ label: a.line, amount: a.amount }))); filled.push('budget'); }

@@ -16,7 +16,7 @@ import { useProfile } from "../lib/profile";
 // adopt/extend the one template. No-propagation: extending a template never rewrites siblings.
 type Choice = string; // template id | "new" | "none"
 
-export function BackfillModal({ onClose, onCreated, initialText, initialFiles, enrich }: { onClose: () => void; onCreated: (eventId: string) => void; initialText?: string; initialFiles?: File[] | null; enrich?: { eventId: string; plan: EventPlanning } }) {
+export function BackfillModal({ onClose, onCreated, initialText, initialFiles, initialExtract, enrich }: { onClose: () => void; onCreated: (eventId: string) => void; initialText?: string; initialFiles?: File[] | null; initialExtract?: BackfillExtract; enrich?: { eventId: string; plan: EventPlanning } }) {
   const [stage, setStage] = useState<"input" | "extracting" | "review" | "saving">("input");
   const [text, setText] = useState(initialText ?? "");
   // The dropped file(s) that generated this backfill → kept as tagged source materials.
@@ -77,8 +77,17 @@ export function BackfillModal({ onClose, onCreated, initialText, initialFiles, e
     } catch { setErr("Couldn't read that file — paste the text instead."); }
   };
 
-  // Handed text from the create flow (a dropped past-event brief) → process it straight away.
-  useEffect(() => { if (initialText?.trim()) void run(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // Mount: a PRE-EXTRACTED result (background list-drop) opens straight to review — no re-processing;
+  // otherwise raw initialText is processed here.
+  useEffect(() => {
+    if (initialExtract) {
+      const ex = enrich ? mergeWithPlan(initialExtract, enrich.plan) : initialExtract;
+      setX(ex);
+      setOwnerProfileId(enrich?.plan.owners[0]?.id ?? matchOwner(ex.owner));
+      setStage("review");
+    } else if (initialText?.trim()) { void run(); }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   const run = async () => {
     if (!text.trim()) return;
