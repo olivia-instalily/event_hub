@@ -59,7 +59,8 @@ import { OpenInLinear } from "./OpenInLinear";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
 import { parseVendors } from "../lib/vendorImport";
-import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
+import { unsupportedFileMessage, isWorkbookFile, readFilesText } from "../lib/fileSupport";
+import { BackfillModal } from "./BackfillModal";
 import { filesFromDrop } from "../lib/drop";
 import { EventSetup } from "./EventSetup";
 import { ScopingForm } from "./ScopingForm";
@@ -2257,7 +2258,7 @@ function WrappedTemplate({ plan, eventId, onApplied, onOpenEvent }: { plan: Even
 
   const adds = tmpl ? templateAdditions(
     { id: tmpl.id, name: tmpl.title, format: tmpl.format, tags: tmpl.tags, phases: tmpl.phases.map((p) => p.name), staffRoles: tmpl.staffRoles, reflections: tmpl.reflections },
-    { name: plan.title, date: null, location: null, format: plan.format, tag: plan.tags[0] ?? null, headcount: null, turnoutActual: null, budgetTotal: null, verdict: "", phases: plan.phases.map((p) => p.name), staffRoles: plan.staffRoles, lessons: plan.reflections, heuristics: plan.heuristics, actuals: [], deliverables: [], agenda: [] },
+    { name: plan.title, date: null, location: null, owner: null, format: plan.format, tag: plan.tags[0] ?? null, headcount: null, turnoutActual: null, budgetTotal: null, verdict: "", phases: plan.phases.map((p) => p.name), staffRoles: plan.staffRoles, lessons: plan.reflections, heuristics: plan.heuristics, actuals: [], deliverables: [], agenda: [] },
   ) : null;
   const addKey = (kind: string, v: string) => `${kind}:${v}`;
   const [addedCount, setAddedCount] = useState(0);
@@ -3783,6 +3784,15 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
   const onPageDrop = async (files: File[]) => {
     if (!plan || !files.length) return;
+    // Dropping a doc onto a PAST/wrapped event = enrich it → open the review-and-edit (same as
+    // backfill), pre-merged with this event. An ACTIVE event keeps the quick silent gap-fill.
+    const isPast = plan.settleState === "settled" || plan.macroStage === "Wrapped" || (!!plan.date && plan.date < new Date().toISOString().slice(0, 10));
+    if (isPast) {
+      setDropBusy(true); setDropMsg(null);
+      try { const text = await readFilesText(files); setEnrichDrop({ text, files }); }
+      finally { setDropBusy(false); }
+      return;
+    }
     setDropBusy(true); setDropMsg(null);
     try {
       const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
@@ -3852,6 +3862,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   // Matches the Events status pills (Future/In-Process/Past) in size + style, so the top-left
   // control keeps the same placement/sizing when switching between the list and an event.
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [enrichDrop, setEnrichDrop] = useState<{ text: string; files: File[] } | null>(null);
   const back = (
     <button onClick={() => { if (tab !== "overview") setTab("overview"); else onBack(); }} className="inline-flex items-center gap-1 mb-6 px-2 py-1 rounded-lg bg-white border border-border text-gray-700 hover:bg-gray-50 transition-colors">
       <ChevronLeft className="w-4 h-4" /> {tab !== "overview" ? "Overview" : "Previous"}
@@ -3884,6 +3895,15 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
     <div {...pageDrag} className="relative">
       {/* Top-right event menu (⋮) — Delete for now, same confirm + cascade as the list. */}
       <div className="absolute top-0 right-0 z-20"><EventMenu onDelete={() => setConfirmDelete(true)} /></div>
+      {enrichDrop && (
+        <BackfillModal
+          enrich={{ eventId, plan }}
+          initialText={enrichDrop.text}
+          initialFiles={enrichDrop.files}
+          onClose={() => setEnrichDrop(null)}
+          onCreated={() => { setEnrichDrop(null); setReload((r) => r + 1); }}
+        />
+      )}
       {confirmDelete && (
         <ConfirmModal
           title="Delete event?"

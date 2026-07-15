@@ -9,8 +9,9 @@ import { LocationInput } from "./LocationEdit";
 import { canonicalCity } from "../lib/cities";
 import { EventPlanningPage, ingestEventDoc, completenessFields } from "./EventPlanningPage";
 import { PhaseRail, PHASE_COLORS } from "./TemplateView";
-import { unsupportedFileMessage } from "../lib/fileSupport";
+import { unsupportedFileMessage, readFilesText } from "../lib/fileSupport";
 import { NewEventDropZone } from "./NewEventDropZone";
+import { useProfile } from "../lib/profile";
 import { ConfirmModal } from "./Modal";
 import { BackfillModal } from "./BackfillModal";
 import { TAG_CATEGORIES, tagColor, tagBadgeVariant } from "../lib/tags";
@@ -676,9 +677,23 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
   // Files dropped on the page open the modal already processing — the first paint is the
   // "reading…" state. A resumed review (re-opened after generating) lands straight back on
   // the review screen with the cached extraction, no reprocessing.
+  const { current } = useProfile();
   const [mode, setMode] = useState<'choose' | 'planFork' | 'audience' | 'planning' | 'review' | 'backfill' | 'processing' | 'duplicate'>(
     () => (initialFiles && initialFiles.length ? 'processing' : resumeIngest ? 'review' : 'choose'),
   );
+  // Owner on create: the brief's named owner (matched to a profile) if any, else tag the creator.
+  const assignOwner = async (eventId: string, briefOwner?: string | null) => {
+    try {
+      let ownerId: string | null = null;
+      if (briefOwner?.trim()) {
+        const profs = await listProfiles();
+        const o = briefOwner.trim().toLowerCase();
+        ownerId = (profs.find((p) => p.name.toLowerCase() === o) ?? profs.find((p) => p.name.toLowerCase().includes(o) || o.includes(p.name.toLowerCase())))?.id ?? null;
+      }
+      ownerId = ownerId ?? current?.id ?? null;
+      if (ownerId) await addEventOwner(eventId, ownerId);
+    } catch { /* non-fatal */ }
+  };
   // Set when a drop looks like an event we already have → show the duplicate notice instead of the
   // review form. `attaching` tracks the "add these files as context" action on that screen.
   const [dup, setDup] = useState<{ event: DupEvent; reason: DupReason } | null>(null);
@@ -968,6 +983,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
         ? { ...draft, budgetLines: [] }
         : { name, vendorCategories: [], budgetLines: [], progressCategories: [] };
       const id = await createPlanningEvent({ name, date, startTime: meta.startTime || null, endTime: meta.endTime || null, location: meta.location.trim() || null, tags: eventTag ? [eventTag] : [], format: joinFormats(formats), template, hosting: planKind, coHost: planKind === 'cohost' ? meta.coHost : null, modeledOnEventId: selected });
+      await assignOwner(id); // manual create → tag the creator
       if (meta.lumaUrl.trim()) { try { await attachLuma(id, meta.lumaUrl.trim()); } catch { /* event still created; attach later from the card */ } }
       onCreated(id);
     } catch (e: any) { setCreateError(e.message ?? String(e)); setCreating(false); }
@@ -1029,7 +1045,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
       // Cover image → PUBLIC `attachments` bucket (low-sensitivity; displayed directly).
       if (ingest.coverFile) { try { await updateEventCover(id, await uploadAttachment(ingest.coverFile)); } catch { if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } } } }
       else if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } }
-      if (ingest.owner) { try { const profs = await listProfiles(); const o = ingest.owner.toLowerCase(); const m = profs.find((p) => p.name.toLowerCase() === o) ?? profs.find((p) => p.name.toLowerCase().includes(o) || o.includes(p.name.toLowerCase())); if (m) await addEventOwner(id, m.id); } catch { /* non-fatal */ } }
+      await assignOwner(id, ingest.owner); // brief owner if matched, else the creator
       if (headNum != null && Number.isFinite(headNum)) { try { await setHeadcount(id, headNum); } catch { /* non-fatal */ } }
       for (const a of ingest.attendees) { try { await addAttendee(id, { name: a.name, email: a.email }); } catch { /* non-fatal */ } }
 
@@ -1069,7 +1085,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
       if (sourceMaterials.length) { try { await setEventMaterials(id, sourceMaterials); } catch { /* non-fatal */ } }
       if (ingest.coverFile) { try { await updateEventCover(id, await uploadAttachment(ingest.coverFile)); } catch { if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } } } }
       else if (ingest.cover) { try { await updateEventCover(id, ingest.cover); } catch { /* non-fatal */ } }
-      if (ingest.owner) { try { const profs = await listProfiles(); const o = ingest.owner.toLowerCase(); const m = profs.find((p) => p.name.toLowerCase() === o) ?? profs.find((p) => p.name.toLowerCase().includes(o) || o.includes(p.name.toLowerCase())); if (m) await addEventOwner(id, m.id); } catch { /* non-fatal */ } }
+      await assignOwner(id, ingest.owner); // brief owner if matched, else the creator
       if (headNum != null && Number.isFinite(headNum)) { try { await setHeadcount(id, headNum); } catch { /* non-fatal */ } }
       for (const a of ingest.attendees) { try { await addAttendee(id, { name: a.name, email: a.email }); } catch { /* non-fatal */ } }
       const lines = ingest.budgetLines.filter((l) => l.label.trim());
@@ -1911,6 +1927,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [dropBusyId, setDropBusyId] = useState<string | null>(null);
   const [dropToast, setDropToast] = useState<string | null>(null);
+  const [enrichTarget, setEnrichTarget] = useState<{ plan: EventPlanning; text: string; files: File[] } | null>(null);
   useEffect(() => { if (!dropToast) return; const t = setTimeout(() => setDropToast(null), 6000); return () => clearTimeout(t); }, [dropToast]);
   const handleEventDrop = async (id: string, title: string, files: File[]) => {
     if (!files.length) return;
@@ -1918,6 +1935,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     try {
       const plan = await getEventPlanning(id);
       if (!plan) { setDropToast(`${title}: couldn't load the event.`); return; }
+      // Past/wrapped event → open the enrich review (extract everything, confirm, merge in).
+      const isPast = plan.settleState === "settled" || plan.macroStage === "Wrapped" || (!!plan.date && plan.date < new Date().toISOString().slice(0, 10));
+      if (isPast) { const text = await readFilesText(files); setEnrichTarget({ plan, text, files }); return; }
+      // Active event → quick silent gap-fill.
       const gapKeys = completenessFields(plan).filter((f) => !f.present).map((f) => f.key);
       let applied = 0;
       for (const file of files) {
@@ -2056,6 +2077,17 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   return (
     <div>
+      {/* Drop onto a PAST event → review-and-edit enrich (merges the doc into that event). */}
+      {enrichTarget && (
+        <BackfillModal
+          enrich={{ eventId: enrichTarget.plan.id, plan: enrichTarget.plan }}
+          initialText={enrichTarget.text}
+          initialFiles={enrichTarget.files}
+          onClose={() => setEnrichTarget(null)}
+          onCreated={() => { setEnrichTarget(null); void load(); }}
+        />
+      )}
+
       {/* Result of a drop-onto-a-line backfill */}
       {dropToast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[95] inline-flex items-center gap-2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg">

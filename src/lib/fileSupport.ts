@@ -26,3 +26,19 @@ export function unsupportedFileMessage(file: File): string | null {
   if (!kind) return null;
   return `${kind} files (${extOf(file)}) aren't supported — the file can't be read as text. Export it as ${SUGGESTED} format and drop that instead (or paste the rows, or drop a .pdf).`;
 }
+
+/** Read a set of dropped files into one labeled text blob — text directly, PDFs via pdf.js,
+ *  workbooks via SheetJS. Unreadable binaries are skipped. Used to feed the enrich/backfill review. */
+export async function readFilesText(files: File[]): Promise<string> {
+  const parts: string[] = [];
+  for (const f of files) {
+    try {
+      let t = "";
+      if (isWorkbookFile(f)) t = await (await import("./workbook")).readWorkbookAsText(f);
+      else if (/\.pdf$/i.test(f.name) || f.type.includes("pdf")) t = await (await import("./pdfText")).readPdfText(f);
+      else if (!unsupportedFileMessage(f)) t = await f.text();
+      if (t.trim()) parts.push(`# ${f.name}\n${t}`);
+    } catch { /* skip unreadable */ }
+  }
+  return parts.join("\n\n");
+}

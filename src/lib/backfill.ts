@@ -8,6 +8,7 @@ export interface BackfillExtract {
   name: string;
   date: string | null;
   location: string | null;
+  owner: string | null;          // named owner/organizer from the doc (matched to a profile on apply)
   format: string | null;
   tag: string | null;
   headcount: number | null;      // expected (from a brief)

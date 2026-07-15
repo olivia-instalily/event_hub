@@ -1269,12 +1269,15 @@ export async function extractForBackfill(text: string): Promise<BackfillExtract>
     for (const re of res) { const m = text.match(re); if (m) { const n = Number(m[1]); if (!Number.isNaN(n)) return n; } }
     return null;
   };
-  const rsvpN = firstNum(/(\d+)\s*(?:rsvps?|registered|expected|sign[- ]?ups?)\b/i, /\brsvps?\b\D{0,15}(\d+)/i);
-  const checkedN = firstNum(/(\d+)\s*(?:checked[- ]?in|check[- ]?ins?|showed\s*up|attended|turnout)\b/i, /\bchecked[- ]?in\b\D{0,15}(\d+)/i);
+  const rsvpN = firstNum(/(\d+)\s*(?:rsvps?|registered|expected|sign[- ]?ups?|invited)\b/i, /\b(?:rsvps?|invited)\b\D{0,15}(\d+)/i);
+  const checkedN = firstNum(/(\d+)\s*(?:checked[- ]?in|check[- ]?ins?|showed\s*up|attended|turnout)\b/i, /\b(?:checked[- ]?in|attended)\b\D{0,15}(\d+)/i);
+  // Grab an explicit "Field: value" line (handles **bold** markdown) when the LLM misses it.
+  const grab = (re: RegExp): string | null => { const m = text.match(re); return m ? (m[1].replace(/\*/g, '').trim() || null) : null; };
   return {
     name: (b?.title || d?.eventName || '').trim(),
     date: b?.date || null,
-    location: b?.location || null,
+    location: (b?.location && b.location.trim()) || grab(/(?:location|venue)\**\s*[:：]\s*(.+)/i),
+    owner: (b?.owner && b.owner.trim()) || grab(/(?:owner|organi[sz]er|host)\**\s*[:：]\s*(.+)/i),
     format: b?.format || null,
     tag: b?.tag ?? null,
     headcount: b?.headcount ?? rsvpN,
@@ -1334,7 +1337,7 @@ export async function createTemplateFromExtract(x: BackfillExtract): Promise<str
 }
 
 /** Create the wrapped (settled, past) event record from the merged extract, pointed at a template. */
-export async function backfillWrappedEvent(x: BackfillExtract, modeledOnTemplateId: string | null): Promise<string> {
+export async function backfillWrappedEvent(x: BackfillExtract, modeledOnTemplateId: string | null, ownerProfileId?: string | null): Promise<string> {
   const eventId = await createPlanningEvent({
     name: x.name || 'Backfilled event', date: x.date, location: x.location, tags: x.tag ? [x.tag] : [],
     template: backfillTemplateInput(x), deliverables: eventDeliverables(x), format: x.format, // specific text — the real event keeps names
@@ -1349,7 +1352,67 @@ export async function backfillWrappedEvent(x: BackfillExtract, modeledOnTemplate
   if (x.turnoutActual != null) patch.checked_in = x.turnoutActual;
   if (x.headcount != null) patch.rsvp = x.headcount;
   await supabase.from('event').update(patch).eq('id', eventId).then(() => {}, () => {});
+  // Owner: an explicit profile chosen in the review step wins; otherwise match the named owner to a
+  // profile (exact name/email, then fuzzy). No confident match → left unassigned.
+  try {
+    let ownerId = ownerProfileId ?? null;
+    if (ownerId === undefined) ownerId = null;
+    if (!ownerId && x.owner) {
+      const profs = await listProfiles();
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const w = norm(x.owner);
+      const match = profs.find((p) => p.name.toLowerCase() === x.owner!.trim().toLowerCase() || norm((p.email ?? '').split('@')[0]) === w)
+        ?? profs.find((p) => { const n = norm(p.name); return n.length >= 3 && (n === w || n.startsWith(w) || w.startsWith(n)); });
+      ownerId = match?.id ?? null;
+    }
+    if (ownerId) await addEventOwner(eventId, ownerId);
+  } catch { /* non-fatal */ }
   return eventId;
+}
+
+/** Apply a REVIEWED backfill extract to an EXISTING event (drop-a-doc-onto-a-past-event → enrich).
+ *  The modal pre-merges the extract with the event's current values, so the reviewed lists are the
+ *  desired final state and get written wholesale; deliverables are added only when missing. */
+export async function enrichExistingEvent(eventId: string, x: BackfillExtract, ownerProfileId?: string | null): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if (x.name.trim()) patch.name = x.name.trim();
+  if (x.location) patch.location = x.location;
+  if (x.date) patch.event_date = x.date;
+  if (x.headcount != null) patch.rsvp = x.headcount;
+  if (x.turnoutActual != null) patch.checked_in = x.turnoutActual;
+  if (x.verdict.trim()) patch.verdict = x.verdict.trim();
+  if (Object.keys(patch).length) await supabase.from('event').update(patch).eq('id', eventId).then(() => {}, () => {});
+  await setEventStaffRoles(eventId, x.staffRoles).catch(() => {});
+  if (x.agenda.length) await setEventAgenda(eventId, x.agenda).catch(() => {});
+  await setEventReflections(eventId, x.lessons).catch(() => {});
+  const pattern: { phases?: { name: string; order: number }[]; heuristics?: string[] } = {};
+  if (x.phases.length) pattern.phases = x.phases.map((name, order) => ({ name, order }));
+  if (x.heuristics.length) pattern.heuristics = x.heuristics;
+  if (Object.keys(pattern).length) await setEventPattern(eventId, pattern).catch(() => {});
+  // Deliverables: add only what's not already present (by phase|title).
+  const plan = await getEventPlanning(eventId).catch(() => null);
+  const seen = new Set((plan?.deliverables ?? []).map((d) => `${(d.phase ?? '').toLowerCase()}|${d.title.trim().toLowerCase()}`));
+  const firstPhase = x.phases[0] ?? plan?.phases[0]?.name ?? 'Planning';
+  for (const d of x.deliverables) {
+    const title = d.title?.trim(); if (!title) continue;
+    const phase = d.phase || firstPhase;
+    const key = `${phase.toLowerCase()}|${title.toLowerCase()}`;
+    if (seen.has(key)) continue; seen.add(key);
+    await addDeliverable(eventId, { title, phase, ownerRole: null, dueDate: null, offsetStart: null, offsetEnd: null }).catch(() => {});
+  }
+  // Owner: reviewer's pick wins, else fuzzy-match the named owner.
+  try {
+    let ownerId = ownerProfileId ?? null;
+    if (!ownerId && x.owner) {
+      const profs = await listProfiles();
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const w = norm(x.owner);
+      const m = profs.find((p) => p.name.toLowerCase() === x.owner!.trim().toLowerCase() || norm((p.email ?? '').split('@')[0]) === w)
+        ?? profs.find((p) => { const n = norm(p.name); return n.length >= 3 && (n === w || n.startsWith(w) || w.startsWith(n)); });
+      ownerId = m?.id ?? null;
+    }
+    if (ownerId) await addEventOwner(eventId, ownerId);
+  } catch { /* non-fatal */ }
 }
 
 /** Point an event at an existing template (adopt it). */
