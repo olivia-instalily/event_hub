@@ -1,4 +1,4 @@
-import { Calendar, MapPin, CheckSquare, Plus, Trash2 } from "lucide-react";
+import { Calendar, MapPin, CheckSquare, Plus, Trash2, BadgeCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { listEvents, deleteEvent, listOwnerTodos, type EventListItem, type OwnerTodo } from "../lib/db";
 import { useProfile, initials } from "../lib/profile";
@@ -159,7 +159,7 @@ export function HomePage({ onOpenEvent, onCreateEvent, onNewEventFiles }: { onOp
                     )}
                   </div>
 
-                  <h3 className="text-lg mb-1">{event.title}</h3>
+                  <h3 className="text-lg mb-1 flex items-center gap-1.5"><span>{event.title}</span>{event.finalRecordComplete && <span title="Complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}</h3>
                   {event.seriesName && <p className="text-gray-500 text-sm mb-3">{event.seriesName}</p>}
 
                   <div className="flex flex-wrap items-center gap-2 mt-auto pt-2">

@@ -2266,7 +2266,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
               <h2 className="text-xl mb-2 flex items-center gap-1.5">
                 <span>{event.title}</span>
-                {(event.settled && event.finalRecordComplete) && <span title="Settled · complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                {event.finalRecordComplete && <span title="Complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
               </h2>
               {event.seriesName && <p className="text-gray-500 text-sm mb-4">{event.seriesName}</p>}
 
@@ -2385,7 +2385,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                       <div>
                         <p className="font-medium flex items-center gap-1.5">
                           <span>{event.title}</span>
-                          {(event.settled && event.finalRecordComplete) && <span title="Settled · complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
+                          {event.finalRecordComplete && <span title="Complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
                           {dropBusyId === event.id && <span className="inline-flex items-center gap-1 text-[12px] font-normal text-gray-500 shrink-0"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing…</span>}
                         </p>
                         {event.seriesName && <p className="text-sm text-gray-500">{event.seriesName}</p>}
