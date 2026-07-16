@@ -5,6 +5,7 @@ import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
 import { categoryKey } from './budgetCategories';
+import { eventFocus } from './eventFocus';
 import type { BackfillExtract, TemplateLite, TemplateAdditions } from './backfill';
 import { generalizeStaffRole } from './backfill';
 import { vendorStage, type VendorRow as VendorListRow } from './vendorImport';
@@ -1856,7 +1857,7 @@ export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
     .from('event')
     .select(
-      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, macro_stage, settle_state, owning_team, status, is_template, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team )',
+      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )',
     )
     .order('id');
   if (error) throw error;
@@ -1870,11 +1871,30 @@ export async function listEvents(): Promise<EventListItem[]> {
     .select('event_id')
     .eq('status', 'Done')
     .or('title.ilike.%reflection%,title.ilike.%insight%');
-  const complete = new Set((reflDone ?? []).map((d: any) => d.event_id));
-  // Only a PAST / wrapped event can be a "complete record." A planning event's reflections
-  // deliverable is auto-seeded and can get flipped to Done (e.g. a bulk "mark all done"), which
-  // would otherwise wrongly show the ✓ on an event you're still planning.
-  for (const it of items) it.finalRecordComplete = complete.has(it.id) && it.status === 'past';
+  const reflDoneSet = new Set((reflDone ?? []).map((d: any) => d.event_id));
+  // A record shows the ✓ when it reads as COMPLETE — computed the SAME way as the event page's
+  // completeness panel (completenessFields), so the two never disagree: no category-relevant gaps
+  // left, OR the owner manually checked off the reflections deliverable. Only PAST events qualify
+  // (a planning event isn't a "record" yet). Mirrors completenessFields() — keep the two in sync.
+  const rows = data ?? [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const row = rows[i] as any;
+    const focus = eventFocus(Array.isArray(row.tags) ? row.tags : [], row.format);
+    const budgetLines: any[] = Array.isArray(row.budget) ? (row.budget[0]?.lines ?? []) : (row.budget?.lines ?? []);
+    const hasActual = budgetLines.some((l) => normBudgetStatus(l.payment_status) !== 'estimate' && (Number(l.confirmed_amount) || 0) > 0);
+    const agenda = Array.isArray(row.agenda) ? row.agenda : [];
+    const roles = Array.isArray(row.staff_roles) ? row.staff_roles : [];
+    const vendors = Array.isArray(row.engagement) ? row.engagement.length : 0;
+    const noGaps = !!row.event_date && !!row.location
+      && (row.rsvp != null || row.headcount != null || row.checked_in != null)
+      && hasActual
+      && !!(row.verdict && String(row.verdict).trim())
+      && agenda.length > 0
+      && (focus === 'neither' || vendors > 0)
+      && roles.length > 0;
+    it.finalRecordComplete = it.status === 'past' && (noGaps || reflDoneSet.has(it.id));
+  }
   return items;
 }
 

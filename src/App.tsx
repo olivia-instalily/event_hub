@@ -48,12 +48,16 @@ export default function Component() {
   const [eventOrigin, setEventOrigin] = useState<Page>('events');
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
+  // Delay before the "drop to create" overlay appears when off a card — long enough that dragging
+  // across the gutters BETWEEN cards doesn't flash it (entering the next card cancels the pending show).
+  const dragOverlayTimer = useRef<number | null>(null);
+  const clearOverlayTimer = () => { if (dragOverlayTimer.current) { clearTimeout(dragOverlayTimer.current); dragOverlayTimer.current = null; } };
   // Bulletproof reset for the global "drop to create" overlay: a drop handled by a child (e.g. an
   // event row that stopPropagation()s to backfill itself) never reaches the app-level onDrop, which
   // would otherwise leave the overlay stuck. Window capture-phase listeners fire regardless, so the
   // overlay always clears on any drop / dragend / Escape.
   useEffect(() => {
-    const reset = () => { dragDepth.current = 0; setDragOver(false); };
+    const reset = () => { dragDepth.current = 0; clearOverlayTimer(); setDragOver(false); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') reset(); };
     window.addEventListener('drop', reset, true);
     window.addEventListener('dragend', reset, true);
@@ -191,8 +195,15 @@ export default function Component() {
       // Show the global "drop to create" overlay UNLESS the cursor is over an event card/row
       // (marked data-event-drop) — those add to that event's context instead. Driven by dragOver
       // (fires continuously) so it stays in sync as you move on/off a row.
-      onDragOver={(e) => { if (!hasFiles(e)) return; e.preventDefault(); const overZone = !!(e.target as HTMLElement)?.closest?.('[data-event-drop], [data-new-event-drop]'); setDragOver(!overZone); }}
-      onDragLeave={(e) => { if (e.relatedTarget === null) setDragOver(false); }}
+      onDragOver={(e) => {
+        if (!hasFiles(e)) return; e.preventDefault();
+        const overZone = !!(e.target as HTMLElement)?.closest?.('[data-event-drop], [data-new-event-drop]');
+        if (overZone) { clearOverlayTimer(); setDragOver(false); }
+        // Off a card → arm a short delay before showing the overlay (once). Crossing into the next
+        // card clears it first, so the gutters between cards read as "still on a card", no flicker.
+        else if (!dragOver && dragOverlayTimer.current == null) dragOverlayTimer.current = window.setTimeout(() => { dragOverlayTimer.current = null; setDragOver(true); }, 90);
+      }}
+      onDragLeave={(e) => { if (e.relatedTarget === null) { clearOverlayTimer(); setDragOver(false); } }}
       // Only fires for drops NOT on an event row (rows stopPropagation to handle their own) → create.
       onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); setDragOver(false); void filesFromDrop(e.dataTransfer).then(onAppDrop); }}
       // Escape hatch: a plain click clears the overlay if it ever gets stuck (it's pointer-events-none,
