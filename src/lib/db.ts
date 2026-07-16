@@ -1453,8 +1453,11 @@ export async function deriveTemplateFromEvent(eventId: string): Promise<string> 
     template: {
       vendorCategories: p.engagements.map((e) => e.category).filter((c): c is string => !!c),
       budgetLines: (p.budget?.lines ?? []).filter((l) => l.label).map((l) => ({ label: l.label as string, estimate: l.confirmedAmount ?? 0 })),
-      progressCategories: p.deliverables.filter((d) => !d.locked).map((d) => d.title),
+      progressCategories: p.deliverables.filter((d) => !d.locked).map((d) => d.title), // title-only fallback
     },
+    // Pass deliverables WITH their phase so the template keeps its per-phase workstreams — the
+    // title-only progressCategories above would otherwise collapse them all into the first phase.
+    deliverables: p.deliverables.filter((d) => !d.locked).map((d) => ({ title: d.title, phase: d.phase })),
     phases: p.phases.map((ph, i) => ({ name: ph.name, order: (ph as any).order ?? i })),
     staffRoles: generalRoles(p.staffRoles), reflections: p.reflections, isTemplate: true,
   });

@@ -83,13 +83,16 @@ export function HomePage({ onOpenEvent, onCreateEvent, onNewEventFiles }: { onOp
       <div className="flex items-center justify-between gap-3 mb-8">
         <div className="flex items-center gap-3 cursor-default select-none">
           {current && (
-            <span className="group relative">
-              <span className={`flex items-center justify-center w-10 h-10 rounded-full text-white text-sm ${current.color ?? "bg-gray-500"}`}>
+            <span className="group relative cursor-default">
+              <span className={`flex items-center justify-center w-10 h-10 rounded-full text-white text-sm cursor-default select-none ${current.color ?? "bg-gray-500"}`}>
                 {initials(current.name)}
               </span>
-              {/* Full-name tooltip on hover — styled bubble instead of the browser default. */}
-              <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-gray-900 px-2.5 py-1 text-xs text-white opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
-                {current.name}
+              {/* Full-name tooltip — shows instantly on hover (no fade), with a caret. */}
+              <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 hidden group-hover:block">
+                <span className="relative block whitespace-nowrap rounded-lg bg-gray-900 px-3 py-1.5 text-[13px] font-medium text-white shadow-lg">
+                  {current.name}
+                  <span className="absolute -top-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-gray-900" />
+                </span>
               </span>
             </span>
           )}
