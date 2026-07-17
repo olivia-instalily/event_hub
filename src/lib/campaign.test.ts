@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  emptyCampaign, personLabel, distinctPeople, peakHeadcount, travelerLocalCounts,
+  personLabel, distinctPeople, peakHeadcount, travelerLocalCounts,
   travelEstimate, memberBudgetTotal, personBrief, type Campaign,
 } from "./campaign";
 
