@@ -41,6 +41,7 @@ interface Campaign {
   travelRatePerWave: number | null;             // per-traveler, per-wave estimate rate
   waves: Wave[];
   people: CampaignPerson[];
+  anchorEventIds: string[];                      // events flagged as anchors (e.g. the hackathon)
 }
 interface Wave { id: string; name: string; start: string | null; end: string | null; eventIds: string[]; }
 interface CampaignPerson {
@@ -82,10 +83,12 @@ interface CampaignPerson {
 ## The four tabs (`SeriesDashboard`)
 
 ### 1. Plan (default / hero)
-Waves in order; under each, its member events with a status chip — **set** (assigned to a wave &
-has a date), **pending** (member event not yet in a wave), **anchor** (the hackathon; visually
-distinct, e.g. a ring/badge). Each event row links to its own planning page. Controls: create/edit
-waves (name + dates), and assign a member event to a wave (and add existing events to the series).
+Waves in order; under each, its member events. An event's status is **set** (assigned to a wave)
+or **pending** (member event not yet in a wave) — derived from wave membership. **Anchor** is an
+orthogonal marker (`campaign.anchorEventIds`): an anchor event (the hackathon) renders visually
+distinct (ring/badge) regardless of set/pending, and is toggled from this tab. Each event row links
+to its own planning page. Controls: create/edit waves (name + dates), assign a member event to a
+wave, mark/unmark an event as an anchor, and add existing events to the series.
 
 ### 2. People & logistics
 A people × waves grid: rows = people, columns = waves, a cell toggles whether the person is on that
