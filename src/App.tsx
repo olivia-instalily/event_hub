@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Home, Calendar, CalendarDays, Users, DollarSign, Plus, AlertCircle } from 'lucide-react';
+import { Home, Calendar, CalendarDays, Users, DollarSign, Plus, AlertCircle, Layers } from 'lucide-react';
 import { filesFromDrop } from './lib/drop';
 import { looksLikeBackfill } from './lib/backfill';
 import { parseDeepLink, setPendingScopingBudget } from './lib/deepLink';
@@ -13,6 +13,8 @@ import { TutorialPage } from './components/TutorialPage';
 import { PeopleAdminPage } from './components/PeopleAdminPage';
 import { CalendarPage } from './components/CalendarPage';
 import { ContactsPage } from './components/ContactsPage';
+import { SeriesListPage } from './components/SeriesListPage';
+import { SeriesDashboard } from './components/SeriesDashboard';
 import { ProfileProvider } from './lib/profile';
 import { ProfileSwitcher } from './components/ProfileSwitcher';
 import { Tabs, TabsList, TabsTrigger } from '@instalily/ui/tabs';
@@ -35,7 +37,7 @@ export default function Component() {
   // opens straight to the event (no flash of Home first).
   const { status: authStatus, user: authUser } = useAuth();
   const [deepLink] = useState(() => (typeof window !== 'undefined' ? parseDeepLink(window.location.search) : null));
-  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'tutorial' | 'admin'>(deepLink ? 'events' : 'home');
+  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'tutorial' | 'admin' | 'series'>(deepLink ? 'events' : 'home');
   // Lifted so navigation can leave the Events page and return to the same event detail.
   const [selectedEventId, setSelectedEventId] = useState<string | null>(deepLink?.eventId ?? null);
   // When set (and on the People page), People is scoped to this event with a Back button.
@@ -44,8 +46,9 @@ export default function Component() {
   const [eventsNonce, setEventsNonce] = useState(0);
   // Which page an open event was launched from, so its Back button returns there
   // (e.g. a Home todo → Back to Home, a Budget row → Back to Budget).
-  type Page = 'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar';
+  type Page = 'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'series';
   const [eventOrigin, setEventOrigin] = useState<Page>('events');
+  const [selectedSeriesId, setSelectedSeriesId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
   // Delay before the "drop to create" overlay appears when off a card — long enough that dragging
@@ -142,12 +145,15 @@ export default function Component() {
     }
   };
 
-  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'tutorial' | 'admin') => {
+  const navTo = (page: 'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'tutorial' | 'admin' | 'series') => {
     setActivePage(page);
     setPeopleEventFilter(null); // manual nav = unscoped
     if (page === 'events') {
       setSelectedEventId(null); // Events tab returns to the list
       setEventsNonce((n) => n + 1); // remount EventsPage so it resets to "All"
+    }
+    if (page !== 'series') {
+      setSelectedSeriesId(null);
     }
   };
 
@@ -228,6 +234,7 @@ export default function Component() {
                   <TabsTrigger value="home"><Home className="w-4 h-4" /> Home</TabsTrigger>
                   <TabsTrigger value="events"><Calendar className="w-4 h-4" /> Events</TabsTrigger>
                   <TabsTrigger value="contacts"><Users className="w-4 h-4" /> Contacts</TabsTrigger>
+                  <TabsTrigger value="series"><Layers className="w-4 h-4" /> Series</TabsTrigger>
                   <TabsTrigger value="budget"><DollarSign className="w-4 h-4" /> Budget</TabsTrigger>
                   <TabsTrigger value="calendar" title="Calendar" aria-label="Calendar"><CalendarDays className="w-4 h-4" /></TabsTrigger>
                 </TabsList>
@@ -256,6 +263,11 @@ export default function Component() {
           />
         )}
         {activePage === 'contacts' && <ContactsPage />}
+        {activePage === 'series' && (
+          selectedSeriesId
+            ? <SeriesDashboard seriesId={selectedSeriesId} onBack={() => setSelectedSeriesId(null)} onOpenEvent={(id) => openEvent(id, 'series')} />
+            : <SeriesListPage onOpen={(id) => setSelectedSeriesId(id)} />
+        )}
         {activePage === 'budget' && <BudgetPage onOpenEvent={(id) => openEvent(id, 'budget')} />}
         {activePage === 'calendar' && <CalendarPage onOpenEvent={(id) => openEvent(id, 'calendar')} />}
         {activePage === 'tutorial' && <TutorialPage />}

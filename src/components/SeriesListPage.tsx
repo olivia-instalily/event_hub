@@ -1,0 +1,56 @@
+import { useEffect, useState } from "react";
+import { Plus, Layers } from "lucide-react";
+import { listSeries, createSeries, type SeriesListItem } from "../lib/db";
+import type { Drive } from "../lib/campaign";
+
+const DRIVES: Drive[] = ["recruiting", "culture", "client"];
+
+export function SeriesListPage({ onOpen }: { onOpen: (seriesId: string) => void }) {
+  const [items, setItems] = useState<SeriesListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [drive, setDrive] = useState<Drive>("recruiting");
+
+  const load = () => { setLoading(true); listSeries().then(setItems).catch(() => {}).finally(() => setLoading(false)); };
+  useEffect(() => { load(); }, []);
+
+  const create = async () => {
+    if (!name.trim()) return;
+    const id = await createSeries(name, drive);
+    setName(""); setCreating(false);
+    onOpen(id);
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl inline-flex items-center gap-2"><Layers className="w-6 h-6 text-gray-700" /> Series</h1>
+        <button onClick={() => setCreating((v) => !v)} className="inline-flex items-center gap-2 px-4 py-2 bg-muted text-foreground rounded-lg hover:brightness-95 hover:shadow-sm transition"><Plus className="w-4 h-4" /> New series</button>
+      </div>
+
+      {creating && (
+        <div className="mb-6 rounded-xl border border-border p-4 flex flex-wrap items-center gap-2">
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") create(); }} placeholder="Campaign name (e.g. Toronto campus activation)" className="flex-1 min-w-[16rem] px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+          <select value={drive} onChange={(e) => setDrive(e.target.value as Drive)} className="px-3 py-2 border border-border rounded-lg text-sm bg-white">
+            {DRIVES.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <button onClick={create} disabled={!name.trim()} className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm disabled:opacity-50">Create</button>
+        </div>
+      )}
+
+      {loading ? <p className="text-gray-400 py-12 text-center">Loading…</p>
+        : items.length === 0 ? <p className="text-gray-400 py-12 text-center border border-dashed border-gray-300 rounded-2xl">No series yet — create one for a multi-event campaign.</p>
+        : (
+          <div className="rounded-xl border border-border divide-y divide-gray-100">
+            {items.map((s) => (
+              <button key={s.id} onClick={() => onOpen(s.id)} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-gray-50">
+                <span className="font-medium">{s.name}</span>
+                <span className="text-[13px] text-gray-500">{s.drive} · {s.memberCount} event{s.memberCount === 1 ? "" : "s"}</span>
+              </button>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+}
