@@ -1799,6 +1799,22 @@ export async function pullEventFromLinear(
   return data as any;
 }
 
+/** Unlink this event from Linear: delete the Linear project AND every issue in it, then clear the
+ *  linkage on the event + its deliverables. Server-side (holds the Linear API key). Idempotent — a
+ *  project already gone in Linear still clears our side. */
+export async function unlinkLinear(
+  eventId: string,
+): Promise<{ deletedIssues: number; deletedProject: boolean }> {
+  const { data, error } = await supabase.functions.invoke('linear-sync', { body: { eventId, direction: 'unlink' } });
+  if (error) {
+    let msg = (data as any)?.error ?? error.message ?? String(error);
+    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    throw new Error(msg);
+  }
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return { deletedIssues: (data as any)?.deletedIssues ?? 0, deletedProject: !!(data as any)?.deletedProject };
+}
+
 /** Post an interactive budget-approval request (Approve/Decline buttons) to Slack. */
 export async function postApprovalRequest(opts: { channel: string; eventId: string; summary: string; link: string; requestedAmount: number | null }): Promise<{ channel: string; ts: string }> {
   const res = await fetch('/functions/v1/slack-approval', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(opts) });

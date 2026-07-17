@@ -11,7 +11,7 @@ import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, deleteEvent, resetEvent,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, unlinkLinear, deleteEvent, resetEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
@@ -55,6 +55,7 @@ import { ConfirmModal } from "./Modal";
 import { GCalSync } from "./GCalSync";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
+import { LinearLauncher } from "./LinearLauncher";
 import { OpenInLinear } from "./OpenInLinear";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
@@ -3743,7 +3744,7 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 // Top-right "⋮" menu on the event page.
-function EventMenu({ onReset, onDelete }: { onReset: () => void; onDelete: () => void }) {
+function EventMenu({ onReset, onDelete, onUnlinkLinear, linked }: { onReset: () => void; onDelete: () => void; onUnlinkLinear?: () => void; linked?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -3753,6 +3754,9 @@ function EventMenu({ onReset, onDelete }: { onReset: () => void; onDelete: () =>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-40 mt-1 w-48 bg-white border border-border rounded-lg shadow-lg p-1">
             <button onClick={() => { setOpen(false); onReset(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-gray-50 text-sm text-gray-700"><RefreshCw className="w-4 h-4" /> Reset event</button>
+            {linked && onUnlinkLinear && (
+              <button onClick={() => { setOpen(false); onUnlinkLinear(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-red-50 text-sm text-red-600"><X className="w-4 h-4" /> Unlink Linear</button>
+            )}
             <button onClick={() => { setOpen(false); onDelete(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-red-50 text-sm text-red-600"><Trash2 className="w-4 h-4" /> Delete event</button>
           </div>
         </>
@@ -3859,9 +3863,19 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   // control keeps the same placement/sizing when switching between the list and an event.
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
   const [enrichDrop, setEnrichDrop] = useState<{ files: File[] } | null>(null);
   // Clear imported/derived content back to a clean slate (keeps identity); refresh after.
   const doReset = async () => { try { await resetEvent(eventId); } finally { setConfirmReset(false); setReload((r) => r + 1); } };
+  // Unlink from Linear: delete the Linear project + its issues, clear the linkage here. Refresh after
+  // so the "Sync to Linear" button returns and the deliverables show no ticket links.
+  const doUnlink = async () => {
+    setUnlinking(true);
+    try { await unlinkLinear(eventId); setConfirmUnlink(false); setReload((r) => r + 1); }
+    catch (e: any) { setError(e?.message ?? String(e)); setConfirmUnlink(false); }
+    finally { setUnlinking(false); }
+  };
   const back = (
     <button onClick={() => { if (tab !== "overview") setTab("overview"); else onBack(); }} className="inline-flex items-center gap-1 mb-6 px-2 py-1 rounded-lg bg-white border border-border text-gray-700 hover:bg-gray-50 transition-colors">
       <ChevronLeft className="w-4 h-4" /> {tab !== "overview" ? "Overview" : "Previous"}
@@ -3893,7 +3907,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   return (
     <div {...pageDrag} className="relative">
       {/* Top-right event menu (⋮) — Delete for now, same confirm + cascade as the list. */}
-      <div className="absolute top-0 right-0 z-20"><EventMenu onReset={() => setConfirmReset(true)} onDelete={() => setConfirmDelete(true)} /></div>
+      <div className="absolute top-0 right-0 z-20"><EventMenu onReset={() => setConfirmReset(true)} onDelete={() => setConfirmDelete(true)} onUnlinkLinear={() => setConfirmUnlink(true)} linked={!!plan.linearProjectId} /></div>
       {confirmReset && (
         <ConfirmModal
           title="Reset event?"
@@ -3902,6 +3916,16 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           danger
           onConfirm={doReset}
           onClose={() => setConfirmReset(false)}
+        />
+      )}
+      {confirmUnlink && (
+        <ConfirmModal
+          title="Unlink from Linear?"
+          message={`Delete the Linear project for “${plan.title}” and every issue in it, then unlink this event. The deliverables stay in EventHub, but their Linear tickets are removed. This can’t be undone.`}
+          confirmLabel={unlinking ? "Unlinking…" : "Unlink & delete in Linear"}
+          danger
+          onConfirm={doUnlink}
+          onClose={() => { if (!unlinking) setConfirmUnlink(false); }}
         />
       )}
       {enrichDrop && (
@@ -4107,9 +4131,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
       </>
       )}
 
-      {/* Linear update composer — workspace only; a wrapped record has no active worklist. */}
+      {/* Linear command launcher (morph bubble → centered window) — workspace only; a wrapped record
+          has no active worklist. Scoped to THIS event. */}
       {!(wrapped && !reopened) && (
-        <LinearUpdateBox eventId={eventId} linearSynced={!!plan.linearProjectId} onApplied={() => setReload((r) => r + 1)} variant="floating" />
+        <LinearLauncher eventId={eventId} linearSynced={!!plan.linearProjectId} onApplied={() => setReload((r) => r + 1)} />
       )}
     </div>
   );

@@ -166,6 +166,29 @@ Deno.serve(async (req) => {
       return json({ ok: true, direction: "pull", pulled, total: deliverables.length });
     }
 
+    // UNLINK / DELETE: trash the Linear project and every issue in it, then clear the linkage on this
+    // event + its deliverables. Idempotent — if the project is already gone in Linear we still clear
+    // our side so the event reads as un-synced (the "Sync to Linear" button returns).
+    if (direction === "unlink" || direction === "delete") {
+      let deletedIssues = 0;
+      let deletedProject = false;
+      if (ev.linear_project_id) {
+        try {
+          const data = await gql<{ issues: { nodes: { id: string }[] } }>(
+            `query($p:ID!){ issues(filter:{ project:{ id:{ eq:$p } } }){ nodes{ id } } }`,
+            { p: ev.linear_project_id },
+          );
+          for (const n of data.issues.nodes) {
+            try { await gql(`mutation($id:String!){ issueDelete(id:$id){ success } }`, { id: n.id }); deletedIssues++; } catch { /* keep deleting the rest */ }
+          }
+          try { await gql(`mutation($id:String!){ projectDelete(id:$id){ success } }`, { id: ev.linear_project_id }); deletedProject = true; } catch { /* project may already be gone */ }
+        } catch { /* project unreadable — still clear our linkage below */ }
+      }
+      await sb.from("event").update({ linear_project_id: null, linear_project_url: null }).eq("id", eventId);
+      await sb.from("deliverable").update({ linear_issue_id: null, linear_issue_url: null }).eq("event_id", eventId);
+      return json({ ok: true, direction: "unlink", deletedIssues, deletedProject });
+    }
+
     const teamId = await ensureTeam(sb);
     const project = await ensureProject(teamId, ev, sb);
 
