@@ -952,12 +952,90 @@ git commit -m "feat(series): Briefs tab — per-person filtered trip brief + cop
 
 ---
 
+### Task 9: Add existing events to the series (Plan tab picker)
+
+**Files:**
+- Modify: `src/components/SeriesDashboard.tsx` (add `reload` to `TabProps` + pass it)
+- Modify: `src/components/SeriesPlan.tsx` (an "Add event" picker that links events via `setEventSeries`)
+
+**Interfaces:**
+- Consumes: `listEvents` + `setEventSeries` (Task 2 / existing), `EventListItem`; `TabProps.reload`.
+- Produces: `TabProps` gains `reload: () => void` (dashboard's member-event refetch).
+
+- [ ] **Step 1: Add `reload` to `TabProps` and pass it**
+
+In `src/components/SeriesDashboard.tsx`, add to the `TabProps` interface:
+```ts
+  reload: () => void;
+```
+and include it in the `props` object built in `SeriesDashboard`:
+```tsx
+  const props: TabProps = { seriesId, campaign, events, save, onOpenEvent, reload: load };
+```
+
+- [ ] **Step 2: Add the picker to `SeriesPlan.tsx`**
+
+Add imports at the top of `src/components/SeriesPlan.tsx`:
+```tsx
+import { useEffect } from "react";
+import { listEvents, setEventSeries, type EventListItem } from "../lib/db";
+```
+Destructure `seriesId` and `reload` from props: `export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, reload }: TabProps) {`.
+
+Add picker state + candidate loading inside the component (candidates = non-template events not already in THIS series):
+```tsx
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [candidates, setCandidates] = useState<EventListItem[]>([]);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    listEvents().then((all) => setCandidates(all.filter((e) => !e.isTemplate && e.seriesId !== seriesId))).catch(() => setCandidates([]));
+  }, [pickerOpen, seriesId]);
+  const addToSeries = async (eventId: string) => {
+    await setEventSeries(eventId, seriesId).catch(() => {});
+    setPickerOpen(false);
+    reload(); // refetch member events so the new one shows in Pending
+  };
+```
+
+Render the picker at the end of the "Pending events" `<section>` (after the pending list), inside that section:
+```tsx
+        <div className="mt-3">
+          {pickerOpen ? (
+            <div className="rounded-lg border border-border p-2 max-h-60 overflow-y-auto">
+              {candidates.length === 0 ? <p className="text-[13px] text-gray-400 px-1 py-2">No other events to add.</p> : candidates.map((c) => (
+                <button key={c.id} onClick={() => void addToSeries(c.id)} className="flex w-full items-center justify-between px-2 py-1.5 rounded text-sm hover:bg-gray-50 text-left">
+                  <span className="truncate">{c.title}</span>
+                  <span className="text-[12px] text-gray-400 shrink-0">{c.seriesName ? `in ${c.seriesName}` : (c.date ?? "—")}</span>
+                </button>
+              ))}
+              <button onClick={() => setPickerOpen(false)} className="mt-1 text-[13px] text-gray-500 hover:text-gray-800 px-1">Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => setPickerOpen(true)} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"><Plus className="w-4 h-4" /> Add event to series</button>
+          )}
+        </div>
+```
+(`Plus` is already imported in `SeriesPlan.tsx` from Task 5. An event already in another series shows "in <series>" — picking it moves it here.)
+
+- [ ] **Step 3: Typecheck**
+
+Run: `npx tsc --noEmit -p tsconfig.json` — Expected: no errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/components/SeriesDashboard.tsx src/components/SeriesPlan.tsx
+git commit -m "feat(series): add existing events to a series from the Plan tab"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
 - Reuse `event_series` + `extras.campaign`, no migration → Tasks 1–2 ✓
 - Nav: People+Vendors → Contacts; add Series → Tasks 3–4 ✓
-- Plan tab (waves, member events, set/pending/anchor, link to instance, assign) → Task 5 ✓
+- Plan tab (waves, member events, set/pending/anchor, link to instance, assign) → Task 5 ✓; add existing events to the series → Task 9 ✓
 - People & logistics (people×waves, flying/local, add profile or free-text+email, peak headcount, traveling/local, no costs) → Task 6 ✓
 - Budget (read-only member sum + travelers×rate per wave, locals $0, ESTIMATE label, never committed) → Task 7 ✓
 - Briefs (per-person waves+dates, events in waves / tagged, lodging+travel "to confirm", export/copy, excludes budget/vendors/others) → Task 8 ✓
