@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, X, Loader2, Search, UserPlus, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import { Modal } from "./Modal";
 import { Button } from "@instalily/ui/button";
+import { parseTypedDate } from "./DateEdit";
+import { LocationInput } from "./LocationEdit";
 import { addExternalConference, addAttendee, linkAttendeeToEvent, listAllAttendees, type PersonView } from "../lib/db";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -57,18 +59,24 @@ function MiniCalendar({ value, min, onPick }: { value: string; min?: string; onP
 // Value is a YYYY-MM-DD string; `min` disables earlier days.
 function DateField({ value, onChange, placeholder, min }: { value: string; onChange: (v: string) => void; placeholder?: string; min?: string }) {
   const [open, setOpen] = useState(false);
-  const label = value ? new Date(value + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : null;
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  // Commit a hand-typed date: blank clears, valid sets, invalid reverts.
+  const commit = () => { const s = draft.trim(); if (!s) { onChange(""); return; } const p = parseTypedDate(s); if (p) { onChange(p); setDraft(p); } else setDraft(value); };
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300"
-      >
+      <div className="w-full flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm focus-within:ring-2 focus-within:ring-gray-300">
         <CalendarIcon className="w-4 h-4 text-gray-400 shrink-0" />
-        <span className={label ? "" : "text-gray-400"}>{label ?? placeholder ?? "Pick a date"}</span>
-        <ChevronDown className={`w-4 h-4 text-gray-400 ml-auto shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { commit(); setOpen(false); } else if (e.key === "Escape") { setDraft(value); setOpen(false); } }}
+          onBlur={commit}
+          placeholder={placeholder ?? "YYYY-MM-DD"}
+          className="flex-1 min-w-0 bg-transparent outline-none"
+        />
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-label="Open calendar" className="shrink-0 text-gray-400 hover:text-gray-700"><ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} /></button>
+      </div>
       {open && <MiniCalendar value={value} min={min} onPick={(v) => { onChange(v); setOpen(false); }} />}
     </div>
   );
@@ -180,7 +188,7 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
         </div>
 
         <label className="block"><span className="text-[13px] text-gray-500">Location</span>
-          <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="City / venue" className={field} /></label>
+          <LocationInput value={location} onChange={setLocation} placeholder="City / venue" className={field} /></label>
 
         <label className="block"><span className="text-[13px] text-gray-500">Info link</span>
           <input value={infoUrl} onChange={(e) => setInfoUrl(e.target.value)} placeholder="https://…" className={field} /></label>
