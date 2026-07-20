@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Plus, Layers } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import { listSeries, createSeries, type SeriesListItem } from "../lib/db";
 import type { Drive } from "../lib/campaign";
 
 const DRIVES: Drive[] = ["recruiting", "culture", "client"];
+const driveLabel = (d: Drive) => d.charAt(0).toUpperCase() + d.slice(1);
 
 export function SeriesListPage({ onOpen }: { onOpen: (seriesId: string) => void }) {
   const [items, setItems] = useState<SeriesListItem[]>([]);
@@ -38,9 +40,12 @@ export function SeriesListPage({ onOpen }: { onOpen: (seriesId: string) => void 
       {creating && (
         <div className="mb-6 rounded-xl border border-border p-4 flex flex-wrap items-center gap-2">
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") create(); }} placeholder="Campaign name (e.g. Toronto campus activation)" className="flex-1 min-w-[16rem] px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          <select value={drive} onChange={(e) => setDrive(e.target.value as Drive)} className="px-3 py-2 border border-border rounded-lg text-sm bg-white">
-            {DRIVES.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
+          <Select value={drive} onValueChange={(v) => setDrive(v as Drive)} items={DRIVES.map((d) => ({ value: d, label: driveLabel(d) }))}>
+            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {DRIVES.map((d) => <SelectItem key={d} value={d}>{driveLabel(d)}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <button onClick={create} disabled={!name.trim()} className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm disabled:opacity-50">Create</button>
           {error && <p className="text-sm text-red-600 mt-2 w-full">{error}</p>}
         </div>

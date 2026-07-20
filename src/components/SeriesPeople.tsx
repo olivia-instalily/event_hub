@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Plus, X, Plane, MapPin } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
 import { peakHeadcount, travelerLocalCounts, personLabel, type CampaignPerson } from "../lib/campaign";
 import { useProfile } from "../lib/profile";
@@ -69,10 +70,12 @@ export function SeriesPeople({ campaign, save }: TabProps) {
           <button onClick={addFreeText} disabled={!name.trim()} className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm disabled:opacity-50">Add</button>
           <button onClick={() => setAdding(false)} className="text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
           <span className="text-[13px] text-gray-400">or add a teammate:</span>
-          <select defaultValue="" onChange={(e) => { if (e.target.value) { addProfile(e.target.value); } }} className="px-2 py-2 border border-border rounded-lg text-sm bg-white">
-            <option value="" disabled>Pick a profile…</option>
-            {profiles.map((pr) => <option key={pr.id} value={pr.id}>{pr.name}</option>)}
-          </select>
+          <Select value="" onValueChange={(v) => { if (v) addProfile(v as string); }} items={profiles.map((pr) => ({ value: pr.id, label: pr.name }))}>
+            <SelectTrigger className="min-w-[11rem]"><SelectValue placeholder="Pick a profile…" /></SelectTrigger>
+            <SelectContent>
+              {profiles.map((pr) => <SelectItem key={pr.id} value={pr.id}>{pr.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       ) : (
         <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"><Plus className="w-4 h-4" /> Add person</button>
