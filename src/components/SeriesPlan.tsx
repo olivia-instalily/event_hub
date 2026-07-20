@@ -20,11 +20,12 @@ export function SeriesPlan({ campaign, events, save, onOpenEvent }: TabProps) {
   const unassign = (eventId: string) => save({ ...campaign, waves: campaign.waves.map((w) => ({ ...w, eventIds: w.eventIds.filter((id) => id !== eventId) })) });
   const toggleAnchor = (eventId: string) => save({ ...campaign, anchorEventIds: campaign.anchorEventIds.includes(eventId) ? campaign.anchorEventIds.filter((id) => id !== eventId) : [...campaign.anchorEventIds, eventId] });
 
-  const EventRow = ({ id, waveId }: { id: string; waveId?: string }) => {
+  // Plain render helper (not a component) — called inline so React doesn't remount rows each render.
+  const renderEventRow = (id: string, waveId?: string) => {
     const e = eventsById[id]; if (!e) return null;
     const anchor = campaign.anchorEventIds.includes(id);
     return (
-      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${anchor ? "border-amber-300 bg-amber-50" : "border-gray-200"}`}>
+      <div key={id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${anchor ? "border-amber-300 bg-amber-50" : "border-gray-200"}`}>
         {anchor && <Star className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
         <button onClick={() => onOpenEvent?.(id)} className="flex-1 min-w-0 text-left text-sm hover:underline inline-flex items-center gap-1"><span className="truncate">{e.name}</span><ExternalLink className="w-3 h-3 text-gray-400 shrink-0" /></button>
         <span className="text-[12px] text-gray-400 shrink-0">{e.date ?? "—"}</span>
@@ -52,7 +53,7 @@ export function SeriesPlan({ campaign, events, save, onOpenEvent }: TabProps) {
             <button onClick={() => removeWave(w.id)} className="ml-auto text-gray-300 hover:text-red-600" aria-label="Remove wave"><X className="w-4 h-4" /></button>
           </div>
           <div className="space-y-1.5">
-            {w.eventIds.length === 0 ? <p className="text-[13px] text-gray-400">No events in this wave yet.</p> : w.eventIds.map((id) => <EventRow key={id} id={id} waveId={w.id} />)}
+            {w.eventIds.length === 0 ? <p className="text-[13px] text-gray-400">No events in this wave yet.</p> : w.eventIds.map((id) => renderEventRow(id, w.id))}
           </div>
         </section>
       ))}
@@ -70,7 +71,7 @@ export function SeriesPlan({ campaign, events, save, onOpenEvent }: TabProps) {
       <section>
         <h3 className="text-[15px] font-medium text-gray-700 mb-2">Pending events <span className="text-gray-400 font-normal">· not yet in a wave</span></h3>
         {pending.length === 0 ? <p className="text-[13px] text-gray-400">All member events are assigned.{events.length === 0 ? " Add events to this series from an event's page (set its series)." : ""}</p> : (
-          <div className="space-y-1.5">{pending.map((e) => <EventRow key={e.id} id={e.id} />)}</div>
+          <div className="space-y-1.5">{pending.map((e) => renderEventRow(e.id))}</div>
         )}
       </section>
     </div>
