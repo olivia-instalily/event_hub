@@ -1,5 +1,5 @@
 import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, ChevronDown, ChevronLeft, ChevronRight, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight, Sparkles, BadgeCheck, Loader2 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
 import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
@@ -500,7 +500,7 @@ export function CalendarView({ events, onOpen }: { events: EventListItem[]; onOp
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setPreview({ e, top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 288) });
   };
-  const dotColor = (e: EventListItem) => e.macroStage === "Wrapped" || e.status === "past" ? "bg-gray-400" : e.status === "in-process" ? "bg-amber-500" : "bg-blue-500";
+  const dotColor = (e: EventListItem) => e.isExternal ? "bg-purple-500" : e.macroStage === "Wrapped" || e.status === "past" ? "bg-gray-400" : e.status === "in-process" ? "bg-amber-500" : "bg-blue-500";
 
   const first = new Date(cursor.y, cursor.m, 1);
   const startDow = first.getDay();
@@ -536,10 +536,10 @@ export function CalendarView({ events, onOpen }: { events: EventListItem[]; onOp
                 onClick={() => onOpen(e.id)}
                 onMouseEnter={(ev) => onChipEnter(ev, e)}
                 onMouseLeave={() => setPreview(null)}
-                className="flex items-center gap-1 w-full text-left text-[11px] rounded px-1 py-0.5 mb-0.5 bg-gray-100 text-gray-800 hover:bg-gray-200 transition-colors"
+                className={`flex items-center gap-1 w-full text-left text-[11px] rounded px-1 py-0.5 mb-0.5 transition-colors ${e.isExternal ? "bg-purple-50 text-purple-900 hover:bg-purple-100" : "bg-gray-100 text-gray-800 hover:bg-gray-200"}`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor(e)}`} />
-                <span className="truncate">{e.startTime ? `${e.startTime} ` : ""}{e.title}</span>
+                <span className="truncate">{e.isExternal ? "External · " : e.startTime ? `${e.startTime} ` : ""}{e.title}</span>
               </button>
             ))}
           </div>
@@ -1835,8 +1835,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   const [bookmarkedEvents, setBookmarkedEvents] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines' | 'calendar'>('cards');
-  // Status is single-select: "All" (all three) OR exactly one of future / in-process / past — kept
-  // as a Set so the filtering logic below stays the same. Templates is a separate exclusive view.
+  // Status filter presets: "All" (the DEFAULT — every status, split into Upcoming / Past sections)
+  // or exactly one of future / in-process / past. Kept as a Set so the filtering logic stays the same.
+  // Templates is a separate exclusive view.
   const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
   const [templatesView, setTemplatesView] = useState(false);
   const [locationFilter, setLocationFilter] = useState<string>('all');
@@ -2000,14 +2001,22 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     }
     return true;
   }).sort((a, b) => {
-    // Future-only: soonest first. Anything else (mixed / past): most recent first. Undated last.
+    // Two sections: Upcoming (in-process + future) before Past. Within Upcoming, nearest-to-today
+    // first (ascending). Within Past, most-recent first (descending). Undated last in its section.
+    const asec = a.status === 'past' ? 1 : 0, bsec = b.status === 'past' ? 1 : 0;
+    if (asec !== bsec) return asec - bsec;
     const ad = a.date ?? '', bd = b.date ?? '';
     if (!ad && !bd) return 0;
     if (!ad) return 1;
     if (!bd) return -1;
-    const futureOnly = !templatesView && selectedStatuses.size === 1 && selectedStatuses.has('future');
-    return futureOnly ? ad.localeCompare(bd) : bd.localeCompare(ad);
+    return asec === 0 ? ad.localeCompare(bd) : bd.localeCompare(ad);
   });
+
+  // The list is grouped into Upcoming (in-process + future) then Past. Section headers show only
+  // when both are present — a single-status filter (or Templates) shows just its own group.
+  const sectionOf = (e: EventListItem): 'upcoming' | 'past' => (e.status === 'past' ? 'past' : 'upcoming');
+  const showSections = !templatesView && new Set(filteredEvents.map(sectionOf)).size > 1;
+  const SECTION_LABEL: Record<'upcoming' | 'past', string> = { upcoming: 'Upcoming', past: 'Past' };
 
   if (selectedEventId !== null) {
     // Events we're actively planning (macro_stage set) open the planning view;
@@ -2217,9 +2226,12 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       {/* Cards View */}
       {!loading && !error && viewMode === 'cards' && filteredEvents.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {filteredEvents.map((event) => (
+          {filteredEvents.map((event, i) => {
+            const showHeader = showSections && (i === 0 || sectionOf(filteredEvents[i - 1]) !== sectionOf(event));
+            return (
+            <Fragment key={event.id}>
+            {showHeader && <h3 className="md:col-span-2 text-sm font-medium text-gray-500 mt-2 first:mt-0">{SECTION_LABEL[sectionOf(event)]}</h3>}
             <div
-              key={event.id}
               {...dropZone(event.id, event.title)}
               className={`group relative bg-card rounded-xl p-6 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex flex-col ${dragOverId === event.id ? 'ring-2 ring-gray-400 bg-gray-50' : 'ring-1 ring-foreground/10'}`}
               onClick={() => setSelectedEventId(event.id)}
@@ -2350,7 +2362,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                 )}
               </div>
             </div>
-          ))}
+            </Fragment>
+            );
+          })}
         </div>
       )}
 
@@ -2372,9 +2386,12 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredEvents.map((event) => (
+              {filteredEvents.map((event, i) => {
+                const showHeader = showSections && (i === 0 || sectionOf(filteredEvents[i - 1]) !== sectionOf(event));
+                return (
+                <Fragment key={event.id}>
+                {showHeader && <TableRow className="hover:bg-transparent"><TableCell colSpan={8} className="px-4 py-2 bg-muted/30 text-sm font-medium text-gray-500">{SECTION_LABEL[sectionOf(event)]}</TableCell></TableRow>}
                 <TableRow
-                  key={event.id}
                   {...dropZone(event.id, event.title)}
                   className={`group/row cursor-pointer transition-colors ${dragOverId === event.id ? 'bg-gray-100' : ''} ${dropBusyId === event.id ? 'opacity-60 pointer-events-none' : ''}`}
                   onClick={() => setSelectedEventId(event.id)}
@@ -2420,7 +2437,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                </Fragment>
+                );
+              })}
             </TableBody>
           </Table>
         </div>

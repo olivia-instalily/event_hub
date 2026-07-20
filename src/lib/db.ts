@@ -67,6 +67,13 @@ export interface EventListItem {
   labelIds: string[];
   macroStage: string | null; // set ⇒ an event we're actively planning (routes to the planning view)
   isTemplate: boolean; // a reusable Event Type (open slots), not a concrete instance
+  // External conference: a lightweight "we're attending this" instance — NOT an operated event
+  // (no workspace/budget/deliverables). Shows on the calendar, marked External.
+  isExternal: boolean;
+  endDate: string | null;  // external range end; null = single-day
+  quarter: string | null;  // manual planning tag (Q1–Q4)
+  why: string | null;      // why it's relevant (free text)
+  infoUrl: string | null;  // link to the conference
   finalRecordComplete: boolean; // post-event reflections deliverable is Done → a complete record
   settled: boolean; // settle_state === 'settled' → fully wrapped/settled (shows a green marker, sits in Past)
 }
@@ -211,6 +218,11 @@ function toListItem(row: any): EventListItem {
     labelIds: (row.event_label ?? []).map((l: any) => l.label_id),
     macroStage: row.macro_stage ?? null,
     isTemplate: row.is_template ?? false,
+    isExternal: row.is_external ?? false,
+    endDate: row.end_date ?? null,
+    quarter: row.quarter ?? null,
+    why: row.why ?? null,
+    infoUrl: row.info_url ?? null,
     finalRecordComplete: false, // set by listEvents from the reflection-deliverable status
     settled: row.settle_state === 'settled',
   };
@@ -996,6 +1008,17 @@ export async function addAttendee(eventId: string, fields: { name: string; title
     applicationStatus: null, greenhouseLastSynced: null,
     role: fields.isSpeaker ? 'speaker' : 'attendee', registrationStatus: null, checkedIn: false,
   };
+}
+
+/** Link an EXISTING person (attendee) to an event — the same attendee_event linkage addAttendee uses,
+ *  but reusing the person record instead of creating a new one. Idempotent on (attendee, event). */
+export async function linkAttendeeToEvent(eventId: string, attendeeId: string): Promise<void> {
+  const { error } = await supabase.from('attendee_event').upsert(
+    { id: newId('ae'), attendee_id: attendeeId, event_id: eventId, role_at_event: 'attendee' },
+    { onConflict: 'attendee_id,event_id', ignoreDuplicates: true },
+  );
+  if (error) throw error;
+  await graduateFromConcept(eventId);
 }
 
 export async function setAttendeePhoto(attendeeId: string, url: string | null): Promise<void> {
@@ -1870,12 +1893,16 @@ export async function slackSend(channel: string, text: string): Promise<{ channe
   return data as any;
 }
 
+const EVENT_LIST_SELECT =
+  'id, name, tag, tags, format, location, office, event_date, end_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, is_external, quarter, why, info_url, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )';
+
 export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
     .from('event')
-    .select(
-      'id, name, tag, tags, format, location, office, event_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )',
-    )
+    .select(EVENT_LIST_SELECT)
+    // Exclude lightweight external conferences — they aren't operated events, so they must never
+    // leak into the events list, Home, Budget, todos, etc. The Calendar opts them in separately.
+    .eq('lightweight', false)
     .order('id');
   if (error) throw error;
   const items = (data ?? []).map(toListItem);
@@ -1913,6 +1940,38 @@ export async function listEvents(): Promise<EventListItem[]> {
     it.finalRecordComplete = it.status === 'past' && (noGaps || reflDoneSet.has(it.id));
   }
   return items;
+}
+
+// ── External conferences (lightweight "we're attending this") ─────────────────
+/** External conferences only — the lightweight instances excluded from listEvents. For the calendar. */
+export async function listExternalConferences(): Promise<EventListItem[]> {
+  const { data, error } = await supabase.from('event').select(EVENT_LIST_SELECT).eq('is_external', true).order('event_date');
+  if (error) throw error;
+  return (data ?? []).map(toListItem);
+}
+
+export interface ExternalConferenceInput {
+  name: string; startDate: string; endDate?: string | null;
+  why?: string | null; quarter?: string | null; location?: string | null; infoUrl?: string | null;
+}
+/** Create a lightweight external-conference instance — a MINIMAL event row (is_external + lightweight),
+ *  NOT via createPlanningEvent, so no budget/deliverables/phases/post-mortem are seeded. Attendees are
+ *  added separately with addAttendee() so the linkage is the same one events use. Returns the id. */
+export async function addExternalConference(input: ExternalConferenceInput): Promise<string> {
+  const name = input.name.trim();
+  if (!name) throw new Error('Name is required.');
+  if (!input.startDate) throw new Error('Start date is required.');
+  if (input.endDate && input.endDate < input.startDate) throw new Error('End date must be on or after the start date.');
+  const id = newId('evt');
+  const { error } = await supabase.from('event').insert({
+    id, name, event_date: input.startDate, end_date: input.endDate || null,
+    is_external: true, lightweight: true, is_template: false, macro_stage: null,
+    location: input.location?.trim() || null, why: input.why?.trim() || null,
+    quarter: input.quarter?.trim() || null, info_url: input.infoUrl?.trim() || null,
+    tags: [],
+  });
+  if (error) throw error;
+  return id;
 }
 
 // ── Series / campaign helpers ──────────────────────────────────────────────
