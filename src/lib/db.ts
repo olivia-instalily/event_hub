@@ -595,31 +595,6 @@ export async function listVendors(): Promise<VendorRow[]> {
   }));
 }
 
-/** Edit a persistent vendor record (the global directory). Only the fields passed are changed;
- *  blank strings clear the column. */
-export async function updateVendor(id: string, fields: { name?: string | null; category?: string | null; preferredList?: string | null; notes?: string | null }): Promise<void> {
-  const patch: Record<string, unknown> = {};
-  const norm = (v: string | null | undefined) => (v == null ? undefined : (v.trim() || null));
-  if ('name' in fields) patch.name = norm(fields.name);
-  if ('category' in fields) patch.category = norm(fields.category);
-  if ('preferredList' in fields) patch.preferred_list = norm(fields.preferredList);
-  if ('notes' in fields) patch.notes = norm(fields.notes);
-  if (!Object.keys(patch).length) return;
-  const { error } = await supabase.from('vendor').update(patch).eq('id', id);
-  if (error) throw error;
-}
-
-/** Delete a vendor from the directory — but only if nothing references it (an engagement, candidate,
- *  contract, or contact). Refuses with a clear message otherwise, so a live record isn't orphaned. */
-export async function deleteVendor(id: string): Promise<void> {
-  for (const [table, label] of [['engagement', 'an event'], ['engagement_candidate', 'a shortlist'], ['contract', 'a contract'], ['vendor_contact', 'a contact']] as const) {
-    const { count } = await supabase.from(table).select('vendor_id', { count: 'exact', head: true }).eq('vendor_id', id);
-    if (count && count > 0) throw new Error(`Can't delete — this vendor is still linked to ${label}. Unlink it there first.`);
-  }
-  const { error } = await supabase.from('vendor').delete().eq('id', id);
-  if (error) throw error;
-}
-
 /** Every tag in use across all events — the global option list for tag pickers. */
 /** Managed list of event format (gathering type) options. */
 export async function listFormats(): Promise<string[]> {
@@ -1777,40 +1752,6 @@ export async function syncEventToGoogleCalendar(
   return data as any;
 }
 
-export interface DebriefSchedule { date: string; start: string; debriefAt: string; htmlLink: string | null; attendees: string[]; conflictFree: boolean }
-export interface DebriefFreeBusy {
-  date: string; tz: string; workStart: number; workEnd: number; slotMin: number;
-  attendees: { name: string; email: string }[];
-  busy: { email: string; start: string; end: string }[];
-}
-/** Read-only: each owner's busy blocks for a day, so the UI can draw an availability grid before
- *  scheduling. Defaults to the next weekday after the event; pass `date` to inspect another day. */
-export async function getDebriefFreeBusy(eventId: string, date?: string): Promise<DebriefFreeBusy> {
-  const { data, error } = await supabase.functions.invoke('gcal-sync', { body: { eventId, mode: 'freebusy', date } });
-  if (error) {
-    let msg = (data as any)?.error ?? error.message ?? String(error);
-    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
-    throw new Error(msg);
-  }
-  if ((data as any)?.error) throw new Error((data as any).error);
-  return data as DebriefFreeBusy;
-}
-
-/** Schedule a 30-min post-event debrief MEETING inviting the owners. Pass a chosen `date`+`start`
- *  (HH:MM, from the availability grid) to book that exact slot; omit them to auto-pick the next
- *  weekday's earliest free slot. Distinct from scheduleDebrief() above, which creates a debrief to-do.
- *  Idempotent — re-running patches the same invite. Server-side holds the Google credentials. */
-export async function scheduleDebriefMeeting(eventId: string, slot?: { date: string; start: string }): Promise<DebriefSchedule> {
-  const { data, error } = await supabase.functions.invoke('gcal-sync', { body: { eventId, mode: 'debrief', date: slot?.date, start: slot?.start } });
-  if (error) {
-    let msg = (data as any)?.error ?? error.message ?? String(error);
-    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
-    throw new Error(msg);
-  }
-  if ((data as any)?.error) throw new Error((data as any).error);
-  return data as DebriefSchedule;
-}
-
 /** Mirror this event + all its deliverables into Linear: the event becomes a Project under the
  *  single "EventHub" team, and each deliverable an Issue in that project. Idempotent — re-running
  *  updates existing issues. Server-side holds the Linear API key. */
@@ -2400,8 +2341,6 @@ export interface EventPlanning {
   lumaEventId: string | null;
   gcalEventId: string | null;
   gcalHtmlLink: string | null;
-  debriefAt: string | null;          // ISO — set ⇒ a debrief is scheduled on Google Calendar
-  debriefHtmlLink: string | null;    // deep link to the scheduled debrief invite
   linearProjectId: string | null;
   linearProjectUrl: string | null;
   coverImageUrl: string | null;
@@ -2492,7 +2431,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, debrief_at, debrief_gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -2604,8 +2543,6 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     lumaEventId: (row as any).luma_event_id ?? null,
     gcalEventId: (row as any).gcal_event_id ?? null,
     gcalHtmlLink: (row as any).gcal_html_link ?? null,
-    debriefAt: (row as any).debrief_at ?? null,
-    debriefHtmlLink: (row as any).debrief_gcal_html_link ?? null,
     linearProjectId: (row as any).linear_project_id ?? null,
     linearProjectUrl: (row as any).linear_project_url ?? null,
     coverImageUrl: (row as any).cover_image_url ?? null,
