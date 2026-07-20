@@ -1,13 +1,25 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Plus, X, Star, ExternalLink } from "lucide-react";
 import type { TabProps } from "./SeriesDashboard";
 import { type Wave } from "../lib/campaign";
+import { listEvents, setEventSeries, type EventListItem } from "../lib/db";
 
 const newWaveId = () => "w-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
 
-export function SeriesPlan({ campaign, events, save, onOpenEvent }: TabProps) {
+export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, reload }: TabProps) {
   const [adding, setAdding] = useState(false);
   const [wName, setWName] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [candidates, setCandidates] = useState<EventListItem[]>([]);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    listEvents().then((all) => setCandidates(all.filter((e) => !e.isTemplate && e.seriesId !== seriesId))).catch(() => setCandidates([]));
+  }, [pickerOpen, seriesId]);
+  const addToSeries = async (eventId: string) => {
+    await setEventSeries(eventId, seriesId).catch(() => {});
+    setPickerOpen(false);
+    reload(); // refetch member events so the new one shows in Pending
+  };
 
   const eventsById = Object.fromEntries(events.map((e) => [e.id, e]));
   const assignedIds = new Set(campaign.waves.flatMap((w) => w.eventIds));
@@ -73,6 +85,21 @@ export function SeriesPlan({ campaign, events, save, onOpenEvent }: TabProps) {
         {pending.length === 0 ? <p className="text-[13px] text-gray-400">All member events are assigned.{events.length === 0 ? " Add events to this series from an event's page (set its series)." : ""}</p> : (
           <div className="space-y-1.5">{pending.map((e) => renderEventRow(e.id))}</div>
         )}
+        <div className="mt-3">
+          {pickerOpen ? (
+            <div className="rounded-lg border border-border p-2 max-h-60 overflow-y-auto">
+              {candidates.length === 0 ? <p className="text-[13px] text-gray-400 px-1 py-2">No other events to add.</p> : candidates.map((c) => (
+                <button key={c.id} onClick={() => void addToSeries(c.id)} className="flex w-full items-center justify-between px-2 py-1.5 rounded text-sm hover:bg-gray-50 text-left">
+                  <span className="truncate">{c.title}</span>
+                  <span className="text-[12px] text-gray-400 shrink-0">{c.seriesName ? `in ${c.seriesName}` : (c.date ?? "—")}</span>
+                </button>
+              ))}
+              <button onClick={() => setPickerOpen(false)} className="mt-1 text-[13px] text-gray-500 hover:text-gray-800 px-1">Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => setPickerOpen(true)} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"><Plus className="w-4 h-4" /> Add event to series</button>
+          )}
+        </div>
       </section>
     </div>
   );

@@ -13,6 +13,7 @@ export interface TabProps {
   events: SeriesEvent[];
   save: (next: Campaign) => void;
   onOpenEvent?: (id: string) => void;
+  reload: () => void;
 }
 type Tab = "plan" | "people" | "budget" | "briefs";
 const TABS: { key: Tab; label: string }[] = [
@@ -33,7 +34,7 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent }: { seriesId: s
   // Optimistic save: update local state immediately, persist in the background, reload on error.
   const save = (next: Campaign) => { setCampaign(next); saveCampaign(seriesId, next).catch(() => load()); };
 
-  const props: TabProps = { seriesId, campaign, events, save, onOpenEvent };
+  const props: TabProps = { seriesId, campaign, events, save, onOpenEvent, reload: load };
 
   return (
     <div className="max-w-5xl mx-auto">
