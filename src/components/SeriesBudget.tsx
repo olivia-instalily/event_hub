@@ -7,6 +7,7 @@ export function SeriesBudget({ campaign, events, save }: TabProps) {
   const withBudget = events.filter((e) => e.eventBudgetTarget != null);
   const memberTotal = memberBudgetTotal(events);
   const travel = travelEstimate(campaign);
+  const combined = memberTotal + travel;
 
   return (
     <div className="max-w-xl space-y-6">
@@ -39,7 +40,7 @@ export function SeriesBudget({ campaign, events, save }: TabProps) {
 
       <div className="flex items-center justify-between rounded-xl bg-gray-900 text-white px-4 py-3">
         <span className="font-medium">Combined estimate</span>
-        <span className="text-lg font-medium">{money(memberTotal + travel)}</span>
+        <span className="text-lg font-medium">{combined === 0 && withBudget.length === 0 && campaign.travelRatePerWave == null ? "—" : money(combined)}</span>
       </div>
     </div>
   );

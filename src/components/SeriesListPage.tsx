@@ -11,15 +11,21 @@ export function SeriesListPage({ onOpen }: { onOpen: (seriesId: string) => void 
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [drive, setDrive] = useState<Drive>("recruiting");
+  const [error, setError] = useState<string | null>(null);
 
   const load = () => { setLoading(true); listSeries().then(setItems).catch(() => {}).finally(() => setLoading(false)); };
   useEffect(() => { load(); }, []);
 
   const create = async () => {
     if (!name.trim()) return;
-    const id = await createSeries(name, drive);
-    setName(""); setCreating(false);
-    onOpen(id);
+    setError(null);
+    try {
+      const id = await createSeries(name, drive);
+      setName(""); setCreating(false);
+      onOpen(id);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   return (
@@ -36,6 +42,7 @@ export function SeriesListPage({ onOpen }: { onOpen: (seriesId: string) => void 
             {DRIVES.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
           <button onClick={create} disabled={!name.trim()} className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm disabled:opacity-50">Create</button>
+          {error && <p className="text-sm text-red-600 mt-2 w-full">{error}</p>}
         </div>
       )}
 

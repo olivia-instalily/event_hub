@@ -27,12 +27,13 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent }: { seriesId: s
   const [events, setEvents] = useState<SeriesEvent[]>([]);
   const [tab, setTab] = useState<Tab>("plan");
   const [loading, setLoading] = useState(true);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = () => { setLoading(true); getSeriesCampaign(seriesId).then((s) => { setName(s.name); setCampaign(s.campaign); setEvents(s.events); }).catch(() => {}).finally(() => setLoading(false)); };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [seriesId]);
 
   // Optimistic save: update local state immediately, persist in the background, reload on error.
-  const save = (next: Campaign) => { setCampaign(next); saveCampaign(seriesId, next).catch(() => load()); };
+  const save = (next: Campaign) => { setSaveError(null); setCampaign(next); saveCampaign(seriesId, next).then(() => setSaveError(null)).catch((e: unknown) => { setSaveError(e instanceof Error && e.message ? `Couldn't save — your last change was reverted (${e.message})` : "Couldn't save — your last change was reverted."); load(); }); };
 
   const props: TabProps = { seriesId, campaign, events, save, onOpenEvent, reload: load };
 
@@ -50,6 +51,7 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent }: { seriesId: s
 
       {loading ? <p className="text-gray-400 py-12 text-center">Loading…</p> : (
         <>
+          {saveError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">{saveError}</div>}
           {tab === "plan" && <SeriesPlan {...props} />}
           {tab === "people" && <SeriesPeople {...props} />}
           {tab === "budget" && <SeriesBudget {...props} />}
