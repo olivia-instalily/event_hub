@@ -1,15 +1,13 @@
 import { useState, useEffect } from "react";
-import { Plus, X, Star, ExternalLink, GripVertical, CalendarDays } from "lucide-react";
+import { Plus, X, Star, ExternalLink, GripVertical } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
 import { type Wave } from "../lib/campaign";
 import { listEvents, setEventSeries, type EventListItem, type SeriesEvent } from "../lib/db";
+import { DateEdit } from "./DateEdit";
 
 const newWaveId = () => "w-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
-
-// Consistent field styling (matches the date/select inputs used elsewhere in the app).
-const DATE_FIELD = "px-2.5 py-1.5 border border-gray-300 rounded-lg text-[13px] text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-gray-300";
 
 // Small brand-Select used as an action menu ("pick a wave" → assign). Value stays empty so it can be
 // re-picked; the choice fires onPick. Matches the site's Select instead of a native OS dropdown.
@@ -133,11 +131,10 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
               <input value={w.name} onChange={(e) => patchWave(w.id, { name: e.target.value })} placeholder="Wave name" className="font-medium text-[15px] flex-1 min-w-0 border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none" />
               <button onClick={() => removeWave(w.id)} className="text-gray-300 hover:text-red-600 shrink-0" aria-label="Remove wave"><X className="w-4 h-4" /></button>
             </div>
-            <div className="mt-2 mb-3 flex flex-wrap items-center gap-2">
-              <CalendarDays className="w-4 h-4 text-gray-400 shrink-0" />
-              <input type="date" value={w.start ?? ""} onChange={(e) => patchWave(w.id, { start: e.target.value || null })} className={DATE_FIELD} aria-label="Wave start date" />
+            <div className="mt-2 mb-3 flex flex-wrap items-center gap-1">
+              <DateEdit value={w.start} onChange={(v) => patchWave(w.id, { start: v })} placeholder="Start date" />
               <span className="text-gray-400 text-sm">→</span>
-              <input type="date" value={w.end ?? ""} onChange={(e) => patchWave(w.id, { end: e.target.value || null })} className={DATE_FIELD} aria-label="Wave end date" />
+              <DateEdit value={w.end} onChange={(v) => patchWave(w.id, { end: v })} placeholder="End date" />
             </div>
             <DropZone id={w.id} empty={w.eventIds.length === 0}>
               {w.eventIds.length === 0
