@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, X, Loader2, Search, UserPlus, Calendar as CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, X, Loader2, Search, UserPlus, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import { Modal } from "./Modal";
 import { Button } from "@instalily/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@instalily/ui/popover";
 import { addExternalConference, addAttendee, linkAttendeeToEvent, listAllAttendees, type PersonView } from "../lib/db";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -22,7 +21,7 @@ function MiniCalendar({ value, min, onPick }: { value: string; min?: string; onP
   const shift = (delta: number) => setCur((c) => { const d = new Date(c.y, c.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
 
   return (
-    <div className="p-2 w-64">
+    <div className="mt-1 rounded-lg border border-gray-200 bg-white p-2 shadow-sm">
       <div className="flex items-center justify-between mb-1.5 px-1">
         <button type="button" onClick={() => shift(-1)} className="p-1 rounded hover:bg-gray-100" aria-label="Previous month"><ChevronLeft className="w-4 h-4" /></button>
         <span className="text-sm font-medium">{first.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</span>
@@ -53,21 +52,25 @@ function MiniCalendar({ value, min, onPick }: { value: string; min?: string; onP
   );
 }
 
-// Date-only field with a styled calendar popout, replacing the native <input type="date"> popup.
+// Date-only field: a trigger button that reveals an INLINE calendar right below it. Inline (not a
+// portaled popover) so it can't glitch against the modal's focus trap / z-index / scroll clipping.
 // Value is a YYYY-MM-DD string; `min` disables earlier days.
 function DateField({ value, onChange, placeholder, min }: { value: string; onChange: (v: string) => void; placeholder?: string; min?: string }) {
   const [open, setOpen] = useState(false);
   const label = value ? new Date(value + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : null;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={<Button variant="outline" size="sm" className="w-full justify-start text-left font-normal border-gray-300" />}>
-        <CalendarIcon className="w-4 h-4 mr-1.5 text-gray-400 shrink-0" />
-        {label ?? <span className="text-gray-400">{placeholder ?? "Pick a date"}</span>}
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
-        <MiniCalendar value={value} min={min} onPick={(v) => { onChange(v); setOpen(false); }} />
-      </PopoverContent>
-    </Popover>
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-lg text-sm text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300"
+      >
+        <CalendarIcon className="w-4 h-4 text-gray-400 shrink-0" />
+        <span className={label ? "" : "text-gray-400"}>{label ?? placeholder ?? "Pick a date"}</span>
+        <ChevronDown className={`w-4 h-4 text-gray-400 ml-auto shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && <MiniCalendar value={value} min={min} onPick={(v) => { onChange(v); setOpen(false); }} />}
+    </div>
   );
 }
 
