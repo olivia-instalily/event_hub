@@ -27,7 +27,7 @@ function WaveSelect({ waves, onPick }: { waves: Wave[]; onPick: (waveId: string)
 
 // A draggable event row. Module-scope component (uses the useDraggable hook) so it isn't redefined on
 // every render. Drag is isolated to the grip handle; the name/anchor/select stay clickable.
-function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUnassign, onAssign }: {
+function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUnassign, onAssign, onRemove }: {
   event: SeriesEvent;
   anchor: boolean;
   inWave: boolean;
@@ -36,6 +36,7 @@ function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUna
   onToggleAnchor: (id: string) => void;
   onUnassign: (id: string) => void;
   onAssign: (id: string, waveId: string) => void;
+  onRemove?: (id: string) => void; // pending only: remove the event from the series entirely
 }) {
   const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({ id: event.id });
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50, position: "relative" as const } : undefined;
@@ -48,9 +49,12 @@ function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUna
       <button onClick={() => onToggleAnchor(event.id)} title={anchor ? "Unmark anchor" : "Mark as anchor"} className={`shrink-0 ${anchor ? "text-amber-500" : "text-gray-300 hover:text-amber-500"}`}><Star className="w-4 h-4" /></button>
       {inWave ? (
         <button onClick={() => onUnassign(event.id)} title="Remove from wave" className="shrink-0 text-gray-300 hover:text-red-600"><X className="w-4 h-4" /></button>
-      ) : waves.length > 0 ? (
-        <div className="shrink-0"><WaveSelect waves={waves} onPick={(wid) => onAssign(event.id, wid)} /></div>
-      ) : null}
+      ) : (
+        <>
+          {waves.length > 0 && <div className="shrink-0"><WaveSelect waves={waves} onPick={(wid) => onAssign(event.id, wid)} /></div>}
+          {onRemove && <button onClick={() => onRemove(event.id)} title="Remove from series" className="shrink-0 text-gray-300 hover:text-red-600"><X className="w-4 h-4" /></button>}
+        </>
+      )}
     </div>
   );
 }
@@ -107,6 +111,12 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
   const assignEvent = (eventId: string, waveId: string) => save({ ...campaign, waves: campaign.waves.map((w) => ({ ...w, eventIds: w.id === waveId ? [...new Set([...w.eventIds, eventId])] : w.eventIds.filter((id) => id !== eventId) })) });
   const unassign = (eventId: string) => save({ ...campaign, waves: campaign.waves.map((w) => ({ ...w, eventIds: w.eventIds.filter((id) => id !== eventId) })) });
   const toggleAnchor = (eventId: string) => save({ ...campaign, anchorEventIds: campaign.anchorEventIds.includes(eventId) ? campaign.anchorEventIds.filter((id) => id !== eventId) : [...campaign.anchorEventIds, eventId] });
+  // Remove a pending event from the series entirely (unlink it — the event itself is not deleted).
+  const removeFromSeries = async (eventId: string) => {
+    await setEventSeries(eventId, null).catch(() => {});
+    save({ ...campaign, waves: campaign.waves.map((w) => ({ ...w, eventIds: w.eventIds.filter((id) => id !== eventId) })), anchorEventIds: campaign.anchorEventIds.filter((id) => id !== eventId) });
+    reloadEvents();
+  };
 
   // Pull an existing event into the series. Always registers series membership (so it joins the
   // member list / pending); if a wave is given, also drops it straight into that wave.
@@ -215,7 +225,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             {pending.length === 0
               ? <p className="text-[13px] text-gray-400 px-1 py-1.5">All member events are assigned.{events.length === 0 ? " Add one below." : " Drag one here to unassign it."}</p>
               : pending.map((e) => (
-                  <EventChip key={e.id} event={e} anchor={campaign.anchorEventIds.includes(e.id)} inWave={false} waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onUnassign={unassign} onAssign={assignEvent} />
+                  <EventChip key={e.id} event={e} anchor={campaign.anchorEventIds.includes(e.id)} inWave={false} waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onUnassign={unassign} onAssign={assignEvent} onRemove={(id) => void removeFromSeries(id)} />
                 ))}
           </DropZone>
           <div className="mt-3">
