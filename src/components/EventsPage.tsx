@@ -2059,7 +2059,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
             title="Show all"
             className={`px-2 py-1 rounded-lg border transition-all ${
               !templatesView && selectedStatuses.size === 3
-                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                ? 'bg-gray-200 border-gray-300 text-gray-900 font-medium'
                 : 'bg-white border-border text-gray-700 hover:bg-gray-50'
             }`}
           >
@@ -2076,7 +2076,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                 title={`Show only ${label}`}
                 className={`px-2 py-1 rounded-lg border transition-all ${
                   active
-                    ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                    ? 'bg-gray-200 border-gray-300 text-gray-900 font-medium'
                     : 'bg-white border-border text-gray-700 hover:bg-gray-50'
                 }`}
               >
@@ -2102,10 +2102,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           <button
             onClick={() => { setExternalOn(false); setTemplatesView(true); }}
             aria-pressed={templatesView}
-            className={`px-2 py-1 rounded-lg border transition-all ${
+            className={`px-2 py-1 rounded-lg transition-all ${
               templatesView
-                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
-                : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+                ? 'bg-gray-200 text-gray-900 font-semibold'
+                : 'text-gray-700 hover:bg-gray-100 hover:font-semibold'
             }`}
           >
             Templates
