@@ -1,5 +1,5 @@
 import type { TabProps } from "./SeriesDashboard";
-import { memberBudgetTotal, travelEstimate } from "../lib/campaign";
+import { memberBudgetTotal, travelEstimate, accommodationEstimate } from "../lib/campaign";
 
 const money = (n: number) => "$" + n.toLocaleString();
 
@@ -7,7 +7,11 @@ export function SeriesBudget({ campaign, events, save }: TabProps) {
   const withBudget = events.filter((e) => e.eventBudgetTarget != null);
   const memberTotal = memberBudgetTotal(events);
   const travel = travelEstimate(campaign);
-  const combined = memberTotal + travel;
+  const eventDates: Record<string, string | null> = {};
+  for (const e of events) eventDates[e.id] = e.date;
+  const lodging = accommodationEstimate(campaign, eventDates);
+  const combined = memberTotal + travel + lodging.cost;
+  const allEmpty = withBudget.length === 0 && campaign.travelRatePerWave == null && campaign.accommodationRatePerNight == null;
 
   return (
     <div className="max-w-xl space-y-6">
@@ -38,9 +42,20 @@ export function SeriesBudget({ campaign, events, save }: TabProps) {
         </div>
       </section>
 
-      <div className="flex items-center justify-between rounded-xl bg-gray-900 text-white px-4 py-3">
+      <section className="rounded-xl border border-border p-4 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm">Per-night accommodation rate (per person)</span>
+          <input type="number" value={campaign.accommodationRatePerNight ?? ""} onChange={(e) => save({ ...campaign, accommodationRatePerNight: e.target.value === "" ? null : Number(e.target.value) })} placeholder="—" className="w-28 px-2 py-1 border border-gray-300 rounded text-right text-sm" />
+        </div>
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-gray-500">Accommodation estimate <span className="text-gray-400">· {lodging.nights} traveler-night{lodging.nights === 1 ? "" : "s"} × rate (locals $0)</span></span>
+          <span>{campaign.accommodationRatePerNight == null ? "—" : money(lodging.cost)}</span>
+        </div>
+      </section>
+
+      <div className="flex items-center justify-between rounded-xl border border-border bg-muted px-4 py-3">
         <span className="font-medium">Combined estimate</span>
-        <span className="text-lg font-medium">{combined === 0 && withBudget.length === 0 && campaign.travelRatePerWave == null ? "—" : money(combined)}</span>
+        <span className="text-lg font-medium">{allEmpty ? "—" : money(combined)}</span>
       </div>
     </div>
   );

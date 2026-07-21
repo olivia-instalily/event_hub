@@ -82,6 +82,7 @@ export function DateEdit({
       <input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => { if (!value) setOpen(true); }}
         onKeyDown={(e) => { if (e.key === "Enter") { commitTyped(); setOpen(false); } else if (e.key === "Escape") { setDraft(value ?? ""); setOpen(false); } }}
         onBlur={commitTyped}
         placeholder={placeholder}
@@ -92,6 +93,20 @@ export function DateEdit({
 
       {open && (
         <div className="absolute z-50 mt-1 left-0 w-56 bg-white border border-border rounded-lg shadow-lg p-2">
+          {/* Live suggestion while typing a fresh date — click (or Enter) to lock it in. */}
+          {(() => {
+            const p = parseTypedDate(draft);
+            if (!p || p === value) return null;
+            const nice = new Date(p + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+            return (
+              <button
+                onMouseDown={(e) => { e.preventDefault(); onChange(p); setDraft(p); setView(parse(p)); setOpen(false); }}
+                className="w-full mb-2 flex items-center gap-1.5 rounded-md bg-gray-900 text-white text-[13px] px-2 py-1.5 hover:bg-black"
+              >
+                <CalendarIcon className="w-3.5 h-3.5" /> Use {nice}
+              </button>
+            );
+          })()}
           <div className="flex items-center justify-between mb-2">
             <button onClick={() => setView(new Date(y, m - 1, 1))} className="p-1 rounded hover:bg-gray-100 text-gray-500"><ChevronLeft className="w-4 h-4" /></button>
             <span className="text-sm font-medium">{MONTHS[m]} {y}</span>

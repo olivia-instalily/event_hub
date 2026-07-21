@@ -8,6 +8,7 @@ function fixture(): Campaign {
   return {
     drive: "recruiting",
     travelRatePerWave: 500,
+    accommodationRatePerNight: null,
     anchorEventIds: ["e-hack"],
     waves: [
       { id: "w1", name: "Wave 1", start: "2026-09-01", end: "2026-09-07", eventIds: ["e-hack", "e-mixer"] },

@@ -6,6 +6,7 @@ import type { TabProps } from "./SeriesDashboard";
 import { type Wave } from "../lib/campaign";
 import { listEvents, setEventSeries, type EventListItem, type SeriesEvent } from "../lib/db";
 import { DateEdit } from "./DateEdit";
+import { WavePresence } from "./WavePresence";
 
 const newWaveId = () => "w-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
 
@@ -125,6 +126,12 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
   return (
     <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={onDragEnd}>
       <div className="space-y-6">
+        {/* Wave-presence visualization up top; the wave/event planning controls sit beneath it. */}
+        {campaign.waves.length > 0 && (
+          <section className="rounded-xl border border-border p-4">
+            <WavePresence campaign={campaign} events={events} />
+          </section>
+        )}
         {campaign.waves.map((w) => (
           <section key={w.id} className="rounded-xl border border-border p-4">
             <div className="flex items-center gap-2">

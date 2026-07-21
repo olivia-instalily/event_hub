@@ -1975,17 +1975,23 @@ export async function addExternalConference(input: ExternalConferenceInput): Pro
 }
 
 // ── Series / campaign helpers ──────────────────────────────────────────────
-export interface SeriesListItem { id: string; name: string; drive: Drive; memberCount: number; }
+export interface SeriesCardEvent { id: string; title: string; date: string | null; location: string | null; coverImageUrl: string | null; }
+export interface SeriesListItem { id: string; name: string; drive: Drive; memberCount: number; events: SeriesCardEvent[]; }
 export interface SeriesEvent { id: string; name: string; date: string | null; location: string | null; eventBudgetTarget: number | null; }
 
 export async function listSeries(): Promise<SeriesListItem[]> {
-  const { data, error } = await supabase.from("event_series").select("id, name, extras, events:event ( id )").order("created_at", { ascending: false });
+  const { data, error } = await supabase
+    .from("event_series")
+    .select("id, name, extras, events:event ( id, name, event_date, location, cover_image_url, custom_cover_url, luma_cover_url )")
+    .order("created_at", { ascending: false });
   if (error) throw error;
-  return (data ?? []).map((s: any) => ({
-    id: s.id, name: s.name,
-    drive: (normalizeCampaign(s.extras?.campaign).drive) as Drive,
-    memberCount: Array.isArray(s.events) ? s.events.length : 0,
-  }));
+  return (data ?? []).map((s: any) => {
+    // Events fanned on the card, soonest first (undated last).
+    const events: SeriesCardEvent[] = (Array.isArray(s.events) ? s.events : [])
+      .map((e: any) => ({ id: e.id, title: e.name, date: e.event_date ?? null, location: e.location ?? null, coverImageUrl: e.custom_cover_url ?? e.cover_image_url ?? e.luma_cover_url ?? null }))
+      .sort((a: SeriesCardEvent, b: SeriesCardEvent) => (a.date ?? "9999").localeCompare(b.date ?? "9999"));
+    return { id: s.id, name: s.name, drive: normalizeCampaign(s.extras?.campaign).drive as Drive, memberCount: events.length, events };
+  });
 }
 
 export async function createSeries(name: string, drive: Drive): Promise<string> {

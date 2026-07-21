@@ -35,6 +35,7 @@ import { FileDrop } from "./FileDrop";
 import { Modal, PromptModal, ConfirmModal } from "./Modal";
 import { useProfile } from "../lib/profile";
 import { TaggingWorkspace } from "./PeopleTagging";
+import { NumberField } from "./NumberField";
 
 type TileFilter = 'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers';
 
@@ -692,13 +693,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           {/* ≥ N events: 1 = everyone; raise it to show only people connected to that many+ events. */}
           <div className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-sm" title="Show people connected to at least this many events">
             <span className="text-gray-500">≥</span>
-            <input
-              type="number"
-              min={1}
-              value={minEvents}
-              onChange={(e) => setMinEvents(Math.max(1, Number(e.target.value) || 1))}
-              className="w-10 bg-transparent text-center focus:outline-none"
-            />
+            <NumberField value={minEvents} min={1} onChange={setMinEvents} ariaLabel="Minimum events" className="w-10 bg-transparent text-center focus:outline-none" />
             <span className="text-gray-500">events</span>
           </div>
           {!eventFilter && (
