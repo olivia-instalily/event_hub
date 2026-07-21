@@ -49,15 +49,20 @@ A place to attach **reference** material to an event — a Google Doc, Sheet, Sl
 URL — that teammates can open. **Never processed / ingested / wrapped** (distinct from
 `source_materials`, which feed extraction). Purely a list of links for others to open.
 
+**Folder pairing (per the 2026-07-21 decision):** the "single paired Drive folder" for an event is
+just a reference link in this list — NOT a separate column. `ReferenceLink` carries an optional
+`kind: "folder" | "link"` (default `"link"`) so a folder entry renders with a folder icon; nothing
+else special. (Series get their own single folder field — see Part 3.)
+
 ### Data model — new column (migration)
 ```sql
 -- migration: add reference_links to event
 ALTER TABLE event ADD COLUMN IF NOT EXISTS reference_links jsonb NOT NULL DEFAULT '[]'::jsonb;
 GRANT UPDATE (reference_links) ON event TO anon, authenticated;
 ```
-Shape: `ReferenceLink = { id: string; label: string; url: string }`. (`anon` grant matches the existing
-per-column grant convention; `authenticated` already has blanket write, but the explicit grant keeps
-the pattern consistent.)
+Shape: `ReferenceLink = { id: string; label: string; url: string; kind?: "folder" | "link" }`. (`anon`
+grant matches the existing per-column grant convention; `authenticated` already has blanket write, but
+the explicit grant keeps the pattern consistent.)
 
 ### db
 - `EventPlanning` gains `referenceLinks: ReferenceLink[]`; `getEventPlanning` selects `reference_links`
@@ -77,12 +82,26 @@ the pattern consistent.)
 
 ---
 
+## Part 3 — Series folder link (single, paired)
+
+A series gets a **single paired Drive folder** link (the series-level equivalent of an event's folder).
+Stored in `event_series.extras.campaign` — **no migration**.
+
+- Model: `Campaign` gains `folderUrl?: string | null`; `normalizeCampaign` defaults it to `null`;
+  `emptyCampaign` sets `null`.
+- UI: a "📁 Folder" affordance on the **SeriesDashboard header** — when set, an open-in-new-tab link;
+  an edit control (small input/popover) to set or change the URL. Never processed.
+- Rules: basic http(s) URL sanity; open-only.
+
+---
+
 ## Components / files
 - `src/lib/db.ts` — `EventPlanning.referenceLinks`, `getEventPlanning` mapping, `setEventReferenceLinks`, `setEventPhases` (or reuse `setEventPattern`).
 - `src/lib/eventPhases.ts` (or inline in db/EventsPage) — `defaultPhases(date)` helper (pure, unit-tested).
 - `src/components/EventsPage.tsx`, `src/lib/db.ts` (`backfillEvent`), `src/components/SeriesPlan.tsx` — apply `defaultPhases` in the create-from-drop paths.
-- `src/components/EventPlanningPage.tsx` — the phase editor + the Resources (reference-links) area.
-- `supabase/migrations/<ts>_event_reference_links.sql` — the new column + grant.
+- `src/components/EventPlanningPage.tsx` — the phase editor + the Resources (reference-links) area (folders shown with a folder icon via `kind`).
+- `src/lib/campaign.ts` + `src/components/SeriesDashboard.tsx` — Part 3: `Campaign.folderUrl` (+ normalize/empty) and the series-header folder affordance.
+- `supabase/migrations/<ts>_event_reference_links.sql` — the new `reference_links` column + grant (Parts 1 & 3 need no migration).
 
 ## Testing
 - Pure: `defaultPhases` (past → [Wrap]; future/undated → [Plan, Wrap]) unit-tested with vitest.
