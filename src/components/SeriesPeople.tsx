@@ -16,11 +16,13 @@ const newPersonId = () => "cp-" + (globalThis.crypto?.randomUUID?.() ?? Math.ran
 const fmtDay = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
 // Dot / chip color = role (sky / violet / amber / gray); fill = status (confirmed solid / proposed outline).
+// Lighter, softer palette to match the site's UI library. Confirmed = solid; proposed = a transparent
+// light tint of the same hue (no outline).
 const HUE: Record<CrewRole, { solid: string; outline: string }> = {
-  eng: { solid: "bg-sky-600 text-white border-2 border-sky-600", outline: "bg-sky-50 text-sky-700 border-2 border-sky-500" },
-  biz: { solid: "bg-violet-600 text-white border-2 border-violet-600", outline: "bg-violet-50 text-violet-700 border-2 border-violet-500" },
-  leadership: { solid: "bg-amber-500 text-white border-2 border-amber-500", outline: "bg-amber-50 text-amber-700 border-2 border-amber-400" },
-  none: { solid: "bg-gray-400 text-white border-2 border-gray-400", outline: "bg-gray-50 text-gray-600 border-2 border-gray-300" },
+  eng: { solid: "bg-sky-400 text-white border-2 border-sky-400", outline: "bg-sky-400/20 text-sky-700 border-2 border-transparent" },
+  biz: { solid: "bg-violet-400 text-white border-2 border-violet-400", outline: "bg-violet-400/20 text-violet-700 border-2 border-transparent" },
+  leadership: { solid: "bg-amber-400 text-white border-2 border-amber-400", outline: "bg-amber-400/25 text-amber-800 border-2 border-transparent" },
+  none: { solid: "bg-gray-300 text-gray-700 border-2 border-gray-300", outline: "bg-gray-400/20 text-gray-600 border-2 border-transparent" },
 };
 const dotClass = (role: CrewRole, status: "confirmed" | "proposed") => (status === "confirmed" ? HUE[role].solid : HUE[role].outline);
 

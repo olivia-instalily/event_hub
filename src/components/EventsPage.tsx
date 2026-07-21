@@ -35,6 +35,14 @@ import { addSourceMaterial, findDuplicateBySourceFiles } from "../lib/db";
 const NOT_CAPTURED = "Not captured";
 
 // Solo "Just us" events get tagged by audience: internal events draw from the
+// The dated external event whose date is nearest to today — the calendar "jump" target.
+function closestExternal(list: EventListItem[]): EventListItem | null {
+  const today = Date.now();
+  const dated = list.filter((e) => e.date);
+  if (!dated.length) return null;
+  return dated.reduce((best, e) => Math.abs(new Date(e.date! + "T12:00:00").getTime() - today) < Math.abs(new Date(best.date! + "T12:00:00").getTime() - today) ? e : best);
+}
+
 // Internal taxonomy category, external from the Hosted one.
 const INTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Internal")?.tags ?? [];
 const EXTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Hosted")?.tags ?? [];
@@ -550,17 +558,17 @@ export function CalendarView({ events, onOpen, jump }: { events: EventListItem[]
         ))}
         {cells.map((iso, i) => (
           <div key={i} className={`bg-white min-h-[104px] p-1.5 ${iso === todayIso ? "ring-2 ring-inset ring-gray-900/15" : ""}`}>
-            {iso && <div className={`text-[11px] mb-1 ${iso === todayIso ? "font-semibold text-gray-900" : "text-gray-400"}`}>{Number(iso.slice(8))}</div>}
+            {iso && <div className={`text-[12px] mb-1 ${iso === todayIso ? "font-semibold text-gray-900" : "text-gray-400"}`}>{Number(iso.slice(8))}</div>}
             {iso && (byDay.get(iso) ?? []).map((e) => (
               <button
                 key={e.id}
                 onClick={() => onOpen(e.id)}
                 onMouseEnter={(ev) => onChipEnter(ev, e)}
                 onMouseLeave={() => setPreview(null)}
-                className={`flex items-center gap-1 w-full text-left text-[11px] rounded px-1 py-0.5 mb-0.5 transition-colors ${e.isExternal ? "bg-purple-50 text-purple-900 hover:bg-purple-100" : "bg-gray-100 text-gray-800 hover:bg-gray-200"}`}
+                className={`flex items-center gap-1 w-full text-left text-[12px] rounded px-1 py-0.5 mb-0.5 transition-colors ${e.isExternal ? "bg-purple-50 text-purple-900 hover:bg-purple-100" : "bg-gray-100 text-gray-800 hover:bg-gray-200"}`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor(e)}`} />
-                <span className="truncate">{e.isExternal ? "External · " : e.startTime ? `${e.startTime} ` : ""}{e.title}</span>
+                <span className="truncate">{e.startTime ? `${e.startTime} ` : ""}{e.title}</span>
               </button>
             ))}
           </div>
@@ -1858,9 +1866,10 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // operated events only. Templates and External are separate exclusive views (their own buttons).
   const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
   const [templatesView, setTemplatesView] = useState(false);
-  // "External" is an additive modifier (not an exclusive view): when on, show only external events,
-  // still narrowed by the selected status tag (their status is derived from their dates).
-  const [externalOn, setExternalOn] = useState(false);
+  // External conferences show ALONGSIDE operated events by default. Clicking the External button flips
+  // to "only external" (exclusive) and jumps the calendar to the closest external event.
+  const [externalOnly, setExternalOnly] = useState(false);
+  const [calJump, setCalJump] = useState<{ date: string; nonce: number } | null>(null); // calendar jump target
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
@@ -1995,11 +2004,14 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     if (e.date && e.date > todayIso) return 'future';
     return 'in-process';
   };
-  // Templates is an exclusive view (ignores the status tags). External is an additive modifier: when
-  // on, show only external events narrowed by the status tags; otherwise operated events by status.
+  // Templates = exclusive view. Default: operated events + external (both), by status. "External only"
+  // (button clicked) = just external, by status.
   const base = templatesView ? events.filter(e => e.isTemplate)
-    : externalOn ? externalEvents.filter(e => selectedStatuses.has(extStatus(e)))
-    : events.filter(e => !e.isTemplate && selectedStatuses.has(e.status));
+    : externalOnly ? externalEvents.filter(e => selectedStatuses.has(extStatus(e)))
+    : [
+        ...events.filter(e => !e.isTemplate && selectedStatuses.has(e.status)),
+        ...externalEvents.filter(e => selectedStatuses.has(extStatus(e))),
+      ];
   const filteredEvents = base.filter(event => {
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
     if (ownerFilter !== 'all' && !event.owners.some(o => o.name === ownerFilter)) return false;
@@ -2100,23 +2112,28 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               </button>
             );
           })}
-          {/* External — additive modifier (borderless to signal it differs): narrows the current
-              status view to only the external events we're attending. Grey background when on. */}
+          {/* External conferences show alongside by default. Click → only external + jump the calendar
+              to the closest one. Purple fill signals the active "external only" state. */}
           <button
-            onClick={() => { setTemplatesView(false); setExternalOn((v) => !v); }}
-            aria-pressed={!templatesView && externalOn}
-            title="Also filter to only external events we're attending"
-            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg transition-all ${
-              !templatesView && externalOn ? 'bg-gray-200 text-gray-900' : 'text-gray-700 hover:bg-gray-100'
+            onClick={() => {
+              setTemplatesView(false);
+              const entering = !externalOnly;
+              setExternalOnly(entering);
+              if (entering) { const c = closestExternal(externalEvents); if (c?.date) { setViewMode('calendar'); setCalJump({ date: c.date, nonce: (calJump?.nonce ?? 0) + 1 }); } }
+            }}
+            aria-pressed={!templatesView && externalOnly}
+            title="Show only external events and jump to the closest one"
+            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border transition-all ${
+              !templatesView && externalOnly ? 'bg-purple-600 border-purple-600 text-white shadow-sm' : 'bg-white border-border text-gray-700 hover:bg-gray-50'
             }`}
           >
-            <span className="w-2 h-2 rounded-full bg-purple-500" /> External
+            <span className={`w-2 h-2 rounded-full ${!templatesView && externalOnly ? 'bg-white' : 'bg-purple-500'}`} /> External
           </button>
 
           {/* Templates is a different kind of view (exclusive) — set slightly apart. */}
           <span className="w-px h-5 bg-border mx-1" />
           <button
-            onClick={() => { setExternalOn(false); setTemplatesView(true); }}
+            onClick={() => { setExternalOnly(false); setTemplatesView(true); }}
             aria-pressed={templatesView}
             className={`px-2 py-1 rounded-lg transition-all ${
               templatesView
@@ -2449,7 +2466,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
       {/* Calendar View — month grid, events on their dates */}
       {!loading && !error && viewMode === 'calendar' && (
-        <CalendarView events={filteredEvents} onOpen={(id) => { const x = externalEvents.find((e) => e.id === id); if (x) setDetail(x); else setSelectedEventId(id); }} />
+        <CalendarView events={filteredEvents} jump={calJump ?? undefined} onOpen={(id) => { const x = externalEvents.find((e) => e.id === id); if (x) setDetail(x); else setSelectedEventId(id); }} />
       )}
 
       {pastChooser && (

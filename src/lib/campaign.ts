@@ -7,15 +7,15 @@ export interface Wave { id: string; name: string; start: string | null; end: str
 // Per-wave color, assigned by wave ORDER and reused everywhere a wave appears (Plan, People, Briefs,
 // presence viz) so a wave reads the same across the whole dashboard. Light versions of the general
 // site palette; cycles if there are more waves than colors. Full literal classes for Tailwind's scan.
-export interface WaveColor { name: string; dot: string; bg: string; border: string; text: string; ring: string; }
+export interface WaveColor { name: string; dot: string; strong: string; soft: string; bg: string; border: string; text: string; ring: string; }
 export const WAVE_COLORS: WaveColor[] = [
-  { name: "green",  dot: "bg-green-400",  bg: "bg-green-50",  border: "border-green-200",  text: "text-green-700",  ring: "ring-green-300" },
-  { name: "yellow", dot: "bg-amber-400",  bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-700",  ring: "ring-amber-300" },
-  { name: "purple", dot: "bg-purple-400", bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-700", ring: "ring-purple-300" },
-  { name: "blue",   dot: "bg-blue-400",   bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-700",   ring: "ring-blue-300" },
-  { name: "pink",   dot: "bg-pink-400",   bg: "bg-pink-50",   border: "border-pink-200",   text: "text-pink-700",   ring: "ring-pink-300" },
-  { name: "teal",   dot: "bg-teal-400",   bg: "bg-teal-50",   border: "border-teal-200",   text: "text-teal-700",   ring: "ring-teal-300" },
-  { name: "orange", dot: "bg-orange-400", bg: "bg-orange-50", border: "border-orange-200", text: "text-orange-700", ring: "ring-orange-300" },
+  { name: "green",  dot: "bg-green-400",  strong: "bg-green-600",  soft: "bg-green-200",  bg: "bg-green-50",  border: "border-green-200",  text: "text-green-700",  ring: "ring-green-300" },
+  { name: "yellow", dot: "bg-amber-400",  strong: "bg-amber-600",  soft: "bg-amber-200",  bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-700",  ring: "ring-amber-300" },
+  { name: "purple", dot: "bg-purple-400", strong: "bg-purple-600", soft: "bg-purple-200", bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-700", ring: "ring-purple-300" },
+  { name: "blue",   dot: "bg-blue-400",   strong: "bg-blue-600",   soft: "bg-blue-200",   bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-700",   ring: "ring-blue-300" },
+  { name: "pink",   dot: "bg-pink-400",   strong: "bg-pink-600",   soft: "bg-pink-200",   bg: "bg-pink-50",   border: "border-pink-200",   text: "text-pink-700",   ring: "ring-pink-300" },
+  { name: "teal",   dot: "bg-teal-400",   strong: "bg-teal-600",   soft: "bg-teal-200",   bg: "bg-teal-50",   border: "border-teal-200",   text: "text-teal-700",   ring: "ring-teal-300" },
+  { name: "orange", dot: "bg-orange-400", strong: "bg-orange-600", soft: "bg-orange-200", bg: "bg-orange-50", border: "border-orange-200", text: "text-orange-700", ring: "ring-orange-300" },
 ];
 export const waveColor = (index: number): WaveColor => WAVE_COLORS[((index % WAVE_COLORS.length) + WAVE_COLORS.length) % WAVE_COLORS.length];
 export const waveColorById = (waves: { id: string }[], waveId: string): WaveColor => waveColor(Math.max(0, waves.findIndex((w) => w.id === waveId)));

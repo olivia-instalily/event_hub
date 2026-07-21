@@ -5,18 +5,46 @@ import {
 } from "../lib/campaign";
 
 // Colored segments: hue = role (eng sky / biz violet), shade = status (confirmed deep / proposed pale).
+// Solid swatch (tooltip / legend dots) — needs to be visible at small sizes.
 const SEG: Record<StackKey, string> = {
-  "eng-confirmed": "bg-sky-500",
-  "biz-confirmed": "bg-violet-500",
-  "leadership-confirmed": "bg-amber-500",
-  "none-confirmed": "bg-gray-400",
-  "eng-proposed": "bg-sky-300",
-  "biz-proposed": "bg-violet-300",
+  "eng-confirmed": "bg-sky-400",
+  "biz-confirmed": "bg-violet-400",
+  "leadership-confirmed": "bg-amber-400",
+  "none-confirmed": "bg-gray-300",
+  "eng-proposed": "bg-sky-200",
+  "biz-proposed": "bg-violet-200",
   "leadership-proposed": "bg-amber-200",
   "none-proposed": "bg-gray-200",
 };
+// Stacked blocks — transparent, very light tints (confirmed a touch stronger than proposed).
+const SEG_BLOCK: Record<StackKey, string> = {
+  "eng-confirmed": "bg-sky-400/30",
+  "biz-confirmed": "bg-violet-400/30",
+  "leadership-confirmed": "bg-amber-400/30",
+  "none-confirmed": "bg-gray-400/30",
+  "eng-proposed": "bg-sky-400/15",
+  "biz-proposed": "bg-violet-400/15",
+  "leadership-proposed": "bg-amber-400/15",
+  "none-proposed": "bg-gray-400/15",
+};
 const PX_PER_PERSON = 22; // stack height per body
 const fmtDay = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+// A day on the graphic runs 7am → 11pm; map an event's start/end onto that window as horizontal
+// fractions (0 = 7am at the left of the day slot, 1 = 11pm at the right) so on hover the dot expands
+// into the segment of the day's line where the event actually happens.
+const DAY_START = 7 * 60, DAY_END = 23 * 60;
+const parseMin = (t: string | null): number | null => { const m = /^(\d{1,2}):(\d{2})/.exec(t ?? ""); return m ? +m[1] * 60 + +m[2] : null; };
+const fmtTime = (min: number) => { const h = Math.floor(min / 60), m = min % 60; const ap = h >= 12 ? "PM" : "AM"; const h12 = h % 12 || 12; return m ? `${h12}:${String(m).padStart(2, "0")} ${ap}` : `${h12} ${ap}`; };
+function timeFrame(start: string | null, end: string | null): { startFrac: number; endFrac: number; label: string } {
+  const s = parseMin(start);
+  if (s == null) return { startFrac: 0.08, endFrac: 0.92, label: "time TBD" }; // no time set → span the day
+  const e = parseMin(end) ?? s + 60;
+  const span = DAY_END - DAY_START;
+  const frac = (m: number) => Math.min(1, Math.max(0, (m - DAY_START) / span));
+  const sf = frac(s);
+  return { startFrac: sf, endFrac: Math.max(sf + 0.05, frac(e)), label: `${fmtTime(s)}–${fmtTime(e)}` };
+}
 
 // Wave presence: waves stacked vertically, band width ∝ duration, a stepped role+status headcount
 // profile above each band, event dots on it. Reads the campaign's waves + people (+ role/status/span).
@@ -57,7 +85,7 @@ export function WavePresence({ campaign, events }: { campaign: Campaign; events:
               </div>
               <div style={{ width: `${widthPct}%` }} className="min-w-[220px]">
                 {/* Stepped presence profile */}
-                <div className="relative flex items-end gap-px border-b-2 border-gray-300" style={{ height: stackH }}>
+                <div className="relative flex items-end" style={{ height: stackH }}>
                   {days.length === 0 && <div className="text-[12px] text-gray-300 pb-1">—</div>}
                   {columns.map((col, i) => {
                     const total = STACK_KEYS.reduce((s, k) => s + col[k], 0);
@@ -65,60 +93,91 @@ export function WavePresence({ campaign, events }: { campaign: Campaign; events:
                     return (
                       <div
                         key={i}
-                        className="flex-1 flex flex-col-reverse cursor-default rounded-t-sm overflow-hidden"
-                        onMouseEnter={() => total > 0 && setHover({ waveId: w.id, day: days[i] })}
+                        className={`relative flex-1 h-full flex flex-col-reverse justify-start cursor-default ${isHover ? "z-10" : ""}`}
+                        onMouseEnter={() => setHover({ waveId: w.id, day: days[i] })}
                         onMouseLeave={() => setHover(null)}
                       >
+                        {/* Hovered day darkens to the solid color (same size); otherwise a light transparent tint. */}
                         {STACK_KEYS.map((k) => col[k] > 0 && (
-                          <div key={k} className={`${SEG[k]} ${isHover ? "brightness-110 outline outline-1 outline-gray-900/25" : ""}`} style={{ height: col[k] * PX_PER_PERSON }} />
+                          <div key={k} className="relative" style={{ height: col[k] * PX_PER_PERSON }}>
+                            <div className={`absolute inset-0 transition-colors ${isHover ? SEG[k] : SEG_BLOCK[k]}`} />
+                            {/* small tick separating this attendance category from the one above */}
+                            <span className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-0.5 bg-white z-10" />
+                          </div>
                         ))}
+                        {/* white line down the middle marks each day (no gaps between columns) */}
+                        {total > 0 && <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-white/80" />}
                       </div>
                     );
                   })}
-                  {/* Day-slice tooltip */}
+                  {/* Day card — grows upward out of the TOP of that day's own stack (same width as the
+                      day column), showing the date, who's on the ground, and any planned headcount. */}
                   {hover?.waveId === w.id && (() => {
                     const i = days.indexOf(hover.day);
                     if (i < 0) return null;
                     const people = daySlice(w, campaign.people, hover.day);
-                    const leftPct = days.length > 1 ? (i + 0.5) / days.length * 100 : 50;
+                    const total = people.reduce((s, p) => s + p.count, 0);
+                    const colW = 100 / days.length;
                     return (
-                      <div className="absolute bottom-full mb-1 z-20 -translate-x-1/2 w-max max-w-[220px] rounded-lg border border-border bg-white shadow-lg p-2" style={{ left: `${leftPct}%` }}>
-                        <p className="text-[11px] font-medium text-gray-700 mb-1">{fmtDay(hover.day)} · {people.reduce((s, p) => s + p.count, 0)} present</p>
-                        <ul className="space-y-0.5">
-                          {people.map((p, j) => (
-                            <li key={j} className={`flex items-center gap-1.5 text-[12px] ${p.status === "proposed" ? "text-gray-400" : "text-gray-800"}`}>
-                              <span className={`w-2 h-2 rounded-full shrink-0 ${SEG[p.key]}`} />
-                              {p.label}
-                            </li>
-                          ))}
-                        </ul>
+                      <div className="absolute z-30 min-w-[160px] rounded-xl border border-border bg-white shadow-xl p-2.5 animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-200 origin-bottom" style={{ left: `${i * colW}%`, width: `${colW}%`, bottom: `${total * PX_PER_PERSON}px` }}>
+                        <p className="text-[12px] font-medium text-gray-800 mb-1.5">{fmtDay(hover.day)} · {total} on the ground</p>
+                        {people.length === 0 ? (
+                          <p className="text-[12px] text-gray-400">No one assigned this day.</p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {people.map((p, j) => (
+                              <li key={j} className={`flex items-center gap-1.5 text-[12px] ${p.status === "proposed" ? "text-gray-400" : "text-gray-800"}`}>
+                                <span className={`w-2.5 h-2.5 rounded-sm shrink-0 ${SEG[p.key]}`} />
+                                {p.label}
+                                {p.anon && <span className="text-[10px] text-gray-400">· planned</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                     );
                   })()}
                 </div>
-                {/* Band (duration) with event dots */}
-                <div className="relative h-6 rounded-b-md bg-gradient-to-r from-gray-100 to-gray-200/70">
+                {/* Band (duration) — a light, thin line flush under the blocks (no gap); event dots in the
+                    wave-dot color with a lighter halo straddle the top edge, coming up over the blocks. */}
+                <div className="relative h-10">
+                  <div className={`absolute left-0 right-0 top-0 h-px rounded-full ${wc.soft}`} />
+                  {/* Start / end dates — bigger, on the band's ends, in line with the event titles. */}
+                  {w.start && <span className="absolute top-1.5 left-0 text-[13px] font-medium text-gray-600">{fmtDay(w.start)}</span>}
+                  {w.end && w.end !== w.start && <span className="absolute top-1.5 right-0 text-[13px] font-medium text-gray-600">{fmtDay(w.end)}</span>}
                   {waveEvents.map((e) => {
                     const i = days.indexOf(e.date!);
-                    const leftPct = days.length > 1 ? (i / (days.length - 1)) * 100 : 50;
-                    const on = eventHover === e.id;
+                    const colW = 100 / days.length;
+                    const centerPct = days.length > 1 ? (i + 0.5) / days.length * 100 : 50; // centered on its day (the white line)
+                    // Highlight when the event's day column is hovered (the block that lights up) — or the dot itself.
+                    const on = eventHover === e.id || (hover?.waveId === w.id && hover?.day === e.date);
+                    const tf = timeFrame(e.startTime, e.endTime);
                     return (
-                      <span key={e.id} className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ left: `${Math.min(97, Math.max(3, leftPct))}%` }}
-                        onMouseEnter={() => setEventHover(e.id)} onMouseLeave={() => setEventHover(null)}>
-                        <span className={`block rounded-full bg-amber-500 border-2 border-white shadow ring-2 ring-amber-500/30 transition-transform ${on ? "w-4 h-4 scale-110" : "w-3.5 h-3.5"}`} />
+                      <span key={e.id}>
+                        {/* On hover the dot disappears and the event's time range highlights on the line in
+                            the wave's color (layered above the dot so it's never covered). */}
                         {on && (
-                          <span className="absolute top-full mt-1 left-1/2 -translate-x-1/2 z-20 w-max max-w-[200px] rounded-lg border border-border bg-white shadow-lg px-2 py-1 text-[12px] text-gray-800">
-                            <span className="font-medium">{e.name}</span>{e.date ? <span className="block text-[11px] text-gray-400">{fmtDay(e.date)}{e.location ? ` · ${e.location}` : ""}</span> : null}
+                          <span className="absolute top-0 -translate-y-1/2 pointer-events-none z-30 transition-all duration-150"
+                            style={{ left: `${(i + tf.startFrac) * colW + (tf.endFrac - tf.startFrac) * colW * 0.1}%`, width: `${(tf.endFrac - tf.startFrac) * colW * 0.8}%` }}>
+                            {/* light rectangular highlight over the line, with a thin solid line down its middle */}
+                            <span className={`relative block h-2 ${wc.soft}`}>
+                              <span className={`absolute inset-x-0 top-1/2 -translate-y-1/2 h-px ${wc.strong}`} />
+                            </span>
+                            <span className={`absolute -top-5 left-1/2 -translate-x-1/2 rounded px-1 py-px text-[10px] font-semibold whitespace-nowrap ${wc.text} ${wc.bg}`}>{tf.label}</span>
                           </span>
                         )}
+                        {/* Donut dot centered on its day; fades out on hover (replaced by the range above). */}
+                        <span className="absolute top-0 -translate-x-1/2 z-20" style={{ left: `${centerPct}%` }}
+                          onMouseEnter={() => setEventHover(e.id)} onMouseLeave={() => setEventHover(null)}>
+                          <span className={`block w-3 h-3 rounded-full border-[3px] border-white ring-2 -translate-y-1/2 transition-opacity duration-150 ${wc.dot} ${wc.ring} ${on ? "opacity-0" : "opacity-100"}`} />
+                          <span className="absolute top-1.5 left-1/2 -translate-x-1/2 w-20 text-center pointer-events-none">
+                            <span className="block text-[10px] leading-tight text-gray-600 truncate">{e.name}</span>
+                            {e.date && <span className="block text-[9px] text-gray-400">{fmtDay(e.date)}</span>}
+                          </span>
+                        </span>
                       </span>
                     );
                   })}
-                </div>
-                {/* Start / end dates */}
-                <div className="flex justify-between text-[11px] text-gray-500 mt-0.5">
-                  <span>{w.start ? fmtDay(w.start) : "—"}</span>
-                  <span>{w.end ? fmtDay(w.end) : ""}</span>
                 </div>
               </div>
             </div>
@@ -143,7 +202,8 @@ function Legend() {
           <span className={`w-3 h-3 rounded-sm ${SEG[it.key]}`} /> {it.label}
         </span>
       ))}
-      <span className="inline-flex items-center gap-1.5 text-[12px] text-gray-500"><span className="w-3 h-3 rounded-full bg-amber-500 border-2 border-white ring-2 ring-amber-500/30" /> event</span>
+      {/* Event tag is grey here because on the graphic each event takes its own wave's color. */}
+      <span className="inline-flex items-center gap-1.5 text-[12px] text-gray-500"><span className="w-3.5 h-3.5 rounded-full bg-gray-400 border-[3px] border-white ring-2 ring-gray-300" /> event</span>
     </div>
   );
 }
