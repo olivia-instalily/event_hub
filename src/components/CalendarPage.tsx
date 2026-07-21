@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, Plus, ArrowRight } from "lucide-react";
+import { CalendarDays, Calendar, Plus } from "lucide-react";
 import { listEvents, listExternalConferences, type EventListItem } from "../lib/db";
 import { CalendarView } from "./EventsPage";
 import { ExternalConferenceForm } from "./ExternalConferenceForm";
@@ -42,16 +42,9 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
 
   return (
     <div>
-      <div className="flex items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-3">
-          <CalendarDays className="w-6 h-6 text-gray-700" />
-          <h1 className="text-2xl">Calendar</h1>
-        </div>
-        {onOpenEventsPage && (
-          <button onClick={onOpenEventsPage} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 border border-border rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors">
-            Open full events page <ArrowRight className="w-4 h-4" />
-          </button>
-        )}
+      <div className="flex items-center gap-3 mb-4">
+        <CalendarDays className="w-6 h-6 text-gray-700" />
+        <h1 className="text-2xl">Calendar</h1>
       </div>
 
       {/* Future / In-Process / Past — a color key that also jumps to that category's first event
@@ -89,6 +82,14 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
         <p className="text-gray-400 py-12 text-center">Loading…</p>
       ) : (
         <CalendarView events={shown} onOpen={onOpen} jump={jump ?? undefined} />
+      )}
+
+      {onOpenEventsPage && (
+        <div className="mt-6 flex justify-center">
+          <button onClick={onOpenEventsPage} className="inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 border border-border rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors">
+            <Calendar className="w-4 h-4" /> Events
+          </button>
+        </div>
       )}
 
       {addOpen && <ExternalConferenceForm onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); load(); }} />}
