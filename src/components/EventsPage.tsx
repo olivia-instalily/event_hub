@@ -4,6 +4,8 @@ import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
 import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
 import { ExternalDetail } from "./externalEvents";
+import { looksLikeBackfill } from "../lib/backfill";
+import { DateEdit } from "./DateEdit";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
@@ -419,6 +421,16 @@ function ensureUpcoming(iso: string | null): string | null {
   d.setFullYear(now.getFullYear());
   if (d < todayMid) d.setFullYear(now.getFullYear() + 1);
   return d.toISOString().slice(0, 10);
+}
+// A year-less date in a planning brief should assume this year (or its next occurrence) — the AI
+// extractor sometimes guesses a stale year (e.g. "Sept 22" → 2024). Trust the extracted year only
+// when the source names one explicitly, or the brief is clearly a post-event reflection (backfill).
+function resolveBriefDate(exDate: string | null | undefined, sourceText: string): string {
+  const d = exDate && exDate.trim() ? exDate.trim() : "";
+  if (!d) return "";
+  const sourceHasYear = /\b20\d{2}\b/.test(sourceText);
+  if (sourceHasYear || looksLikeBackfill(sourceText)) return d;
+  return ensureUpcoming(d) ?? d;
 }
 function parseDatePhrase(text: string): string | null {
   const iso = (y: number, mo: number, d: number) => `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -844,7 +856,8 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
     const catalog = await listFormats().catch(() => formatCatalog);
     const rawFmt = nn(ex?.format) ?? b?.format ?? null;
     const fmt = rawFmt ? matchFormat(rawFmt, catalog) : null;
-    // Keep the raw parsed date (not forced upcoming) so a past date routes to backfill.
+    // Assume this year for a year-less date (planning briefs); an explicit year or a clear
+    // post-event reflection keeps its raw date so it still routes to backfill (see resolveBriefDate).
     // Partial specificity: a value that's *only* a placeholder ("[venue TBD]", "[city]")
     // is an open slot — keep the field present but empty, and note it for the user.
     // Keep the bracket's inner text as a per-field hint so the input can show what the
@@ -858,7 +871,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
     const fields: IngestFields = {
       name: openSlot(nn(ex?.title) ?? b?.title ?? null, "name"),
       format: fmt ? [fmt] : [],
-      date: nn(ex?.date) ?? b?.date ?? "",
+      date: resolveBriefDate(nn(ex?.date) ?? b?.date ?? null, briefs[0]?.text ?? ""),
       startTime: nn(ex?.startTime) ?? b?.startTime ?? "",
       endTime: nn(ex?.endTime) ?? b?.endTime ?? "",
       headcount: openSlot(ex?.headcount != null ? String(ex.headcount) : (b?.headcount ?? null), "headcount"),
@@ -1440,7 +1453,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
                     className="w-full mb-2 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
                   />
                   <div className="flex flex-wrap items-center gap-2">
-                    <input type="date" value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                    <DateEdit value={meta.date || null} onChange={(v) => setMeta({ ...meta, date: v ?? "" })} placeholder="Event date" />
                     <span className="inline-flex items-center gap-1 text-sm text-gray-500">
                       <input type="time" value={meta.startTime} onChange={(e) => setMeta({ ...meta, startTime: e.target.value })} title="Start time" className="px-2 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                       <span>–</span>
@@ -1559,7 +1572,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 {/* Templates are date-less by definition — only a real event gets a date. Time stays optional. */}
                 {!ingest.isTemplate && (
-                  <input type="date" value={ingest.fields.date} onChange={(e) => patchIngestField('date', e.target.value)} className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                  <DateEdit value={ingest.fields.date || null} onChange={(v) => patchIngestField('date', v ?? "")} placeholder="Event date" />
                 )}
                 <input type="time" value={ingest.fields.startTime} onChange={(e) => patchIngestField('startTime', e.target.value)} className="px-2 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
                 <span className="text-gray-400">–</span>
@@ -1791,12 +1804,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
                 className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
               />
               <div className="flex flex-wrap gap-3">
-                <input
-                  type="date"
-                  value={bf.date}
-                  onChange={(e) => setBf({ ...bf, date: e.target.value })}
-                  className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                />
+                <DateEdit value={bf.date || null} onChange={(v) => setBf({ ...bf, date: v ?? "" })} placeholder="Event date" />
                 <LocationInput
                   value={bf.location}
                   onChange={(v) => setBf({ ...bf, location: v })}
