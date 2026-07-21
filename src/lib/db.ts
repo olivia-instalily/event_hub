@@ -2010,6 +2010,28 @@ export async function getSeriesEvents(seriesId: string): Promise<SeriesEvent[]> 
   return (evs ?? []).map((e: any) => ({ id: e.id, name: e.name, date: e.event_date ?? null, location: e.location ?? null, eventBudgetTarget: e.event_budget_target ?? null, startTime: e.start_time ?? null, endTime: e.end_time ?? null }));
 }
 
+export interface SeriesCommitted { eventId: string; name: string; currency: string; committed: number; }
+// Per member event: the sum of its COMMITTED budget lines (payment_status not 'estimate') + that
+// event's budget currency. A read for the Budget tab's Paid block — the series never commits money.
+export async function getSeriesCommittedTotals(seriesId: string): Promise<SeriesCommitted[]> {
+  const { data: evs, error } = await supabase.from("event").select("id, name").eq("series_id", seriesId).eq("is_template", false);
+  if (error) throw error;
+  const events = (evs ?? []) as { id: string; name: string }[];
+  if (!events.length) return [];
+  const ids = events.map((e) => e.id);
+  const { data: budgets, error: bErr } = await supabase.from("budget").select("event_id, currency, lines:budget_line ( confirmed_amount, payment_status )").in("event_id", ids);
+  if (bErr) throw bErr;
+  const byEvent = new Map<string, { currency: string; committed: number }>();
+  for (const b of (budgets ?? []) as any[]) {
+    const cur = byEvent.get(b.event_id) ?? { currency: b.currency ?? "USD", committed: 0 };
+    for (const l of b.lines ?? []) {
+      if (normBudgetStatus(l.payment_status) !== "estimate") cur.committed += Number(l.confirmed_amount) || 0;
+    }
+    byEvent.set(b.event_id, cur);
+  }
+  return events.map((e) => ({ eventId: e.id, name: e.name, currency: byEvent.get(e.id)?.currency ?? "USD", committed: byEvent.get(e.id)?.committed ?? 0 }));
+}
+
 export async function getSeriesCampaign(seriesId: string): Promise<{ id: string; name: string; campaign: Campaign; events: SeriesEvent[] }> {
   const { data: s, error } = await supabase.from("event_series").select("id, name, extras").eq("id", seriesId).single();
   if (error) throw error;
