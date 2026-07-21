@@ -4,27 +4,33 @@ export type Drive = "recruiting" | "culture" | "client";
 
 export interface EstimatedLine { id: string; item: string; detail: string; amount: number; }
 
+// A piece of logistics attached to a single day (travel leg, work block, or a plain note). Travel
+// notes carry an optional time + the people involved. Stored on the campaign jsonb, keyed by date.
+export interface DayLogistic { id: string; date: string; kind: "travel" | "note"; text: string; time?: string | null; peopleIds?: string[]; }
+
 export interface Wave { id: string; name: string; start: string | null; end: string | null; eventIds: string[]; }
 
 // Per-wave color, assigned by wave ORDER and reused everywhere a wave appears (Plan, People, Briefs,
 // presence viz) so a wave reads the same across the whole dashboard. Light versions of the general
 // site palette; cycles if there are more waves than colors. Full literal classes for Tailwind's scan.
-export interface WaveColor { name: string; dot: string; strong: string; soft: string; bg: string; border: string; text: string; ring: string; }
+export interface WaveColor { name: string; dot: string; strong: string; soft: string; textSoft: string; bg: string; border: string; text: string; ring: string; }
 export const WAVE_COLORS: WaveColor[] = [
-  { name: "green",  dot: "bg-green-400",  strong: "bg-green-600",  soft: "bg-green-200",  bg: "bg-green-50",  border: "border-green-200",  text: "text-green-700",  ring: "ring-green-300" },
-  { name: "yellow", dot: "bg-amber-400",  strong: "bg-amber-600",  soft: "bg-amber-200",  bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-700",  ring: "ring-amber-300" },
-  { name: "purple", dot: "bg-purple-400", strong: "bg-purple-600", soft: "bg-purple-200", bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-700", ring: "ring-purple-300" },
-  { name: "blue",   dot: "bg-blue-400",   strong: "bg-blue-600",   soft: "bg-blue-200",   bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-700",   ring: "ring-blue-300" },
-  { name: "pink",   dot: "bg-pink-400",   strong: "bg-pink-600",   soft: "bg-pink-200",   bg: "bg-pink-50",   border: "border-pink-200",   text: "text-pink-700",   ring: "ring-pink-300" },
-  { name: "teal",   dot: "bg-teal-400",   strong: "bg-teal-600",   soft: "bg-teal-200",   bg: "bg-teal-50",   border: "border-teal-200",   text: "text-teal-700",   ring: "ring-teal-300" },
-  { name: "orange", dot: "bg-orange-400", strong: "bg-orange-600", soft: "bg-orange-200", bg: "bg-orange-50", border: "border-orange-200", text: "text-orange-700", ring: "ring-orange-300" },
+  { name: "green",  dot: "bg-green-400",  strong: "bg-green-600",  soft: "bg-green-200",  textSoft: "text-green-200",  bg: "bg-green-50",  border: "border-green-200",  text: "text-green-700",  ring: "ring-green-300" },
+  { name: "yellow", dot: "bg-amber-400",  strong: "bg-amber-600",  soft: "bg-amber-200",  textSoft: "text-amber-200",  bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-700",  ring: "ring-amber-300" },
+  { name: "purple", dot: "bg-purple-400", strong: "bg-purple-600", soft: "bg-purple-200", textSoft: "text-purple-200", bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-700", ring: "ring-purple-300" },
+  { name: "blue",   dot: "bg-blue-400",   strong: "bg-blue-600",   soft: "bg-blue-200",   textSoft: "text-blue-200",   bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-700",   ring: "ring-blue-300" },
+  { name: "pink",   dot: "bg-pink-400",   strong: "bg-pink-600",   soft: "bg-pink-200",   textSoft: "text-pink-200",   bg: "bg-pink-50",   border: "border-pink-200",   text: "text-pink-700",   ring: "ring-pink-300" },
+  { name: "teal",   dot: "bg-teal-400",   strong: "bg-teal-600",   soft: "bg-teal-200",   textSoft: "text-teal-200",   bg: "bg-teal-50",   border: "border-teal-200",   text: "text-teal-700",   ring: "ring-teal-300" },
+  { name: "orange", dot: "bg-orange-400", strong: "bg-orange-600", soft: "bg-orange-200", textSoft: "text-orange-200", bg: "bg-orange-50", border: "border-orange-200", text: "text-orange-700", ring: "ring-orange-300" },
 ];
 export const waveColor = (index: number): WaveColor => WAVE_COLORS[((index % WAVE_COLORS.length) + WAVE_COLORS.length) % WAVE_COLORS.length];
 export const waveColorById = (waves: { id: string }[], waveId: string): WaveColor => waveColor(Math.max(0, waves.findIndex((w) => w.id === waveId)));
-export type CrewRole = "eng" | "biz" | "leadership" | "none"; // drives hue; "none" = unspecified
+export type CrewRole = "eng" | "growth" | "marketing" | "leadership" | "none"; // person-level; drives hue
 export type CrewStatus = "confirmed" | "proposed";            // drives shade
-export const CREW_ROLES: CrewRole[] = ["eng", "biz", "leadership", "none"];
-export const ROLE_LABEL: Record<CrewRole, string> = { eng: "Eng", biz: "Biz", leadership: "Leadership", none: "Unspecified" };
+export const CREW_ROLES: CrewRole[] = ["eng", "growth", "marketing", "leadership", "none"];
+export const ROLE_LABEL: Record<CrewRole, string> = { eng: "Eng", growth: "Growth", marketing: "Marketing", leadership: "Leadership", none: "Unspecified" };
+// Coerce any stored value to a valid role — maps the legacy "biz" to "growth" so old data keeps working.
+export const coerceRole = (r: any): CrewRole => (r === "biz" ? "growth" : (CREW_ROLES.includes(r) ? r : "eng"));
 // Presence span WITHIN a wave (defaults to the full wave when absent → enables the step-down).
 export type PresenceSpan = { from?: string | null; to?: string | null };
 export interface CampaignPerson {
@@ -51,12 +57,13 @@ export interface Campaign {
   waves: Wave[];
   people: CampaignPerson[];
   anchorEventIds: string[];
-  currency: string;              // per-series, default "CAD"
+  currency: string;              // per-series, default "USD"
   estimatedLines: EstimatedLine[]; // MANUAL estimated lines only (auto lines are derived, not stored)
   pendingItems: string[];        // known-but-unsized costs, excluded from the total
+  logistics: DayLogistic[];      // per-day travel legs / notes
 }
 
-export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [], currency: "CAD", estimatedLines: [], pendingItems: [] });
+export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [], currency: "USD", estimatedLines: [], pendingItems: [], logistics: [] });
 
 // Coerce a possibly-partial jsonb blob into a well-formed Campaign (older/absent fields default).
 export function normalizeCampaign(raw: any): Campaign {
@@ -66,13 +73,16 @@ export function normalizeCampaign(raw: any): Campaign {
     travelRatePerWave: typeof c.travelRatePerWave === "number" ? c.travelRatePerWave : null,
     accommodationRatePerNight: typeof c.accommodationRatePerNight === "number" ? c.accommodationRatePerNight : null,
     waves: Array.isArray(c.waves) ? c.waves.map((w: any) => ({ id: String(w.id), name: w.name ?? "", start: w.start ?? null, end: w.end ?? null, eventIds: Array.isArray(w.eventIds) ? w.eventIds : [] })) : [],
-    people: Array.isArray(c.people) ? c.people.map((p: any) => ({ id: String(p.id), profileId: p.profileId ?? null, name: p.name, email: p.email, waveIds: Array.isArray(p.waveIds) ? p.waveIds : [], travel: p.travel === "local" ? "local" : "flying", lodging: p.lodging ?? null, travelDetail: p.travelDetail ?? null, eventIds: Array.isArray(p.eventIds) ? p.eventIds : undefined, role: CREW_ROLES.includes(p.role) ? p.role : "eng", status: p.status === "proposed" ? "proposed" : "confirmed", spans: p.spans && typeof p.spans === "object" ? p.spans : undefined, statusByWave: p.statusByWave && typeof p.statusByWave === "object" ? p.statusByWave : undefined, travelByWave: p.travelByWave && typeof p.travelByWave === "object" ? p.travelByWave : undefined, plannedCount: typeof p.plannedCount === "number" ? p.plannedCount : null })) : [],
+    people: Array.isArray(c.people) ? c.people.map((p: any) => ({ id: String(p.id), profileId: p.profileId ?? null, name: p.name, email: p.email, waveIds: Array.isArray(p.waveIds) ? p.waveIds : [], travel: p.travel === "local" ? "local" : "flying", lodging: p.lodging ?? null, travelDetail: p.travelDetail ?? null, eventIds: Array.isArray(p.eventIds) ? p.eventIds : undefined, role: coerceRole(p.role), status: p.status === "proposed" ? "proposed" : "confirmed", spans: p.spans && typeof p.spans === "object" ? p.spans : undefined, statusByWave: p.statusByWave && typeof p.statusByWave === "object" ? p.statusByWave : undefined, travelByWave: p.travelByWave && typeof p.travelByWave === "object" ? p.travelByWave : undefined, plannedCount: typeof p.plannedCount === "number" ? p.plannedCount : null })) : [],
     anchorEventIds: Array.isArray(c.anchorEventIds) ? c.anchorEventIds : [],
-    currency: typeof c.currency === "string" && c.currency.trim() ? c.currency : "CAD",
+    currency: typeof c.currency === "string" && c.currency.trim() ? c.currency : "USD",
     estimatedLines: Array.isArray(c.estimatedLines)
       ? c.estimatedLines.map((l: any) => ({ id: String(l.id), item: l.item ?? "", detail: l.detail ?? "", amount: typeof l.amount === "number" ? l.amount : 0 }))
       : [],
     pendingItems: Array.isArray(c.pendingItems) ? c.pendingItems.filter((s: any) => typeof s === "string") : [],
+    logistics: Array.isArray(c.logistics)
+      ? c.logistics.map((l: any) => ({ id: String(l.id), date: String(l.date), kind: l.kind === "travel" ? "travel" : "note", text: l.text ?? "", time: l.time ?? null, peopleIds: Array.isArray(l.peopleIds) ? l.peopleIds : undefined }))
+      : [],
   };
 }
 
@@ -80,10 +90,12 @@ export function personLabel(p: CampaignPerson): string {
   return (p.name && p.name.trim()) || p.email || (p.profileId ? "Teammate" : "Unknown");
 }
 
+export const logisticsForDay = (c: Campaign, date: string): DayLogistic[] => c.logistics.filter((l) => l.date === date);
+
 // ── Wave presence (stepped headcount over time) ──────────────────────────────
 // Pure derivations for the wave-presence visualization. All read the existing campaign data plus the
 // optional role/status/span fields; nothing here touches the DB.
-export const crewRole = (p: CampaignPerson): CrewRole => (p.role && CREW_ROLES.includes(p.role) ? p.role : "eng");
+export const crewRole = (p: CampaignPerson): CrewRole => coerceRole(p.role);
 export const crewStatus = (p: CampaignPerson): CrewStatus => (p.status === "proposed" ? "proposed" : "confirmed");
 export const bodyCount = (p: CampaignPerson): number => (p.plannedCount && p.plannedCount > 0 ? p.plannedCount : 1);
 export const isAnonymous = (p: CampaignPerson): boolean => !p.profileId && !(p.name && p.name.trim()) && !p.email;
@@ -234,7 +246,7 @@ export function accommodationEstimate(c: Campaign, eventDates: Record<string, st
 }
 
 // Currency-aware money formatter (no cents). Falls back to a plain $ if the code is unknown.
-export function formatMoney(amount: number, currency = "CAD"): string {
+export function formatMoney(amount: number, currency = "USD"): string {
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }).format(amount); }
   catch { return `$${Math.round(amount).toLocaleString()}`; }
 }

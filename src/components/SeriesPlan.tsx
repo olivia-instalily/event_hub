@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { Plus, X, Star, GripVertical, AlertCircle } from "lucide-react";
+import { Plus, X, Star, GripVertical, AlertCircle, Plane, StickyNote } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
-import { type Wave, waveColor } from "../lib/campaign";
+import { type Wave, waveColor, waveBounds } from "../lib/campaign";
 import { listEvents, setEventSeries, extractBrief, createPlanningEvent, type EventListItem, type SeriesEvent } from "../lib/db";
 import { DateEdit } from "./DateEdit";
 import { WavePresence } from "./WavePresence";
@@ -105,6 +105,8 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor));
 
   const eventsById = Object.fromEntries(events.map((e) => [e.id, e])) as Record<string, SeriesEvent>;
+  const eventDates: Record<string, string | null> = Object.fromEntries(events.map((e) => [e.id, e.date]));
+  const fmtShort = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const assignedIds = new Set(campaign.waves.flatMap((w) => w.eventIds));
   const pending = events.filter((e) => !assignedIds.has(e.id));
 
@@ -179,25 +181,46 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
         {/* Wave-presence visualization */}
         {view === "viz" && (
           <section className="rounded-xl border border-border p-4">
-            <WavePresence campaign={campaign} events={events} />
+            <WavePresence campaign={campaign} events={events} save={save} />
           </section>
         )}
 
         {/* Waves + pending events editor */}
         {view === "plan" && <>
+        {/* Sticky wave nav — always visible; click a wave to jump to its section. */}
+        {campaign.waves.length > 1 && (
+          <div className="sticky top-0 z-20 -mx-1 mb-2 flex flex-wrap gap-1.5 border-b border-border bg-white/95 px-1 py-2 backdrop-blur">
+            {campaign.waves.map((w, wi) => {
+              const wc = waveColor(wi);
+              const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+              return (
+                <button key={w.id} onClick={() => document.getElementById(`wave-${w.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-white px-2.5 py-1 text-[12px] hover:bg-gray-50 transition-colors">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${wc.dot}`} />
+                  <span className="font-medium text-gray-800">{w.name || "Wave"}</span>
+                  {w.start && <span className="text-gray-400">{fmt(w.start)}{w.end && w.end !== w.start ? `–${fmt(w.end)}` : ""}</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
         {campaign.waves.map((w, wi) => {
           const wc = waveColor(wi);
           // Events assigned to this wave whose date falls outside the wave's own date range (both set).
           const outOfRange = (w.start && w.end)
             ? w.eventIds.map((id) => eventsById[id]).filter((e): e is SeriesEvent => !!e && !!e.date && (e.date < w.start! || e.date > w.end!))
             : [];
+          // Day logistics (notes/travel) that fall within this wave's date range.
+          const lb = waveBounds(w, eventDates);
+          const waveLogs = (lb.start && lb.end) ? campaign.logistics.filter((l) => l.date >= lb.start! && l.date <= lb.end!).sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? "").localeCompare(b.time ?? "")) : [];
           return (
           <section
             key={w.id}
+            id={`wave-${w.id}`}
             onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(w.id); } }}
             onDragLeave={(e) => { e.stopPropagation(); if (e.currentTarget === e.target) setFileOverWave((cur) => (cur === w.id ? null : cur)); }}
             onDrop={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(null); const fs = Array.from(e.dataTransfer.files); if (fs.length) setDropTarget({ waveId: w.id, files: fs }); } }}
-            className={`px-1 pt-1 pb-5 transition-colors ${fileOverWave === w.id ? "ring-2 ring-gray-300 bg-gray-50 rounded-xl" : ""}`}
+            className={`px-1 pt-1 pb-5 scroll-mt-16 transition-colors ${fileOverWave === w.id ? "ring-2 ring-gray-300 bg-gray-50 rounded-xl" : ""}`}
           >
             {/* Borderless header: color dot + bold name, then dates in gray; remove sits far right. */}
             <div className="flex items-center gap-2 mb-1.5">
@@ -240,6 +263,24 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
                   )}
                 </div>
               </div>
+              {/* Logistics / notes for this wave's days — on the right. Added on the visualization. */}
+              {waveLogs.length > 0 && (
+                <div className="w-52 shrink-0 border-l border-gray-100 pl-3 ml-2">
+                  <p className="text-[12px] font-medium text-gray-500 mb-1.5">Logistics</p>
+                  <ul className="space-y-1.5">
+                    {waveLogs.map((l) => (
+                      <li key={l.id} className="group/log flex items-start gap-1.5 text-[12px] text-gray-700">
+                        {l.kind === "travel" ? <Plane className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" /> : <StickyNote className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />}
+                        <span className="flex-1 min-w-0">
+                          <span className="text-gray-400">{fmtShort(l.date)}{l.time ? ` · ${l.time}` : ""}</span>
+                          <span className="block">{l.text}</span>
+                        </span>
+                        <button onClick={() => save({ ...campaign, logistics: campaign.logistics.filter((x) => x.id !== l.id) })} className="text-gray-300 hover:text-red-600 opacity-0 group-hover/log:opacity-100 shrink-0" aria-label="Remove"><X className="w-3.5 h-3.5" /></button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </section>
           );

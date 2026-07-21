@@ -20,7 +20,8 @@ const fmtDay = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undef
 // light tint of the same hue (no outline).
 const HUE: Record<CrewRole, { solid: string; outline: string }> = {
   eng: { solid: "bg-sky-400 text-white border-2 border-sky-400", outline: "bg-sky-400/20 text-sky-700 border-2 border-transparent" },
-  biz: { solid: "bg-violet-400 text-white border-2 border-violet-400", outline: "bg-violet-400/20 text-violet-700 border-2 border-transparent" },
+  growth: { solid: "bg-violet-400 text-white border-2 border-violet-400", outline: "bg-violet-400/20 text-violet-700 border-2 border-transparent" },
+  marketing: { solid: "bg-rose-400 text-white border-2 border-rose-400", outline: "bg-rose-400/20 text-rose-700 border-2 border-transparent" },
   leadership: { solid: "bg-amber-400 text-white border-2 border-amber-400", outline: "bg-amber-400/25 text-amber-800 border-2 border-transparent" },
   none: { solid: "bg-gray-300 text-gray-700 border-2 border-gray-300", outline: "bg-gray-400/20 text-gray-600 border-2 border-transparent" },
 };
@@ -59,6 +60,32 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
     if (!p || p.waveIds.includes(waveId)) return;
     patchPerson(p.id, { waveIds: [...p.waveIds, waveId], statusByWave: { ...p.statusByWave, [waveId]: "proposed" } });
   };
+  // Drop a named person onto a planned group (e.g. "4 Eng planned"). Same role → they fill a slot:
+  // assigned to that wave with the group's dates/status, and the group's count drops by one (removed
+  // at 0). Different role → they just join the wave as themselves; the count is untouched.
+  const fillPlanned = (personId: string, groupId: string) => {
+    const person = campaign.people.find((x) => x.id === personId);
+    const group = campaign.people.find((x) => x.id === groupId);
+    if (!person || !group || personId === groupId || !isAnonymous(group)) return;
+    const waveId = group.waveIds[0];
+    if (!waveId) return;
+    if (crewRole(person) !== crewRole(group)) { assignToWave(personId, waveId); return; } // role mismatch → plain assign
+    const nextCount = bodyCount(group) - 1;
+    const groupSpan = group.spans?.[waveId];
+    const groupStatus = waveStatus(group, waveId);
+    const people = campaign.people.flatMap((x) => {
+      if (x.id === groupId) return nextCount > 0 ? [{ ...x, plannedCount: nextCount }] : []; // decrement; remove at 0
+      if (x.id === personId) return [{
+        ...x,
+        waveIds: x.waveIds.includes(waveId) ? x.waveIds : [...x.waveIds, waveId],
+        spans: groupSpan ? { ...x.spans, [waveId]: groupSpan } : x.spans,
+        statusByWave: { ...x.statusByWave, [waveId]: groupStatus },
+      }];
+      return [x];
+    });
+    save({ ...campaign, people });
+    setOpenDot(null);
+  };
 
   // Person bank (right column) — everyone on the series, named. Anonymous headcount lives in waves only.
   const bank = campaign.people.filter((p) => !isAnonymous(p));
@@ -71,7 +98,12 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
   const peak = campaignPeak(campaign, eventDates);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-  const onDragEnd = (e: DragEndEvent) => { if (e.over && typeof e.over.id === "string" && typeof e.active.id === "string") assignToWave(e.active.id, e.over.id); };
+  const onDragEnd = (e: DragEndEvent) => {
+    if (!e.over || typeof e.over.id !== "string" || typeof e.active.id !== "string") return;
+    const over = e.over.id;
+    if (over.startsWith("planned:")) fillPlanned(e.active.id, over.slice(8)); // dropped onto a planned group
+    else assignToWave(e.active.id, over); // dropped onto a wave
+  };
 
   if (campaign.waves.length === 0) return <p className="text-gray-400">Add waves on the Plan tab first, then staff them here.</p>;
 
@@ -105,13 +137,15 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
                       const role = crewRole(p), status = waveStatus(p, w.id), anon = isAnonymous(p), partial = isPartialInWave(p, w);
                       const key = `${p.id}|${w.id}`;
                       const label = anon ? String(bodyCount(p)) : (personLabel(p).trim()[0] || "?").toUpperCase();
-                      return (
-                        <button key={p.id} onClick={(e) => openDotAt(key, e.currentTarget)} title={anon ? `${bodyCount(p)} ${ROLE_LABEL[role]} planned` : `${personLabel(p)} · ${ROLE_LABEL[role]} · ${status}`}
+                      const dot = (
+                        <button onClick={(e) => openDotAt(key, e.currentTarget)} title={anon ? `${bodyCount(p)} ${ROLE_LABEL[role]} planned — drop a matching ${ROLE_LABEL[role]} here to fill a slot` : `${personLabel(p)} · ${ROLE_LABEL[role]} · ${status}`}
                           className={`relative w-9 h-9 rounded-full flex items-center justify-center text-[13px] font-semibold transition-transform hover:scale-105 ${dotClass(role, status)}`}>
                           {label}
                           {partial && <span className="absolute -top-1 -right-1 bg-white rounded-full p-px shadow-sm"><Clock className="w-3 h-3 text-gray-500" /></span>}
                         </button>
                       );
+                      // A planned group is a drop target: drop a same-role person on it to fill a slot.
+                      return anon ? <PlannedDrop key={p.id} groupId={p.id}>{dot}</PlannedDrop> : <span key={p.id}>{dot}</span>;
                     })}
                     {/* Per-wave add (bank person not in wave, or planned headcount) */}
                     <button onClick={(e) => openAddAt(w.id, e.currentTarget)} className="w-9 h-9 rounded-full border-2 border-dashed border-gray-300 text-gray-400 hover:border-gray-400 hover:text-gray-600 flex items-center justify-center" aria-label="Add to wave"><Plus className="w-4 h-4" /></button>
@@ -127,7 +161,7 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
             <p className="text-[12px] text-gray-400 mb-3">Everyone on the series. Drag onto a wave to assign.</p>
             <div className="space-y-1.5 mb-3">
               {bank.length === 0 && <p className="text-[13px] text-gray-400">No one added yet.</p>}
-              {bank.map((p) => <BankPerson key={p.id} person={p} waveNames={campaign.waves.filter((w) => p.waveIds.includes(w.id)).map((w) => w.name || "wave")} onRemove={() => removeFromSeries(p.id)} />)}
+              {bank.map((p) => <BankPerson key={p.id} person={p} waveNames={campaign.waves.filter((w) => p.waveIds.includes(w.id)).map((w) => w.name || "wave")} onRole={(r) => patchPerson(p.id, { role: r })} onRemove={() => removeFromSeries(p.id)} />)}
             </div>
             <div className="flex gap-1.5">
               <input value={bankName} onChange={(e) => setBankName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addFreeTextToBank(); }} placeholder="Add by name…" className="flex-1 min-w-0 px-2 py-1 border border-gray-300 rounded text-[13px]" />
@@ -183,20 +217,30 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
 // from the edges) so it always opens fully visible. Outside-click closes.
 function AnchoredPopover({ anchor, width, onClose, children }: { anchor: DOMRect; width: number; onClose: () => void; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
   useLayoutEffect(() => {
-    const m = 8;
-    const h = ref.current?.offsetHeight ?? 0;
+    const m = 8, gap = 6;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const h = ref.current?.scrollHeight ?? 0;
+    // Horizontal: center on the anchor, then shift fully inside the viewport.
     let left = anchor.left + anchor.width / 2 - width / 2;
-    left = Math.max(m, Math.min(left, window.innerWidth - width - m));
-    let top = anchor.bottom + 6;
-    if (top + h > window.innerHeight - m) top = Math.max(m, anchor.top - h - 6); // flip above
-    setPos({ left, top });
+    left = Math.max(m, Math.min(left, vw - width - m));
+    // Vertical: prefer below; else above; else whichever side has more room, capping the height so it
+    // scrolls internally instead of running off the screen.
+    const spaceBelow = vh - anchor.bottom - gap - m;
+    const spaceAbove = anchor.top - gap - m;
+    let top: number, maxHeight: number;
+    if (h <= spaceBelow) { top = anchor.bottom + gap; maxHeight = spaceBelow; }
+    else if (h <= spaceAbove) { top = anchor.top - gap - h; maxHeight = spaceAbove; }
+    else if (spaceBelow >= spaceAbove) { top = anchor.bottom + gap; maxHeight = spaceBelow; }
+    else { top = m; maxHeight = spaceAbove; }
+    top = Math.max(m, Math.min(top, vh - m - Math.min(h, maxHeight)));
+    setPos({ left, top, maxHeight: Math.max(120, maxHeight) });
   }, [anchor, width]);
   return createPortal(
     <>
       <div className="fixed inset-0 z-[80]" onClick={onClose} />
-      <div ref={ref} style={{ position: "fixed", left: pos?.left ?? -9999, top: pos?.top ?? -9999, width }} className="z-[81]">
+      <div ref={ref} style={{ position: "fixed", left: pos?.left ?? -9999, top: pos?.top ?? -9999, width, maxHeight: pos?.maxHeight, overflowY: "auto" }} className="z-[81]">
         {children}
       </div>
     </>,
@@ -209,7 +253,13 @@ function WaveDrop({ waveId, children }: { waveId: string; children: React.ReactN
   return <section ref={setNodeRef} className={`rounded-xl border p-4 transition-colors ${isOver ? "border-gray-400 bg-gray-50 ring-2 ring-gray-300" : "border-border"}`}>{children}</section>;
 }
 
-function BankPerson({ person, waveNames, onRemove }: { person: CampaignPerson; waveNames: string[]; onRemove: () => void }) {
+// A planned group (anonymous "N planned" dot) as a drop target — drop a same-role person to fill a slot.
+function PlannedDrop({ groupId, children }: { groupId: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `planned:${groupId}` });
+  return <div ref={setNodeRef} className={`rounded-full transition-shadow ${isOver ? "ring-2 ring-gray-500 ring-offset-1" : ""}`}>{children}</div>;
+}
+
+function BankPerson({ person, waveNames, onRole, onRemove }: { person: CampaignPerson; waveNames: string[]; onRole: (r: CrewRole) => void; onRemove: () => void }) {
   const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({ id: person.id });
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50, position: "relative" as const } : undefined;
   const role = crewRole(person);
@@ -218,6 +268,14 @@ function BankPerson({ person, waveNames, onRemove }: { person: CampaignPerson; w
       <button {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 touch-none" aria-label="Drag to a wave"><GripVertical className="w-4 h-4" /></button>
       <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${HUE[role].solid.split(" ")[0]}`} />
       <span className="flex-1 min-w-0 text-[13px] truncate">{personLabel(person)}{waveNames.length > 0 && <span className="block text-[11px] text-gray-400 truncate">{waveNames.join(", ")}</span>}</span>
+      {/* Role is person-level (not wave-dependent) — assign it right here. Brand Select, matching the
+          other dropdowns. Stop pointer-down so opening it doesn't start a drag. */}
+      <span className="shrink-0" onPointerDown={(e) => e.stopPropagation()}>
+        <Select value={role} onValueChange={(v) => onRole(v as CrewRole)} items={CREW_ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))}>
+          <SelectTrigger className="h-7 w-[7.5rem] text-[11px]"><SelectValue /></SelectTrigger>
+          <SelectContent>{CREW_ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent>
+        </Select>
+      </span>
       <button onClick={onRemove} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100" aria-label="Remove from series"><X className="w-3.5 h-3.5" /></button>
     </div>
   );

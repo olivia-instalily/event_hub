@@ -3766,6 +3766,32 @@ function EventMenu({ onReset, onDelete, onUnlinkLinear, linked }: { onReset: () 
   );
 }
 
+// Start/end time editor that holds a local draft and only persists on an explicit Save (which appears
+// once you've changed something), with a "Saved ✓" confirmation — so edits can't quietly get lost.
+function TimeRangeEditor({ eventId, startTime, endTime, onSaved }: { eventId: string; startTime: string | null; endTime: string | null; onSaved: (s: string | null, e: string | null) => void }) {
+  const [s, setS] = useState(startTime ?? "");
+  const [e, setE] = useState(endTime ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { setS(startTime ?? ""); setE(endTime ?? ""); }, [startTime, endTime]);
+  const dirty = (s || null) !== (startTime ?? null) || (e || null) !== (endTime ?? null);
+  const save = async () => {
+    setSaving(true);
+    try { await updateEvent(eventId, { startTime: s || null, endTime: e || null }); onSaved(s || null, e || null); setSaved(true); setTimeout(() => setSaved(false), 1800); }
+    finally { setSaving(false); }
+  };
+  const cls = "px-1.5 py-0.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <input type="time" value={s} onChange={(ev) => setS(ev.target.value)} title="Start time" className={cls} />
+      <span className="text-gray-400">–</span>
+      <input type="time" value={e} onChange={(ev) => setE(ev.target.value)} title="End time" className={cls} />
+      {dirty && <button onClick={() => void save()} disabled={saving} className="text-[12px] px-2 py-0.5 rounded bg-gray-900 text-white hover:bg-black disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>}
+      {saved && !dirty && <span className="text-[12px] text-emerald-600 inline-flex items-center gap-0.5"><Check className="w-3 h-3" /> Saved</span>}
+    </span>
+  );
+}
+
 export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Props) {
   const [plan, setPlan] = useState<EventPlanning | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -4015,9 +4041,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                     <span>{plan.date ?? "Date TBD"}</span>
                   </>
                 )}
-                <input type="time" value={plan.startTime ?? ""} onChange={(e) => { const startTime = e.target.value || null; setPlan((p) => (p ? { ...p, startTime } : p)); void updateEvent(eventId, { startTime }); }} title="Start time" className="px-1.5 py-0.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                <span className="text-gray-400">–</span>
-                <input type="time" value={plan.endTime ?? ""} onChange={(e) => { const endTime = e.target.value || null; setPlan((p) => (p ? { ...p, endTime } : p)); void updateEvent(eventId, { endTime }); }} title="End time" className="px-1.5 py-0.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
               </div>
               <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
               <FormatPicker value={parseFormats(plan.format)} onChange={(arr) => { const format = joinFormats(arr); setPlan((p) => (p ? { ...p, format } : p)); void setEventFormat(eventId, format); }} />

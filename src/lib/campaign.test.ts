@@ -10,9 +10,10 @@ function fixture(): Campaign {
     travelRatePerWave: 500,
     accommodationRatePerNight: null,
     anchorEventIds: ["e-hack"],
-    currency: "CAD",
+    currency: "USD",
     estimatedLines: [],
     pendingItems: [],
+    logistics: [],
     waves: [
       { id: "w1", name: "Wave 1", start: "2026-09-01", end: "2026-09-07", eventIds: ["e-hack", "e-mixer"] },
       { id: "w2", name: "Wave 2", start: "2026-09-08", end: "2026-09-14", eventIds: ["e-hack"] },
@@ -89,9 +90,9 @@ import {
 } from "./campaign";
 
 describe("budget: normalizeCampaign defaults", () => {
-  it("defaults currency to CAD and budget arrays to empty", () => {
+  it("defaults currency to USD and budget arrays to empty", () => {
     const c = normalizeCampaign({});
-    expect(c.currency).toBe("CAD");
+    expect(c.currency).toBe("USD");
     expect(c.estimatedLines).toEqual([]);
     expect(c.pendingItems).toEqual([]);
   });
@@ -105,7 +106,7 @@ describe("budget: normalizeCampaign defaults", () => {
 
 describe("budget: estimated totals", () => {
   const base = normalizeCampaign({
-    currency: "CAD",
+    currency: "USD",
     travelRatePerWave: 500,
     accommodationRatePerNight: null,
     estimatedLines: [{ id: "l1", item: "Merch", detail: "tees", amount: 300 }, { id: "l2", item: "Signage", detail: "banner", amount: 200 }],
@@ -135,6 +136,6 @@ describe("budget: estimated totals", () => {
 
 describe("budget: formatMoney", () => {
   it("formats with the given currency, no cents", () => {
-    expect(formatMoney(1500, "CAD")).toMatch(/1,500/);
+    expect(formatMoney(1500, "USD")).toMatch(/1,500/);
   });
 });

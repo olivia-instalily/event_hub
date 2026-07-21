@@ -6,11 +6,6 @@ import type { Drive } from "../lib/campaign";
 
 const DRIVES: Drive[] = ["recruiting", "culture", "client"];
 const driveLabel = (d: Drive) => d.charAt(0).toUpperCase() + d.slice(1);
-const DRIVE_GRAD: Record<Drive, string> = {
-  recruiting: "from-violet-400 to-violet-600",
-  culture: "from-amber-400 to-amber-600",
-  client: "from-sky-400 to-sky-600",
-};
 const fmtDay = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
 const CARD_W = 176; // w-44
@@ -103,13 +98,13 @@ function SeriesRow({ s, onOpen }: { s: SeriesListItem; onOpen: (id: string) => v
         <span className="font-medium">{s.name}</span>
         <span className="text-[13px] text-gray-500 capitalize">{s.drive} · {s.memberCount} event{s.memberCount === 1 ? "" : "s"}</span>
       </div>
-      <div className="relative h-36 transition-[width] duration-300" style={{ width, maxWidth: "100%" }}>
+      <div className="relative h-[152px] overflow-hidden transition-[width] duration-300" style={{ width, maxWidth: "100%" }}>
         {shown.map((e, i) => {
           const x = hover ? i * (CARD_W + 12) : i * restX;
           return (
             <div key={e.id} className="absolute left-0 top-0 w-44 rounded-xl border border-border bg-white shadow-sm overflow-hidden transition-transform duration-300"
               style={{ transform: `translateX(${x}px)`, zIndex: i }}>
-              <MiniCard event={e} drive={s.drive} />
+              <MiniCard event={e} />
             </div>
           );
         })}
@@ -124,14 +119,13 @@ function SeriesRow({ s, onOpen }: { s: SeriesListItem; onOpen: (id: string) => v
   );
 }
 
-function MiniCard({ event, drive }: { event: SeriesCardEvent; drive: Drive }) {
+function MiniCard({ event }: { event: SeriesCardEvent }) {
   return (
     <div className="flex flex-col h-36">
-      {event.coverImageUrl
-        ? <img src={event.coverImageUrl} alt="" className="h-16 w-full object-cover" />
-        : <div className={`h-16 w-full bg-gradient-to-br ${DRIVE_GRAD[drive]}`} />}
+      {/* No cover → just text (no placeholder cover area); with a cover → show the image band. */}
+      {event.coverImageUrl && <img src={event.coverImageUrl} alt="" className="h-16 w-full object-cover" />}
       <div className="p-2 flex-1 min-h-0">
-        <p className="text-[13px] font-medium leading-tight line-clamp-2">{event.title}</p>
+        <p className="text-[13px] font-medium leading-tight line-clamp-3">{event.title}</p>
         <p className="text-[11px] text-gray-400 mt-1 inline-flex items-center gap-1"><Calendar className="w-3 h-3" />{event.date ? fmtDay(event.date) : "No date"}</p>
       </div>
     </div>
