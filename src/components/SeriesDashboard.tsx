@@ -3,6 +3,7 @@ import { ChevronLeft } from "lucide-react";
 import { getSeriesCampaign, getSeriesEvents, saveCampaign, type SeriesEvent } from "../lib/db";
 import { type Campaign, emptyCampaign } from "../lib/campaign";
 import { SeriesPlan } from "./SeriesPlan";
+import { SeriesEvents } from "./SeriesEvents";
 import { SeriesPeople } from "./SeriesPeople";
 import { SeriesBudget } from "./SeriesBudget";
 import { SeriesBriefs } from "./SeriesBriefs";
@@ -16,9 +17,10 @@ export interface TabProps {
   reload: () => void;
   reloadEvents: () => void; // refetch only the member events (leaves the optimistic campaign intact)
 }
-type Tab = "plan" | "people" | "budget" | "briefs";
+type Tab = "plan" | "events" | "people" | "budget" | "briefs";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "plan", label: "Plan" }, { key: "people", label: "People & logistics" },
+  { key: "plan", label: "Plan" }, { key: "events", label: "Events" },
+  { key: "people", label: "People & logistics" },
   { key: "budget", label: "Budget" }, { key: "briefs", label: "Briefs" },
 ];
 
@@ -56,6 +58,7 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent }: { seriesId: s
         <>
           {saveError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">{saveError}</div>}
           {tab === "plan" && <SeriesPlan {...props} />}
+          {tab === "events" && <SeriesEvents {...props} />}
           {tab === "people" && <SeriesPeople {...props} />}
           {tab === "budget" && <SeriesBudget {...props} />}
           {tab === "briefs" && <SeriesBriefs {...props} />}
