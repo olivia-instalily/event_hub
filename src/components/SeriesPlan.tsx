@@ -3,7 +3,7 @@ import { Plus, X, Star, ExternalLink, GripVertical } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
-import { type Wave } from "../lib/campaign";
+import { type Wave, waveColor } from "../lib/campaign";
 import { listEvents, setEventSeries, type EventListItem, type SeriesEvent } from "../lib/db";
 import { DateEdit } from "./DateEdit";
 import { WavePresence } from "./WavePresence";
@@ -132,9 +132,12 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             <WavePresence campaign={campaign} events={events} />
           </section>
         )}
-        {campaign.waves.map((w) => (
-          <section key={w.id} className="rounded-xl border border-border p-4">
+        {campaign.waves.map((w, wi) => {
+          const wc = waveColor(wi);
+          return (
+          <section key={w.id} className={`rounded-xl border ${wc.border} p-4`}>
             <div className="flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${wc.dot}`} title={`${wc.name} wave`} />
               <input value={w.name} onChange={(e) => patchWave(w.id, { name: e.target.value })} placeholder="Wave name" className="font-medium text-[15px] flex-1 min-w-0 border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none" />
               <button onClick={() => removeWave(w.id)} className="text-gray-300 hover:text-red-600 shrink-0" aria-label="Remove wave"><X className="w-4 h-4" /></button>
             </div>
@@ -158,7 +161,8 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
               )}
             </div>
           </section>
-        ))}
+          );
+        })}
 
         {adding ? (
           <div className="flex items-center gap-2">

@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { TabProps } from "./SeriesDashboard";
 import {
   personLabel, crewRole, bodyCount, isAnonymous, waveStatus, waveTravel, isPartialInWave,
-  eachDay, waveBounds, campaignPeak, crewTravelCounts, CREW_ROLES, ROLE_LABEL,
+  eachDay, waveBounds, campaignPeak, crewTravelCounts, waveColor, CREW_ROLES, ROLE_LABEL,
   type CampaignPerson, type Wave, type CrewRole,
 } from "../lib/campaign";
 import { useProfile } from "../lib/profile";
@@ -86,12 +86,14 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
         <div className="flex flex-col md:flex-row gap-6 items-start">
           {/* Waves */}
           <div className="flex-1 min-w-0 space-y-4">
-            {campaign.waves.map((w) => {
+            {campaign.waves.map((w, wi) => {
               const bounds = waveBounds(w, eventDates);
               const inWave = campaign.people.filter((p) => p.waveIds.includes(w.id));
+              const wc = waveColor(wi);
               return (
                 <WaveDrop key={w.id} waveId={w.id}>
                   <div className="flex items-baseline gap-2 mb-3">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${wc.dot}`} title={`${wc.name} wave`} />
                     <span className="text-[15px] font-medium">{w.name || "Untitled wave"}</span>
                     <span className="text-[12px] text-gray-400">{bounds.start ? `${fmtDay(bounds.start)}${bounds.end && bounds.end !== bounds.start ? ` – ${fmtDay(bounds.end)}` : ""}` : "no dates"}</span>
                   </div>

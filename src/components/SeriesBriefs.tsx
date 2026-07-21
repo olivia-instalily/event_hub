@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { TabProps } from "./SeriesDashboard";
-import { personBrief, personLabel, type BriefEvent } from "../lib/campaign";
+import { personBrief, personLabel, waveColorById, type BriefEvent } from "../lib/campaign";
 
 export function SeriesBriefs({ campaign, events, save }: TabProps) {
   const [selected, setSelected] = useState<string | null>(campaign.people[0]?.id ?? null);
@@ -33,7 +33,7 @@ export function SeriesBriefs({ campaign, events, save }: TabProps) {
 
           {brief.waves.length === 0 ? <p className="text-sm text-gray-400">Not assigned to any wave yet.</p> : brief.waves.map(({ wave, events: evs }) => (
             <section key={wave.id} className="mb-4">
-              <h3 className="text-sm font-medium">{wave.name} <span className="text-gray-400 font-normal">{wave.start ?? "—"}{wave.end ? ` → ${wave.end}` : ""}</span></h3>
+              <h3 className="text-sm font-medium inline-flex items-center gap-1.5"><span className={`w-2 h-2 rounded-full shrink-0 ${waveColorById(campaign.waves, wave.id).dot}`} />{wave.name} <span className="text-gray-400 font-normal">{wave.start ?? "—"}{wave.end ? ` → ${wave.end}` : ""}</span></h3>
               {evs.length === 0 ? <p className="text-[13px] text-gray-400 pl-2">No events.</p> : (
                 <ul className="mt-1 space-y-0.5">
                   {evs.map((e) => <li key={e.id} className="text-sm pl-2"><span className="text-gray-400 text-[12px] mr-2">{e.date ?? "—"}</span>{e.name}{e.location ? <span className="text-gray-400"> · {e.location}</span> : ""}</li>)}

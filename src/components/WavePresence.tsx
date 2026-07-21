@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { SeriesEvent } from "../lib/db";
 import {
-  wavePresence, daySlice, waveDurationDays, waveBounds, STACK_KEYS, type Campaign, type StackKey,
+  wavePresence, daySlice, waveDurationDays, waveBounds, STACK_KEYS, waveColor, type Campaign, type StackKey,
 } from "../lib/campaign";
 
 // Colored segments: hue = role (eng sky / biz violet), shade = status (confirmed deep / proposed pale).
@@ -42,14 +42,16 @@ export function WavePresence({ campaign, events }: { campaign: Campaign; events:
     <div>
       <Legend />
       <div className="space-y-8">
-        {resolved.map((w) => {
+        {resolved.map((w, wi) => {
           const dur = waveDurationDays(w);
           const widthPct = dur > 0 ? Math.max(22, (dur / maxDur) * 100) : 42; // undated → a modest bare band
           const { days, columns, peak } = wavePresence(w, campaign.people);
           const waveEvents = w.eventIds.map((id) => eventById[id]).filter((e): e is SeriesEvent => !!e && !!e.date && days.includes(e.date!));
+          const wc = waveColor(wi);
           return (
             <div key={w.id}>
               <div className="flex items-baseline gap-2 mb-1">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${wc.dot}`} title={`${wc.name} wave`} />
                 <span className="text-sm font-medium text-gray-800">{w.name || "Untitled wave"}</span>
                 <span className="text-[12px] text-gray-400">{dur > 0 ? `${dur} day${dur === 1 ? "" : "s"}` : "no dates"}{peak > 0 ? ` · peak ${peak}` : ""}</span>
               </div>
