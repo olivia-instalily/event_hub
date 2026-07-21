@@ -7,13 +7,12 @@ import { getSeriesCommittedTotals, type SeriesCommitted } from "../lib/db";
 const newLineId = () => "el-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
 
 export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
-  const cur = campaign.currency || "CAD";
+  const cur = campaign.currency || "USD";
   const [paid, setPaid] = useState<SeriesCommitted[] | null>(null);
   const [addingLine, setAddingLine] = useState(false);
   const [lineItem, setLineItem] = useState("");
   const [lineDetail, setLineDetail] = useState("");
   const [lineAmount, setLineAmount] = useState("");
-  const [pendingText, setPendingText] = useState("");
 
   useEffect(() => { setPaid(null); getSeriesCommittedTotals(seriesId).then(setPaid).catch(() => setPaid([])); }, [seriesId]);
 
@@ -41,42 +40,35 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
     save({ ...campaign, estimatedLines: [...campaign.estimatedLines, { id: newLineId(), item: lineItem.trim(), detail: lineDetail.trim(), amount: Number(lineAmount) || 0 }] });
     setLineItem(""); setLineDetail(""); setLineAmount(""); setAddingLine(false);
   };
-  const addPending = () => { const t = pendingText.trim(); if (!t) return; save({ ...campaign, pendingItems: [...campaign.pendingItems, t] }); setPendingText(""); };
-  const removePending = (i: number) => save({ ...campaign, pendingItems: campaign.pendingItems.filter((_, j) => j !== i) });
 
   return (
     <div className="space-y-6">
-      {/* Total estimate — top-right corner, to the right of everything else. */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-[13px] text-amber-800">
-          Estimate only — this never flows into committed spend. Paid is read from each event's own budget; nothing here changes it. Currency: {cur}.
-        </div>
-        <div className="shrink-0 text-right rounded-xl border border-border bg-muted px-4 py-2">
-          <span className="block text-[11px] font-medium uppercase tracking-wide text-gray-500">Total estimate</span>
-          <span className="block text-xl font-semibold">{isEmpty ? "—" : formatMoney(combined, cur)}</span>
-          {!isEmpty && <span className="block text-[11px] text-gray-500">{formatMoney(paidSubtotal, cur)} committed · {formatMoney(estTotal, cur)} estimated</span>}
-        </div>
+      {/* Top row: Paid / committed (left) and Total estimate (right) — equal width, equal height. */}
+      <div className="flex items-stretch gap-4">
+        <section className="flex-1 rounded-xl border border-border divide-y divide-gray-100">
+          <div className="px-4 py-2 text-[13px] font-medium text-gray-500">Paid / committed <span className="font-normal text-gray-400">· read from member events</span></div>
+          {paid === null && <div className="px-4 py-3 text-sm text-gray-400">Loading…</div>}
+          {paid !== null && paidRows.length === 0 && <div className="px-4 py-3 text-sm text-gray-400">No committed spend on member events yet.</div>}
+          {paidSameCur.map((r) => (
+            <div key={r.eventId} className="flex items-center justify-between px-4 py-2 text-sm">
+              <span className="truncate">{r.name}</span>
+              <span>{formatMoney(r.committed, cur)}</span>
+            </div>
+          ))}
+          {paidMismatch.map((r) => (
+            <div key={r.eventId} className="flex items-center justify-between px-4 py-2 text-sm text-amber-700">
+              <span className="truncate inline-flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{r.name}</span>
+              <span title="Different currency — not added to the series total">{formatMoney(r.committed, r.currency)} <span className="text-[12px]">({r.currency})</span></span>
+            </div>
+          ))}
+          {paidSameCur.length > 0 && <div className="flex items-center justify-between px-4 py-2 text-sm font-medium"><span>Subtotal</span><span>{formatMoney(paidSubtotal, cur)}</span></div>}
+        </section>
+        <section className="flex-1 rounded-xl border border-border bg-muted p-4 flex flex-col justify-center">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500">Total estimate</span>
+          <span className="text-3xl font-semibold mt-1">{isEmpty ? "—" : formatMoney(combined, cur)}</span>
+          {!isEmpty && <span className="text-[12px] text-gray-500 mt-1">{formatMoney(paidSubtotal, cur)} committed · {formatMoney(estTotal, cur)} estimated</span>}
+        </section>
       </div>
-
-      {/* 1. Paid / committed (read) */}
-      <section className="rounded-xl border border-border divide-y divide-gray-100">
-        <div className="px-4 py-2 text-[13px] font-medium text-gray-500">Paid / committed <span className="font-normal text-gray-400">· read from member events</span></div>
-        {paid === null && <div className="px-4 py-3 text-sm text-gray-400">Loading…</div>}
-        {paid !== null && paidRows.length === 0 && <div className="px-4 py-3 text-sm text-gray-400">No committed spend on member events yet.</div>}
-        {paidSameCur.map((r) => (
-          <div key={r.eventId} className="flex items-center justify-between px-4 py-2 text-sm">
-            <span className="truncate">{r.name}</span>
-            <span>{formatMoney(r.committed, cur)}</span>
-          </div>
-        ))}
-        {paidMismatch.map((r) => (
-          <div key={r.eventId} className="flex items-center justify-between px-4 py-2 text-sm text-amber-700">
-            <span className="truncate inline-flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{r.name}</span>
-            <span title="Different currency — not added to the series total">{formatMoney(r.committed, r.currency)} <span className="text-[12px]">({r.currency})</span></span>
-          </div>
-        ))}
-        {paidSameCur.length > 0 && <div className="flex items-center justify-between px-4 py-2 text-sm font-medium"><span>Subtotal</span><span>{formatMoney(paidSubtotal, cur)}</span></div>}
-      </section>
 
       {/* 2. Estimated (blue): manual lines + derived auto lines */}
       <section className="rounded-xl border border-border divide-y divide-gray-100">
@@ -124,24 +116,6 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
         <div className="flex items-center justify-between text-sm">
           <span>Accommodation rate / night (per person)</span>
           <input type="number" value={campaign.accommodationRatePerNight ?? ""} onChange={(e) => setRate("accommodationRatePerNight", e.target.value)} placeholder="—" className="w-28 px-2 py-1 border border-gray-300 rounded text-right" />
-        </div>
-      </section>
-
-      {/* 4. Not yet included (pending) */}
-      <section className="rounded-xl border border-border p-4">
-        <div className="text-[13px] font-medium text-gray-500 mb-2">Not yet included <span className="font-normal text-gray-400">· known but unsized — excluded from the total</span></div>
-        <ul className="space-y-1 mb-2">
-          {campaign.pendingItems.map((p, i) => (
-            <li key={i} className="flex items-center justify-between gap-2 text-sm text-gray-700">
-              <span className="truncate">• {p}</span>
-              <button onClick={() => removePending(i)} className="text-gray-300 hover:text-red-600 shrink-0"><X className="w-4 h-4" /></button>
-            </li>
-          ))}
-          {campaign.pendingItems.length === 0 && <li className="text-[13px] text-gray-400">Nothing pending.</li>}
-        </ul>
-        <div className="flex items-center gap-2">
-          <input value={pendingText} onChange={(e) => setPendingText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPending(); }} placeholder="e.g. videographer TBD" className="flex-1 min-w-0 px-2 py-1 border border-border rounded text-sm" />
-          <button onClick={addPending} disabled={!pendingText.trim()} className="inline-flex items-center gap-1 px-2 py-1 text-[13px] text-gray-500 hover:text-gray-900 disabled:opacity-50"><Plus className="w-3.5 h-3.5" /> add pending item</button>
         </div>
       </section>
 
