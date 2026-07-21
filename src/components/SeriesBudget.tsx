@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Plus, X, AlertTriangle } from "lucide-react";
 import type { TabProps } from "./SeriesDashboard";
-import { formatMoney, manualEstimatedTotal, autoEstimateLines, estimatedSubtotal, type EstimatedLine } from "../lib/campaign";
+import { formatMoney, autoEstimateLines, estimatedSubtotal, type EstimatedLine } from "../lib/campaign";
 import { getSeriesCommittedTotals, type SeriesCommitted } from "../lib/db";
 
 const newLineId = () => "el-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
@@ -15,7 +15,7 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
   const [lineAmount, setLineAmount] = useState("");
   const [pendingText, setPendingText] = useState("");
 
-  useEffect(() => { getSeriesCommittedTotals(seriesId).then(setPaid).catch(() => setPaid([])); }, [seriesId]);
+  useEffect(() => { setPaid(null); getSeriesCommittedTotals(seriesId).then(setPaid).catch(() => setPaid([])); }, [seriesId]);
 
   const eventDates: Record<string, string | null> = {};
   for (const e of events) eventDates[e.id] = e.date;
@@ -103,7 +103,7 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
         ) : (
           <button onClick={() => setAddingLine(true)} className="flex items-center gap-1 px-4 py-2 text-[13px] text-gray-500 hover:text-gray-900"><Plus className="w-3.5 h-3.5" /> add estimated line</button>
         )}
-        {(campaign.estimatedLines.length > 0 || autos.length > 0) && <div className="flex items-center justify-between px-4 py-2 text-sm font-medium"><span>Subtotal</span><span>{formatMoney(manualEstimatedTotal(campaign) + autos.reduce((s, a) => s + a.amount, 0), cur)}</span></div>}
+        {(campaign.estimatedLines.length > 0 || autos.length > 0) && <div className="flex items-center justify-between px-4 py-2 text-sm font-medium"><span>Subtotal</span><span>{formatMoney(estTotal, cur)}</span></div>}
       </section>
 
       {/* 3. Rate helpers */}
