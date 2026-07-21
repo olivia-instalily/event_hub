@@ -46,8 +46,16 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-[13px] text-amber-800">
-        Estimate only — this never flows into committed spend. Paid is read from each event's own budget; nothing here changes it. Currency: {cur}.
+      {/* Total estimate — top-right corner, to the right of everything else. */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-[13px] text-amber-800">
+          Estimate only — this never flows into committed spend. Paid is read from each event's own budget; nothing here changes it. Currency: {cur}.
+        </div>
+        <div className="shrink-0 text-right rounded-xl border border-border bg-muted px-4 py-2">
+          <span className="block text-[11px] font-medium uppercase tracking-wide text-gray-500">Total estimate</span>
+          <span className="block text-xl font-semibold">{isEmpty ? "—" : formatMoney(combined, cur)}</span>
+          {!isEmpty && <span className="block text-[11px] text-gray-500">{formatMoney(paidSubtotal, cur)} committed · {formatMoney(estTotal, cur)} estimated</span>}
+        </div>
       </div>
 
       {/* 1. Paid / committed (read) */}
@@ -137,14 +145,6 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
         </div>
       </section>
 
-      {/* Total with split */}
-      <div className="flex items-center justify-between rounded-xl border border-border bg-muted px-4 py-3">
-        <div>
-          <span className="font-medium">Total estimate</span>
-          {!isEmpty && <span className="block text-[12px] text-gray-500">{formatMoney(paidSubtotal, cur)} committed · {formatMoney(estTotal, cur)} estimated</span>}
-        </div>
-        <span className="text-lg font-medium">{isEmpty ? "—" : formatMoney(combined, cur)}</span>
-      </div>
     </div>
   );
 }
