@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, X, Star, ExternalLink, GripVertical } from "lucide-react";
+import { Plus, X, Star, GripVertical } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
@@ -40,12 +40,15 @@ function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUna
 }) {
   const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({ id: event.id });
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50, position: "relative" as const } : undefined;
+  const subtitle = [event.date, event.location].filter(Boolean).join(" · ");
   return (
-    <div ref={setNodeRef} style={style} className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${anchor ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-white"} ${isDragging ? "opacity-70 shadow-lg ring-2 ring-gray-300" : ""}`}>
-      <button {...attributes} {...listeners} className="shrink-0 cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 touch-none" title="Drag to a wave" aria-label="Drag event"><GripVertical className="w-4 h-4" /></button>
+    <div ref={setNodeRef} style={style} className={`group/row flex items-center gap-2 py-2 ${isDragging ? "opacity-80 bg-white rounded-lg px-2 shadow-lg ring-1 ring-gray-200" : ""}`}>
+      <button {...attributes} {...listeners} className="shrink-0 cursor-grab active:cursor-grabbing text-gray-200 group-hover/row:text-gray-400 hover:text-gray-600 touch-none" title="Drag to a wave" aria-label="Drag event"><GripVertical className="w-4 h-4" /></button>
       {anchor && <Star className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
-      <button onClick={() => onOpen?.(event.id)} className="flex-1 min-w-0 text-left text-sm hover:underline inline-flex items-center gap-1"><span className="truncate">{event.name}</span><ExternalLink className="w-3 h-3 text-gray-400 shrink-0" /></button>
-      <span className="text-[12px] text-gray-400 shrink-0">{event.date ?? "—"}</span>
+      <button onClick={() => onOpen?.(event.id)} className="flex-1 min-w-0 text-left">
+        <span className="block text-sm font-medium text-gray-900 truncate group-hover/row:underline">{event.name}</span>
+        {subtitle && <span className="block text-[12px] text-gray-400 truncate">{subtitle}</span>}
+      </button>
       <button onClick={() => onToggleAnchor(event.id)} title={anchor ? "Unmark anchor" : "Mark as anchor"} className={`shrink-0 ${anchor ? "text-amber-500" : "text-gray-300 hover:text-amber-500"}`}><Star className="w-4 h-4" /></button>
       {inWave ? (
         <button onClick={() => onUnassign(event.id)} title="Remove from wave" className="shrink-0 text-gray-300 hover:text-red-600"><X className="w-4 h-4" /></button>
@@ -63,7 +66,7 @@ function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUna
 function DropZone({ id, empty, children }: { id: string; empty: boolean; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
-    <div ref={setNodeRef} className={`rounded-lg border border-dashed p-1.5 space-y-1.5 transition-colors ${isOver ? "border-gray-400 bg-gray-50 ring-2 ring-gray-300" : empty ? "border-gray-200" : "border-transparent"} ${empty ? "min-h-[3rem]" : ""}`}>
+    <div ref={setNodeRef} className={`rounded-lg transition-colors ${isOver ? "bg-gray-50 ring-2 ring-gray-300" : ""} ${empty ? "min-h-[2.25rem]" : "divide-y divide-gray-100"}`}>
       {children}
     </div>
   );
@@ -179,17 +182,18 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(w.id); } }}
             onDragLeave={(e) => { e.stopPropagation(); if (e.currentTarget === e.target) setFileOverWave((cur) => (cur === w.id ? null : cur)); }}
             onDrop={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(null); const fs = Array.from(e.dataTransfer.files); if (fs.length) setDropTarget({ waveId: w.id, files: fs }); } }}
-            className={`rounded-xl border p-4 transition-colors ${fileOverWave === w.id ? "border-gray-400 ring-2 ring-gray-300 bg-gray-50" : wc.border}`}
+            className={`rounded-xl p-3 transition-colors ${fileOverWave === w.id ? "ring-2 ring-gray-300 bg-gray-50" : ""}`}
           >
-            <div className="flex items-center gap-2">
+            {/* Borderless header: color dot + bold name, then dates in gray; remove sits far right. */}
+            <div className="flex items-center gap-2 mb-1.5">
               <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${wc.dot}`} title={`${wc.name} wave`} />
-              <input value={w.name} onChange={(e) => patchWave(w.id, { name: e.target.value })} placeholder="Wave name" className="font-medium text-[15px] flex-1 min-w-0 border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none" />
-              <button onClick={() => removeWave(w.id)} className="text-gray-300 hover:text-red-600 shrink-0" aria-label="Remove wave"><X className="w-4 h-4" /></button>
-            </div>
-            <div className="mt-2 mb-3 flex flex-wrap items-center gap-1">
-              <DateEdit value={w.start} onChange={(v) => patchWave(w.id, { start: v })} placeholder="Start date" />
-              <span className="text-gray-400 text-sm">→</span>
-              <DateEdit value={w.end} onChange={(v) => patchWave(w.id, { end: v })} placeholder="End date" />
+              <input value={w.name} onChange={(e) => patchWave(w.id, { name: e.target.value })} placeholder="Wave name" className="font-semibold text-[15px] min-w-0 flex-1 bg-transparent border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none" />
+              <span className="shrink-0 inline-flex items-center gap-1 text-[13px] text-gray-400">
+                <DateEdit value={w.start} onChange={(v) => patchWave(w.id, { start: v })} placeholder="Start" />
+                <span>–</span>
+                <DateEdit value={w.end} onChange={(v) => patchWave(w.id, { end: v })} placeholder="End" />
+              </span>
+              <button onClick={() => removeWave(w.id)} className="shrink-0 text-gray-300 hover:text-red-600" aria-label="Remove wave"><X className="w-4 h-4" /></button>
             </div>
             <DropZone id={w.id} empty={w.eventIds.length === 0}>
               {w.eventIds.length === 0
