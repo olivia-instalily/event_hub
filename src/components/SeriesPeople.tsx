@@ -92,7 +92,9 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
   const addProfileToBank = (profileId: string) => { if (campaign.people.some((p) => p.profileId === profileId)) return; const pr = profiles.find((x) => x.id === profileId); if (!pr) return; save({ ...campaign, people: [...campaign.people, { id: newPersonId(), profileId, name: pr.name, email: pr.email ?? undefined, waveIds: [], travel: "flying", role: "eng", status: "proposed" }] }); };
   const addFreeTextToBank = () => { const n = bankName.trim(); if (!n) return; save({ ...campaign, people: [...campaign.people, { id: newPersonId(), name: n, waveIds: [], travel: "flying", role: "eng", status: "proposed" }] }); setBankName(""); };
   const removeFromSeries = (id: string) => save({ ...campaign, people: campaign.people.filter((p) => p.id !== id) });
-  const addPlannedToWave = (waveId: string, role: CrewRole, count: number) => { save({ ...campaign, people: [...campaign.people, { id: newPersonId(), waveIds: [waveId], travel: "local", role, status: "proposed", statusByWave: { [waveId]: "proposed" }, plannedCount: count }] }); setOpenAdd(null); };
+  // Planned headcount defaults to FLYING (non-local) so "add N people to a wave" counts toward the
+  // per-wave travel estimate by default — flip a group to local on its dot if they're local staff.
+  const addPlannedToWave = (waveId: string, role: CrewRole, count: number) => { save({ ...campaign, people: [...campaign.people, { id: newPersonId(), waveIds: [waveId], travel: "flying", role, status: "proposed", statusByWave: { [waveId]: "proposed" }, plannedCount: count }] }); setOpenAdd(null); };
 
   const { traveling, local } = crewTravelCounts(campaign);
   const peak = campaignPeak(campaign, eventDates);
@@ -156,7 +158,7 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
           </div>
 
           {/* Person bank — pinned to the right of the waves. */}
-          <aside className="w-full md:w-72 shrink-0 rounded-xl border border-border p-4 md:sticky md:top-4">
+          <aside className="w-full md:w-80 shrink-0 rounded-xl border border-border p-4 md:sticky md:top-4">
             <p className="text-[13px] font-medium text-gray-700">Person bank</p>
             <p className="text-[12px] text-gray-400 mb-3">Everyone on the series. Drag onto a wave to assign.</p>
             <div className="space-y-1.5 mb-3">
@@ -272,7 +274,7 @@ function BankPerson({ person, waveNames, onRole, onRemove }: { person: CampaignP
           other dropdowns. Stop pointer-down so opening it doesn't start a drag. */}
       <span className="shrink-0" onPointerDown={(e) => e.stopPropagation()}>
         <Select value={role} onValueChange={(v) => onRole(v as CrewRole)} items={CREW_ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))}>
-          <SelectTrigger className="h-7 w-[7.5rem] text-[11px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-7 w-[5.5rem] text-[11px]"><SelectValue /></SelectTrigger>
           <SelectContent>{CREW_ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent>
         </Select>
       </span>

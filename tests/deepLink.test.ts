@@ -2,20 +2,31 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   parseDeepLink,
   buildEventDeepLink,
+  buildAppLink,
+  locationSearch,
   setPendingScopingBudget,
   takePendingScopingBudget,
 } from "../src/lib/deepLink";
 
 describe("parseDeepLink", () => {
   it("reads the event id and budget view off the query string", () => {
-    expect(parseDeepLink("?event=evt_123&view=budget")).toEqual({ eventId: "evt_123", view: "budget" });
+    expect(parseDeepLink("?event=evt_123&view=budget")).toEqual({ page: null, eventId: "evt_123", seriesId: null, view: "budget", tab: null });
   });
 
   it("accepts a leading '?' or not", () => {
-    expect(parseDeepLink("event=evt_9")).toEqual({ eventId: "evt_9", view: null });
+    expect(parseDeepLink("event=evt_9")).toEqual({ page: null, eventId: "evt_9", seriesId: null, view: null, tab: null });
   });
 
-  it("returns null when there is no event id", () => {
+  it("reads a series id and optional tab", () => {
+    expect(parseDeepLink("?series=ser_1&tab=people")).toEqual({ page: null, eventId: null, seriesId: "ser_1", view: null, tab: "people" });
+  });
+
+  it("reads a known top-level page and ignores unknown pages", () => {
+    expect(parseDeepLink("?page=calendar")?.page).toBe("calendar");
+    expect(parseDeepLink("?page=nonsense")).toBeNull();
+  });
+
+  it("returns null when it targets nothing", () => {
     expect(parseDeepLink("")).toBeNull();
     expect(parseDeepLink("?view=budget")).toBeNull();
     expect(parseDeepLink("?foo=bar")).toBeNull();
@@ -28,6 +39,32 @@ describe("parseDeepLink", () => {
 
   it("url-decodes the event id", () => {
     expect(parseDeepLink("?event=evt%20a&view=budget")?.eventId).toBe("evt a");
+  });
+});
+
+describe("locationSearch", () => {
+  it("is empty on home", () => {
+    expect(locationSearch({ page: "home", eventId: null, seriesId: null })).toBe("");
+  });
+  it("prefers an open event over everything", () => {
+    expect(locationSearch({ page: "series", eventId: "e1", seriesId: "s1" })).toBe("?event=e1");
+  });
+  it("encodes a selected series and its tab", () => {
+    expect(locationSearch({ page: "series", eventId: null, seriesId: "s1", seriesTab: "budget" })).toBe("?series=s1&tab=budget");
+  });
+  it("encodes a plain top-level page", () => {
+    expect(locationSearch({ page: "calendar", eventId: null, seriesId: null })).toBe("?page=calendar");
+  });
+  it("round-trips a series link through parseDeepLink", () => {
+    const s = locationSearch({ page: "series", eventId: null, seriesId: "s9", seriesTab: "people" });
+    expect(parseDeepLink(s)).toMatchObject({ seriesId: "s9", tab: "people" });
+  });
+});
+
+describe("buildAppLink", () => {
+  it("joins origin + search without a double slash", () => {
+    expect(buildAppLink("https://x.io/", { page: "events", eventId: "e1", seriesId: null })).toBe("https://x.io/?event=e1");
+    expect(buildAppLink("https://x.io", { page: "home", eventId: null, seriesId: null })).toBe("https://x.io/");
   });
 });
 
@@ -51,7 +88,7 @@ describe("buildEventDeepLink", () => {
   it("round-trips through parseDeepLink", () => {
     const url = buildEventDeepLink("https://x.io", "evt_round");
     const search = url.slice(url.indexOf("?"));
-    expect(parseDeepLink(search)).toEqual({ eventId: "evt_round", view: "budget" });
+    expect(parseDeepLink(search)).toMatchObject({ eventId: "evt_round", view: "budget" });
   });
 });
 

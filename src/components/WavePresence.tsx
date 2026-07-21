@@ -44,6 +44,8 @@ const fmtDay = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undef
 const DAY_START = 7 * 60, DAY_END = 23 * 60;
 const parseMin = (t: string | null): number | null => { const m = /^(\d{1,2}):(\d{2})/.exec(t ?? ""); return m ? +m[1] * 60 + +m[2] : null; };
 const fmtTime = (min: number) => { const h = Math.floor(min / 60), m = min % 60; const ap = h >= 12 ? "PM" : "AM"; const h12 = h % 12 || 12; return m ? `${h12}:${String(m).padStart(2, "0")} ${ap}` : `${h12} ${ap}`; };
+// A saved "HH:MM" time → friendly 12-hour clock (e.g. "6:00 PM"); "" if unset/unparseable.
+const fmtClock = (t?: string | null) => { const m = parseMin(t ?? null); return m == null ? "" : fmtTime(m); };
 function timeFrame(start: string | null, end: string | null): { startFrac: number; endFrac: number; label: string } {
   const s = parseMin(start);
   if (s == null) return { startFrac: 0.08, endFrac: 0.92, label: "time TBD" }; // no time set → span the day
@@ -65,6 +67,13 @@ export function WavePresence({ campaign, events, save }: { campaign: Campaign; e
   const eventDates: Record<string, string | null> = {};
   const eventById: Record<string, SeriesEvent> = {};
   for (const e of events) { eventDates[e.id] = e.date; eventById[e.id] = e; }
+
+  // Who a logistics leg involves: named people if given, else an anonymous head-count ("5 people").
+  const logWho = (l: DayLogistic): string => {
+    if (l.peopleIds && l.peopleIds.length) return l.peopleIds.map((id) => { const p = campaign.people.find((x) => x.id === id); return p ? personLabel(p) : null; }).filter(Boolean).join(", ");
+    if (l.count && l.count > 0) return `${l.count} ${l.count === 1 ? "person" : "people"}`;
+    return "";
+  };
 
   const waves = campaign.waves;
   if (waves.length === 0) return <p className="text-gray-400">No waves yet — add them below.</p>;
@@ -160,7 +169,7 @@ export function WavePresence({ campaign, events, save }: { campaign: Campaign; e
                                 {logs.map((l) => (
                                   <li key={l.id} className="flex items-start gap-1.5 text-[12px] text-gray-700">
                                     {l.kind === "travel" ? <Plane className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" /> : <StickyNote className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />}
-                                    <span>{l.time && <span className="text-gray-500">{l.time} · </span>}{l.text}</span>
+                                    <span>{l.time && <span className="text-gray-500">{fmtClock(l.time)} · </span>}{l.text}{logWho(l) && <span className="block text-[11px] text-gray-400">{logWho(l)}</span>}</span>
                                   </li>
                                 ))}
                               </ul>
@@ -183,37 +192,51 @@ export function WavePresence({ campaign, events, save }: { campaign: Campaign; e
                       (travel in / out) unless everyone on the wave is local. Hover for details. */}
                   {(() => {
                     const hasFlyers = campaign.people.some((p) => p.waveIds.includes(w.id) && waveTravel(p, w.id) === "flying");
-                    return days.map((d, i) => {
+                    const nDays = days.length;
+                    // Fraction (0..1) of a leg's time across the 7am→11pm day window; no time → middle.
+                    const dayFrac = (t: string | null | undefined) => {
+                      const m = parseMin(t ?? null);
+                      if (m == null) return 0.5;
+                      return Math.min(1, Math.max(0, (m - DAY_START) / (DAY_END - DAY_START)));
+                    };
+                    const leftFor = (i: number, f: number) => (nDays > 1 ? ((i + f) / nDays) * 100 : f * 100);
+                    // One triangle per leg, positioned at its time so it lands roughly where it happens in
+                    // the day (before/after any event on the same day). Boundary "travel in/out" defaults
+                    // only show on a first/last day with no explicit leg.
+                    type Marker = { key: string; leftPct: number; log?: DayLogistic; boundary?: "in" | "out" };
+                    const markers: Marker[] = [];
+                    days.forEach((d, i) => {
                       const logs = logisticsForDay(campaign, d);
-                      const boundaryTravel = hasFlyers && (i === 0 || i === days.length - 1);
-                      if (!logs.length && !boundaryTravel) return null;
-                      const leftPct = days.length > 1 ? (i + 0.5) / days.length * 100 : 50;
-                      return (
-                        <span key={`log-${d}`} className="absolute top-0 -translate-x-1/2 -translate-y-full z-20" style={{ left: `${leftPct}%` }}
-                          onMouseEnter={() => setLogHover(d)} onMouseLeave={() => setLogHover(null)}>
-                          {/* Triangle (two sides in the light wave color, white fill, open bottom) + a white
-                              segment over the line beneath it, so the line looks like it spikes up. */}
-                          <svg width="12" height="9" viewBox="0 0 12 9" className={`block ${wc.textSoft}`}>
-                            <path d="M1 9 L6 1 L11 9" fill="white" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-                          </svg>
-                          {/* White break over the flat wave line BETWEEN the triangle's base corners, so the
-                              line reads as going up into the triangle (narrow, so the green sides still meet the line). */}
-                          <span className="absolute left-1/2 top-full -translate-x-1/2 -translate-y-1/2 w-2 h-[3px] bg-white z-30" />
-                          {logHover === d && (
-                            <span className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-40 w-max max-w-[220px] rounded-lg border border-border bg-white shadow-lg p-2 text-left">
-                              {logs.length ? logs.map((l) => (
-                                <span key={l.id} className="flex items-start gap-1.5 text-[12px] text-gray-800">
-                                  {l.kind === "travel" ? <Plane className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" /> : <StickyNote className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />}
-                                  <span>{l.time && <span className="text-gray-500">{l.time} · </span>}{l.text}</span>
-                                </span>
-                              )) : (
-                                <span className="flex items-center gap-1.5 text-[12px] text-gray-600"><Plane className="w-3 h-3 text-gray-400" /> {i === 0 ? "Travel in" : "Travel out"} · click the day to add details</span>
-                              )}
-                            </span>
-                          )}
-                        </span>
-                      );
+                      for (const l of logs) markers.push({ key: l.id, leftPct: leftFor(i, dayFrac(l.time)), log: l });
+                      if (hasFlyers && !logs.length && (i === 0 || i === nDays - 1)) {
+                        markers.push({ key: `boundary-${d}`, leftPct: leftFor(i, 0.5), boundary: i === 0 ? "in" : "out" });
+                      }
                     });
+                    return markers.map((mk) => (
+                      <span key={`log-${mk.key}`} className="absolute top-0 -translate-x-1/2 -translate-y-full z-20" style={{ left: `${mk.leftPct}%` }}
+                        onMouseEnter={() => setLogHover(mk.key)} onMouseLeave={() => setLogHover(null)}>
+                        {/* Triangle (two sides in the light wave color, white fill, open bottom) + a white
+                            segment over the line beneath it, so the line looks like it spikes up. */}
+                        <svg width="12" height="9" viewBox="0 0 12 9" className={`block ${wc.textSoft}`}>
+                          <path d="M1 9 L6 1 L11 9" fill="white" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                        </svg>
+                        {/* White break over the flat wave line BETWEEN the triangle's base corners, so the
+                            line reads as going up into the triangle (narrow, so the green sides still meet the line). */}
+                        <span className="absolute left-1/2 top-full -translate-x-1/2 -translate-y-1/2 w-2 h-[3px] bg-white z-30" />
+                        {logHover === mk.key && (
+                          <span className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-40 w-max max-w-[220px] rounded-lg border border-border bg-white shadow-lg p-2 text-left">
+                            {mk.log ? (
+                              <span className="flex items-start gap-1.5 text-[12px] text-gray-800">
+                                {mk.log.kind === "travel" ? <Plane className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" /> : <StickyNote className="w-3 h-3 text-gray-400 mt-0.5 shrink-0" />}
+                                <span>{mk.log.time && <span className="text-gray-500">{fmtClock(mk.log.time)} · </span>}{mk.log.text}{logWho(mk.log) && <span className="block text-[11px] text-gray-400">{logWho(mk.log)}</span>}</span>
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1.5 text-[12px] text-gray-600"><Plane className="w-3 h-3 text-gray-400" /> {mk.boundary === "in" ? "Travel in" : "Travel out"} · click the day to add details</span>
+                            )}
+                          </span>
+                        )}
+                      </span>
+                    ));
                   })()}
                   {(() => {
                     const colW = 100 / days.length;
@@ -305,13 +328,21 @@ function LogisticsModal({ date, people, existing, onClose, onAdd, onRemove }: {
   const [text, setText] = useState("");
   const [time, setTime] = useState("");
   const [peopleIds, setPeopleIds] = useState<string[]>([]);
+  const [count, setCount] = useState<number | "">(""); // anonymous head-count when not naming people
   const named = people.filter((p) => (p.name && p.name.trim()) || p.profileId);
   const fmtDate = new Date(date + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
   const field = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
+  // Who a saved leg involves — names if picked, else the anonymous count.
+  const who = (l: DayLogistic): string => {
+    if (l.peopleIds && l.peopleIds.length) return l.peopleIds.map((id) => { const p = people.find((x) => x.id === id); return p ? personLabel(p) : null; }).filter(Boolean).join(", ");
+    if (l.count && l.count > 0) return `${l.count} ${l.count === 1 ? "person" : "people"}`;
+    return "";
+  };
   const add = () => {
     if (!text.trim()) return;
-    onAdd({ id: logId(), date, kind, text: text.trim(), time: kind === "travel" ? (time || null) : null, peopleIds: kind === "travel" && peopleIds.length ? peopleIds : undefined });
-    setText(""); setTime(""); setPeopleIds([]);
+    const travel = kind === "travel";
+    onAdd({ id: logId(), date, kind, text: text.trim(), time: travel ? (time || null) : null, peopleIds: travel && peopleIds.length ? peopleIds : undefined, count: travel && !peopleIds.length && typeof count === "number" && count > 0 ? count : undefined });
+    setText(""); setTime(""); setPeopleIds([]); setCount("");
   };
   const toggle = (id: string) => setPeopleIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
@@ -328,8 +359,8 @@ function LogisticsModal({ date, people, existing, onClose, onAdd, onRemove }: {
             {existing.map((l) => (
               <li key={l.id} className="flex items-start gap-2 rounded-lg border border-border px-2.5 py-1.5 text-[13px]">
                 {l.kind === "travel" ? <Plane className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0" /> : <StickyNote className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0" />}
-                <span className="flex-1 min-w-0">{l.time && <span className="text-gray-500">{l.time} · </span>}{l.text}
-                  {l.peopleIds && l.peopleIds.length > 0 && <span className="block text-[11px] text-gray-400">{l.peopleIds.map((id) => { const p = people.find((x) => x.id === id); return p ? personLabel(p) : null; }).filter(Boolean).join(", ")}</span>}
+                <span className="flex-1 min-w-0">{l.time && <span className="text-gray-500">{fmtClock(l.time)} · </span>}{l.text}
+                  {who(l) && <span className="block text-[11px] text-gray-400">{who(l)}</span>}
                 </span>
                 <button onClick={() => onRemove(l.id)} className="text-gray-300 hover:text-red-600 shrink-0"><X className="w-3.5 h-3.5" /></button>
               </li>
@@ -350,9 +381,17 @@ function LogisticsModal({ date, people, existing, onClose, onAdd, onRemove }: {
           {kind === "travel" && (
             <>
               <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={field} />
+              {/* Head-count — the quick path: log "N people" without naming anyone. Disabled once
+                  specific people are picked below (then the names carry the count). */}
+              <div className="flex items-center gap-2">
+                <input type="number" min={1} value={count} disabled={peopleIds.length > 0}
+                  onChange={(e) => setCount(e.target.value === "" ? "" : Math.max(1, Math.floor(Number(e.target.value))))}
+                  placeholder="# people" className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 disabled:bg-gray-50 disabled:text-gray-400" />
+                <span className="text-[12px] text-gray-400">people traveling{named.length > 0 ? " — or name them below" : ""}</span>
+              </div>
               {named.length > 0 && (
                 <div>
-                  <p className="text-[12px] text-gray-500 mb-1">People</p>
+                  <p className="text-[12px] text-gray-500 mb-1">Or pick specific people</p>
                   <div className="flex flex-wrap gap-1.5">
                     {named.map((p) => (
                       <button key={p.id} onClick={() => toggle(p.id)} className={`text-[12px] rounded-full border px-2.5 py-1 ${peopleIds.includes(p.id) ? "bg-gray-900 border-gray-900 text-white" : "bg-white border-border text-gray-600 hover:bg-gray-50"}`}>{personLabel(p)}</button>
@@ -390,6 +429,11 @@ function Legend() {
       ))}
       {/* Event tag is grey here because on the graphic each event takes its own wave's color. */}
       <span className="inline-flex items-center gap-1.5 text-[12px] text-gray-500"><span className="w-3.5 h-3.5 rounded-full bg-gray-400 border-[3px] border-white ring-2 ring-gray-300" /> event</span>
+      {/* Two-sided open triangle (point) = a travel leg / logistics marker on the wave line. */}
+      <span className="inline-flex items-center gap-1.5 text-[12px] text-gray-500">
+        <svg width="12" height="9" viewBox="0 0 12 9" className="text-gray-400"><path d="M1 9 L6 1 L11 9" fill="white" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /></svg>
+        travel/logistics
+      </span>
     </div>
   );
 }

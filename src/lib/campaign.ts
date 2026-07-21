@@ -6,7 +6,9 @@ export interface EstimatedLine { id: string; item: string; detail: string; amoun
 
 // A piece of logistics attached to a single day (travel leg, work block, or a plain note). Travel
 // notes carry an optional time + the people involved. Stored on the campaign jsonb, keyed by date.
-export interface DayLogistic { id: string; date: string; kind: "travel" | "note"; text: string; time?: string | null; peopleIds?: string[]; }
+// A travel leg / note can name specific people (peopleIds) OR just carry an anonymous head-count
+// (count), so you can log "5 people fly out" without saying who yet.
+export interface DayLogistic { id: string; date: string; kind: "travel" | "note"; text: string; time?: string | null; peopleIds?: string[]; count?: number | null; }
 
 export interface Wave { id: string; name: string; start: string | null; end: string | null; eventIds: string[]; }
 
@@ -61,9 +63,10 @@ export interface Campaign {
   estimatedLines: EstimatedLine[]; // MANUAL estimated lines only (auto lines are derived, not stored)
   pendingItems: string[];        // known-but-unsized costs, excluded from the total
   logistics: DayLogistic[];      // per-day travel legs / notes
+  folderUrl: string | null;      // single paired Drive folder for the series (open-only)
 }
 
-export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [], currency: "USD", estimatedLines: [], pendingItems: [], logistics: [] });
+export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [], currency: "USD", estimatedLines: [], pendingItems: [], logistics: [], folderUrl: null });
 
 // Coerce a possibly-partial jsonb blob into a well-formed Campaign (older/absent fields default).
 export function normalizeCampaign(raw: any): Campaign {
@@ -81,8 +84,9 @@ export function normalizeCampaign(raw: any): Campaign {
       : [],
     pendingItems: Array.isArray(c.pendingItems) ? c.pendingItems.filter((s: any) => typeof s === "string") : [],
     logistics: Array.isArray(c.logistics)
-      ? c.logistics.map((l: any) => ({ id: String(l.id), date: String(l.date), kind: l.kind === "travel" ? "travel" : "note", text: l.text ?? "", time: l.time ?? null, peopleIds: Array.isArray(l.peopleIds) ? l.peopleIds : undefined }))
+      ? c.logistics.map((l: any) => ({ id: String(l.id), date: String(l.date), kind: l.kind === "travel" ? "travel" : "note", text: l.text ?? "", time: l.time ?? null, peopleIds: Array.isArray(l.peopleIds) ? l.peopleIds : undefined, count: typeof l.count === "number" ? l.count : undefined }))
       : [],
+    folderUrl: typeof c.folderUrl === "string" && c.folderUrl.trim() ? c.folderUrl : null,
   };
 }
 
@@ -192,12 +196,13 @@ export function campaignPeak(c: Campaign, eventDates: Record<string, string | nu
 // Traveling / local counts by DISTINCT people, from the per-wave travel flag: a person counts as
 // "traveling" if they fly for any wave they're on, else "local".
 export function crewTravelCounts(c: Campaign): { traveling: number; local: number } {
-  let traveling = 0;
+  let traveling = 0, local = 0;
   for (const p of c.people) {
+    if (p.waveIds.length === 0) continue; // only crew actually staffed on a wave
     const flies = p.waveIds.some((wid) => waveTravel(p, wid) === "flying");
-    if (flies) traveling++;
+    if (flies) traveling += bodyCount(p); else local += bodyCount(p); // count real bodies (planned groups too)
   }
-  return { traveling, local: c.people.length - traveling };
+  return { traveling, local };
 }
 
 export const distinctPeople = (c: Campaign): number => c.people.length; // each entry is one distinct person
@@ -211,11 +216,19 @@ export function travelerLocalCounts(c: Campaign): { traveling: number; local: nu
   return { traveling, local: c.people.length - traveling };
 }
 
-// Per-wave travel cost: each wave charges (# flyers on that wave) × rate. Locals never counted.
+// Total "traveler-waves": for each wave, the non-local head-count attending it, summed across waves.
+// Counts the ACTUAL bodies coming (anonymous planned groups count as their full headcount, not 1) and
+// respects the per-wave flying/local flag set on the crew board — so 5 flyers on W1 + 5 on W2 = 10.
+export function travelerWaves(c: Campaign): number {
+  return c.waves.reduce((sum, w) => sum + c.people
+    .filter((p) => p.waveIds.includes(w.id) && waveTravel(p, w.id) === "flying")
+    .reduce((s, p) => s + bodyCount(p), 0), 0);
+}
+
+// Per-wave travel cost = (non-local head-count on each wave, summed over waves) × rate. Locals never
+// counted. One person flying to two waves = two trips.
 export function travelEstimate(c: Campaign): number {
-  const rate = c.travelRatePerWave ?? 0;
-  if (!rate) return 0;
-  return c.waves.reduce((sum, w) => sum + c.people.filter((p) => p.travel === "flying" && p.waveIds.includes(w.id)).length * rate, 0);
+  return (c.travelRatePerWave ?? 0) * travelerWaves(c);
 }
 
 export function memberBudgetTotal(events: { eventBudgetTarget: number | null }[]): number {
@@ -233,7 +246,7 @@ export function personNights(c: Campaign, person: CampaignPerson, eventDates: Re
     const b = waveBounds(w, eventDates);
     const span = spanInWave(person, { ...w, start: b.start, end: b.end });
     if (!span) continue;
-    nights += Math.max(0, eachDay(span.from, span.to).length - 1);
+    nights += Math.max(0, eachDay(span.from, span.to).length - 1) * bodyCount(person);
   }
   return nights;
 }
@@ -261,8 +274,8 @@ export interface AutoEstimateLine { key: "travel" | "hotel"; item: string; detai
 export function autoEstimateLines(c: Campaign, eventDates: Record<string, string | null> = {}): AutoEstimateLine[] {
   const out: AutoEstimateLine[] = [];
   if (c.travelRatePerWave != null) {
-    const travelers = c.people.filter((p) => p.travel === "flying").length;
-    out.push({ key: "travel", item: "Flights / travel", detail: `${travelers} traveler${travelers === 1 ? "" : "s"} × wave × ${formatMoney(c.travelRatePerWave, c.currency)}`, amount: travelEstimate(c) });
+    const trips = travelerWaves(c);
+    out.push({ key: "travel", item: "Flights / travel", detail: `${trips} traveler${trips === 1 ? "" : "s"} × ${formatMoney(c.travelRatePerWave, c.currency)} round trip`, amount: travelEstimate(c) });
   }
   if (c.accommodationRatePerNight != null) {
     const acc = accommodationEstimate(c, eventDates);

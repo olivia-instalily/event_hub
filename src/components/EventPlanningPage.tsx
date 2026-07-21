@@ -3566,8 +3566,10 @@ function StringListEditor({ title, initial, onSave, variant, addLabel, placehold
 function ResourcesSection({ links, eventId, setPlan }: { links: ReferenceLink[]; eventId: string; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
-  const [isFolder, setIsFolder] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // A Drive/SharePoint folder link is a folder; everything else is a plain link. No manual toggle.
+  const looksLikeFolder = (u: string) => /\/(drive\/)?folders?\//i.test(u) || /sharepoint\.com\/.*\/Forms\//i.test(u);
 
   const persist = async (next: ReferenceLink[]) => {
     await setEventReferenceLinks(eventId, next);
@@ -3581,9 +3583,9 @@ function ResourcesSection({ links, eventId, setPlan }: { links: ReferenceLink[];
     if (!u.startsWith("http")) { setErr("URL must start with http."); return; }
     setErr(null);
     const id = "rl-" + (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
-    const next: ReferenceLink[] = [...links, { id, label: l, url: u, kind: isFolder ? "folder" : "link" }];
+    const next: ReferenceLink[] = [...links, { id, label: l, url: u, kind: looksLikeFolder(u) ? "folder" : "link" }];
     await persist(next);
-    setLabel(""); setUrl(""); setIsFolder(false);
+    setLabel(""); setUrl("");
   };
 
   const remove = async (id: string) => {
@@ -3629,10 +3631,6 @@ function ResourcesSection({ links, eventId, setPlan }: { links: ReferenceLink[];
           className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm w-56 focus:outline-none focus:ring-1 focus:ring-gray-400"
           onKeyDown={(e) => { if (e.key === "Enter") { void add(); } }}
         />
-        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
-          <input type="checkbox" checked={isFolder} onChange={(e) => setIsFolder(e.target.checked)} className="rounded" />
-          Folder
-        </label>
         <button
           onClick={() => { void add(); }}
           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-gray-700"

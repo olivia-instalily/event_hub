@@ -59,10 +59,18 @@ async function ensureCalendar(token: string, sb: ReturnType<typeof createClient>
   return cal.id as string;
 }
 
+// Absolute deep link back to the event's EventHub page. Base URL comes from the CALLER's origin
+// (the app calls this same-origin), so no config/secret is needed; null when it can't be derived.
+function appLinkFor(req: Request, eventId: string): string | null {
+  let origin = req.headers.get("origin") || "";
+  if (!origin) { try { origin = new URL(req.headers.get("referer") || "").origin; } catch { origin = ""; } }
+  return origin ? `${origin.replace(/\/+$/, "")}/?event=${encodeURIComponent(eventId)}` : null;
+}
+
 // Build a Calendar event body from the EventHub row. Timed if start_time present, else all-day.
-function buildBody(ev: any): Record<string, unknown> {
+function buildBody(ev: any, appLink: string | null): Record<string, unknown> {
   const addDay = (d: string) => { const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() + 1); return x.toISOString().slice(0, 10); };
-  const descParts = [ev.description, ev.luma_url ? `Luma: ${ev.luma_url}` : null].filter(Boolean);
+  const descParts = [ev.description, ev.luma_url ? `Luma: ${ev.luma_url}` : null, appLink ? `EventHub: ${appLink}` : null].filter(Boolean);
   const body: Record<string, unknown> = {
     summary: ev.name ?? "Untitled event",
     location: ev.location ?? undefined,
@@ -93,7 +101,7 @@ Deno.serve(async (req) => {
 
     const token = await accessToken();
     const calendarId = await ensureCalendar(token, sb);
-    const body = buildBody(ev);
+    const body = buildBody(ev, appLinkFor(req, ev.id));
 
     const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
     const url = ev.gcal_event_id ? `${base}/${encodeURIComponent(ev.gcal_event_id)}` : base;

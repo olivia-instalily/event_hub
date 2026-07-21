@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Home, Calendar, CalendarDays, Users, DollarSign, Plus, AlertCircle, Layers } from 'lucide-react';
 import { filesFromDrop } from './lib/drop';
 import { looksLikeBackfill } from './lib/backfill';
-import { parseDeepLink, setPendingScopingBudget } from './lib/deepLink';
+import { parseDeepLink, setPendingScopingBudget, locationSearch } from './lib/deepLink';
 import { EventsPage, CreateEventModal, classifyDropFile } from './components/EventsPage';
 import { BackfillModal } from './components/BackfillModal';
 import { listEvents, type EventListItem } from './lib/db';
@@ -37,7 +37,9 @@ export default function Component() {
   // opens straight to the event (no flash of Home first).
   const { status: authStatus, user: authUser } = useAuth();
   const [deepLink] = useState(() => (typeof window !== 'undefined' ? parseDeepLink(window.location.search) : null));
-  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'tutorial' | 'admin' | 'series'>(deepLink ? 'events' : 'home');
+  const [activePage, setActivePage] = useState<'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'tutorial' | 'admin' | 'series'>(
+    deepLink?.eventId ? 'events' : deepLink?.seriesId ? 'series' : (deepLink?.page ?? 'home'),
+  );
   // Lifted so navigation can leave the Events page and return to the same event detail.
   const [selectedEventId, setSelectedEventId] = useState<string | null>(deepLink?.eventId ?? null);
   // When set (and on the People page), People is scoped to this event with a Back button.
@@ -48,7 +50,9 @@ export default function Component() {
   // (e.g. a Home todo → Back to Home, a Budget row → Back to Budget).
   type Page = 'home' | 'events' | 'people' | 'vendors' | 'contacts' | 'budget' | 'calendar' | 'series';
   const [eventOrigin, setEventOrigin] = useState<Page>('events');
-  const [selectedSeriesId, setSelectedSeriesId] = useState<string | null>(null);
+  const [selectedSeriesId, setSelectedSeriesId] = useState<string | null>(deepLink?.seriesId ?? null);
+  // The series sub-tab to open on a deep link (?series=<id>&tab=…) — consumed once by SeriesDashboard.
+  const [seriesInitialTab] = useState<string | null>(deepLink?.seriesId ? deepLink.tab : null);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
   // Delay before the "drop to create" overlay appears when off a card — long enough that dragging
@@ -174,15 +178,21 @@ export default function Component() {
     fetch('/functions/v1/luma-sync', { method: 'POST' }).catch(() => {});
   }, []);
 
-  // Finish resolving the deep link after mount: register the "open the scoping/budget form"
-  // intent (the event's Overview consumes it once it mounts, after its data loads), then strip
-  // the params so a later refresh or revisit doesn't re-open the form. Nav state above already
-  // opened the event; clearing the URL doesn't touch it.
+  // Finish resolving the deep link after mount: register the one-shot "open the scoping/budget form"
+  // intent (the event's Overview consumes it once it mounts, after its data loads). Nav state above
+  // already opened the target; the URL-sync effect below then rewrites the address bar to the
+  // canonical shape (dropping view=budget), so a later refresh doesn't re-open the form.
   useEffect(() => {
-    if (!deepLink) return;
-    if (deepLink.view === 'budget') setPendingScopingBudget(deepLink.eventId);
-    try { window.history.replaceState(null, '', window.location.pathname); } catch { /* ignore */ }
+    if (deepLink?.view === 'budget' && deepLink.eventId) setPendingScopingBudget(deepLink.eventId);
   }, [deepLink]);
+
+  // Keep the address bar in sync with the current view so any event / series / page is a copyable,
+  // shareable link (IAP restores the path+query across login). replaceState (not push) so we don't
+  // spam browser history as the user clicks around.
+  useEffect(() => {
+    const search = locationSearch({ page: activePage, eventId: selectedEventId, seriesId: selectedSeriesId });
+    try { window.history.replaceState(null, '', `${window.location.pathname}${search}`); } catch { /* ignore */ }
+  }, [activePage, selectedEventId, selectedSeriesId]);
 
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
 
@@ -265,7 +275,7 @@ export default function Component() {
         {activePage === 'contacts' && <ContactsPage />}
         {activePage === 'series' && (
           selectedSeriesId
-            ? <SeriesDashboard seriesId={selectedSeriesId} onBack={() => setSelectedSeriesId(null)} onOpenEvent={(id) => openEvent(id, 'series')} />
+            ? <SeriesDashboard seriesId={selectedSeriesId} initialTab={seriesInitialTab} onBack={() => setSelectedSeriesId(null)} onOpenEvent={(id) => openEvent(id, 'series')} />
             : <SeriesListPage onOpen={(id) => setSelectedSeriesId(id)} />
         )}
         {activePage === 'budget' && <BudgetPage onOpenEvent={(id) => openEvent(id, 'budget')} />}

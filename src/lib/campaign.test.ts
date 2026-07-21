@@ -14,6 +14,7 @@ function fixture(): Campaign {
     estimatedLines: [],
     pendingItems: [],
     logistics: [],
+    folderUrl: null,
     waves: [
       { id: "w1", name: "Wave 1", start: "2026-09-01", end: "2026-09-07", eventIds: ["e-hack", "e-mixer"] },
       { id: "w2", name: "Wave 2", start: "2026-09-08", end: "2026-09-14", eventIds: ["e-hack"] },
@@ -93,6 +94,7 @@ describe("budget: normalizeCampaign defaults", () => {
   it("defaults currency to USD and budget arrays to empty", () => {
     const c = normalizeCampaign({});
     expect(c.currency).toBe("USD");
+    expect(c.folderUrl).toBeNull();
     expect(c.estimatedLines).toEqual([]);
     expect(c.pendingItems).toEqual([]);
   });
