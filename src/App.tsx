@@ -269,7 +269,7 @@ export default function Component() {
             : <SeriesListPage onOpen={(id) => setSelectedSeriesId(id)} />
         )}
         {activePage === 'budget' && <BudgetPage onOpenEvent={(id) => openEvent(id, 'budget')} />}
-        {activePage === 'calendar' && <CalendarPage onOpenEvent={(id) => openEvent(id, 'calendar')} />}
+        {activePage === 'calendar' && <CalendarPage onOpenEvent={(id) => openEvent(id, 'calendar')} onOpenEventsPage={() => navTo('events')} />}
         {activePage === 'tutorial' && <TutorialPage />}
         {activePage === 'admin' && <PeopleAdminPage />}
       </div>

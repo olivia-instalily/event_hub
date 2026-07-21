@@ -2,7 +2,8 @@ import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, Chevr
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
+import { categoryOf, CategoryDots, ExternalDetail, ALL_CATS, type CatKey } from "./externalEvents";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
@@ -1830,15 +1831,16 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
 
 export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, openCreate = false, initialFiles = null, looksPast = false, onFilesConsumed, onNewEventFiles }: EventsPageProps) {
   const [events, setEvents] = useState<EventListItem[]>([]);
+  const [externalEvents, setExternalEvents] = useState<EventListItem[]>([]); // external conferences (we're attending)
+  const [detail, setDetail] = useState<EventListItem | null>(null); // open external event → read-only card
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [bookmarkedEvents, setBookmarkedEvents] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines' | 'calendar'>('cards');
-  // Status filter presets: "All" (the DEFAULT — every status, split into Upcoming / Past sections)
-  // or exactly one of future / in-process / past. Kept as a Set so the filtering logic stays the same.
-  // Templates is a separate exclusive view.
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
+  // Category filter shown as colored dots (Future/In-Process/Past/External) — toggle any in/out.
+  // Default: all on. Templates is a separate exclusive view.
+  const [selectedCats, setSelectedCats] = useState<Set<CatKey>>(() => new Set(ALL_CATS));
   const [templatesView, setTemplatesView] = useState(false);
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
@@ -1846,9 +1848,6 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   const [formatFilter, setFormatFilter] = useState<string>('all');
   const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [dateRange, setDateRange] = useState<'all' | 'week' | 'month' | '3months' | 'year' | 'custom'>('all');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
   const [createOpen, setCreateOpen] = useState(openCreate);
   const [backfillOpen, setBackfillOpen] = useState(false);
   const [backfillText, setBackfillText] = useState<string | undefined>(undefined); // handed from a past-event drop
@@ -1920,10 +1919,13 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   };
 
   const load = () =>
-    listEvents()
-      .then(setEvents)
+    Promise.all([listEvents(), listExternalConferences()])
+      .then(([e, x]) => { setEvents(e); setExternalEvents(x); })
       .catch((e) => setError(e.message ?? String(e)))
       .finally(() => setLoading(false));
+
+  // Toggle a colored-dot category in/out; never allow an empty selection (falls back to all).
+  const toggleCat = (k: CatKey) => { setTemplatesView(false); setSelectedCats((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n.size ? n : new Set(ALL_CATS); }); };
 
   // Drop a doc/folder onto an event card/row to add to it (shared with Home, etc.).
   const { dropZone, dragOverId, dropBusyId, overlays: dropOverlays } = useEventDrop(() => void load());
@@ -1965,35 +1967,21 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // Distinct formats across events (each event may carry several joined formats).
   const formatOptions = Array.from(new Set(events.flatMap(e => parseFormats(e.format ?? "")))).filter(Boolean).sort((a, b) => a.localeCompare(b));
 
-  // Date filtering is meaningful only when Past is among the selected statuses.
-  const showDateFilter = !templatesView && selectedStatuses.has('past');
-  let dateFrom: string | null = null;
-  let dateTo: string | null = null;
-  if (showDateFilter) {
-    if (dateRange === 'custom') {
-      dateFrom = customStart || null;
-      dateTo = customEnd || null;
-    } else if (dateRange !== 'all') {
-      const days = { week: 7, month: 30, '3months': 90, year: 365 }[dateRange];
-      const t = new Date();
-      const c = new Date(t);
-      c.setDate(c.getDate() - days);
-      dateFrom = c.toISOString().slice(0, 10);
-      dateTo = t.toISOString().slice(0, 10);
-    }
-  }
+  const todayIso = new Date().toISOString().slice(0, 10);
+  // Upcoming vs Past. External events have no status — section them by their date.
+  const sectionOf = (e: EventListItem): 'upcoming' | 'past' =>
+    e.isExternal ? ((e.date && e.date < todayIso) ? 'past' : 'upcoming') : (e.status === 'past' ? 'past' : 'upcoming');
 
-  const filteredEvents = events.filter(event => {
-    // The Templates view shows only templates; every other view excludes them.
+  // Regular events + external conferences (we're attending), filtered by the colored-dot categories.
+  const filteredEvents = [...events, ...externalEvents].filter(event => {
+    // The Templates view shows only templates; every other view excludes them (external included).
     if (templatesView ? !event.isTemplate : event.isTemplate) return false;
-    if (!templatesView && !selectedStatuses.has(event.status)) return false;
+    if (!templatesView && !selectedCats.has(categoryOf(event))) return false;
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
     if (ownerFilter !== 'all' && !event.owners.some(o => o.name === ownerFilter)) return false;
     if (tagFilter !== 'all' && !event.tags.includes(tagFilter)) return false;
     if (formatFilter !== 'all' && !parseFormats(event.format ?? "").includes(formatFilter)) return false;
     if (showBookmarkedOnly && !bookmarkedEvents.has(event.id)) return false;
-    if (dateFrom && (!event.date || event.date < dateFrom)) return false;
-    if (dateTo && (!event.date || event.date > dateTo)) return false;
     const q = searchQuery.trim().toLowerCase();
     if (q) {
       const hay = `${event.title} ${event.seriesName ?? ''} ${event.tags.join(' ')} ${event.location ?? ''}`.toLowerCase();
@@ -2001,9 +1989,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     }
     return true;
   }).sort((a, b) => {
-    // Two sections: Upcoming (in-process + future) before Past. Within Upcoming, nearest-to-today
-    // first (ascending). Within Past, most-recent first (descending). Undated last in its section.
-    const asec = a.status === 'past' ? 1 : 0, bsec = b.status === 'past' ? 1 : 0;
+    // Two sections: Upcoming before Past. Within Upcoming, nearest-to-today first (ascending).
+    // Within Past, most-recent first (descending). Undated last in its section.
+    const asec = sectionOf(a) === 'past' ? 1 : 0, bsec = sectionOf(b) === 'past' ? 1 : 0;
     if (asec !== bsec) return asec - bsec;
     const ad = a.date ?? '', bd = b.date ?? '';
     if (!ad && !bd) return 0;
@@ -2012,9 +2000,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
     return asec === 0 ? ad.localeCompare(bd) : bd.localeCompare(ad);
   });
 
-  // The list is grouped into Upcoming (in-process + future) then Past. Section headers show only
-  // when both are present — a single-status filter (or Templates) shows just its own group.
-  const sectionOf = (e: EventListItem): 'upcoming' | 'past' => (e.status === 'past' ? 'past' : 'upcoming');
+  // Section headers show only when both Upcoming and Past are present.
   const showSections = !templatesView && new Set(filteredEvents.map(sectionOf)).size > 1;
   const SECTION_LABEL: Record<'upcoming' | 'past', string> = { upcoming: 'Upcoming', past: 'Past' };
 
@@ -2058,40 +2044,12 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
       {/* Status Tabs */}
       <div className="flex items-center justify-between mb-6">
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {/* Colored-dot category filter — toggle Future/In-Process/Past/External in and out. */}
+          <CategoryDots selected={templatesView ? new Set() : selectedCats} onToggle={toggleCat} />
+          <span className="w-px h-5 bg-border mx-1" />
           <button
-            onClick={() => { setTemplatesView(false); setSelectedStatuses(new Set(['future', 'in-process', 'past'] as EventStatus[])); }}
-            aria-pressed={!templatesView && selectedStatuses.size === 3}
-            title="Show all"
-            className={`px-2 py-1 rounded-lg border transition-all ${
-              !templatesView && selectedStatuses.size === 3
-                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
-                : 'bg-white border-border text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            All
-          </button>
-          {(['future', 'in-process', 'past'] as EventStatus[]).map((s) => {
-            const active = !templatesView && selectedStatuses.size === 1 && selectedStatuses.has(s);
-            const label = s === 'future' ? 'Future' : s === 'in-process' ? 'In-Process' : 'Past';
-            return (
-              <button
-                key={s}
-                onClick={() => { setTemplatesView(false); setSelectedStatuses(new Set([s])); }}
-                aria-pressed={active}
-                title={`Show only ${label}`}
-                className={`px-2 py-1 rounded-lg border transition-all ${
-                  active
-                    ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
-                    : 'bg-white border-border text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                {label}
-              </button>
-            );
-          })}
-          <button
-            onClick={() => setTemplatesView(true)}
+            onClick={() => setTemplatesView((v) => !v)}
             aria-pressed={templatesView}
             className={`px-2 py-1 rounded-lg border transition-all ${
               templatesView
@@ -2151,32 +2109,6 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
             options={[{ value: 'all', label: 'All Formats' }, ...formatOptions.map((f) => ({ value: f, label: f }))]}
           />
 
-          {/* Date filter — Past / All only */}
-          {showDateFilter && (
-            <>
-              <SelectMenu
-                value={dateRange}
-                onChange={(v) => setDateRange(v as typeof dateRange)}
-                className="w-44"
-                options={[
-                  { value: 'all', label: 'Any date' },
-                  { value: 'week', label: 'Past week' },
-                  { value: 'month', label: 'Past month' },
-                  { value: '3months', label: 'Past 3 months' },
-                  { value: 'year', label: 'Past year' },
-                  { value: 'custom', label: 'Custom range…' },
-                ]}
-              />
-              {dateRange === 'custom' && (
-                <div className="flex items-center gap-2">
-                  <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="px-3 py-2 border border-border rounded-lg text-sm" />
-                  <span className="text-gray-400 text-sm">→</span>
-                  <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="px-3 py-2 border border-border rounded-lg text-sm" />
-                </div>
-              )}
-            </>
-          )}
-
           <button
             onClick={() => setShowBookmarkedOnly(!showBookmarkedOnly)}
             className={`px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
@@ -2220,7 +2152,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
         </p>
       )}
       {!loading && !error && filteredEvents.length === 0 && (
-        <p className="text-gray-500 py-12 text-center">{templatesView ? 'No templates.' : selectedStatuses.size === 0 ? 'No status selected — pick Future, In-Process, or Past.' : 'No events match.'}</p>
+        <p className="text-gray-500 py-12 text-center">{templatesView ? 'No templates.' : 'No events match.'}</p>
       )}
 
       {/* Cards View */}
@@ -2233,8 +2165,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
             {showHeader && <h3 className="md:col-span-2 text-sm font-medium text-gray-500 mt-2 first:mt-0">{SECTION_LABEL[sectionOf(event)]}</h3>}
             <div
               {...dropZone(event.id, event.title)}
-              className={`group relative bg-card rounded-xl p-6 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex flex-col ${dragOverId === event.id ? 'ring-2 ring-gray-400 bg-gray-50' : 'ring-1 ring-foreground/10'}`}
-              onClick={() => setSelectedEventId(event.id)}
+              className={`group relative rounded-xl p-6 hover:shadow-md transition-shadow cursor-pointer overflow-hidden flex flex-col ${dragOverId === event.id ? 'ring-2 ring-gray-400 bg-gray-50' : event.isExternal ? 'bg-purple-50/40 ring-1 ring-purple-200' : 'bg-card ring-1 ring-foreground/10'}`}
+              onClick={() => (event.isExternal ? setDetail(event) : setSelectedEventId(event.id))}
             >
               {dropBusyId === event.id && <div className="absolute inset-0 z-10 bg-white/70 flex items-center justify-center text-sm text-gray-600">Processing dropped files…</div>}
               {event.coverImageUrl && (
@@ -2251,7 +2183,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               )}
 
               <div className="flex items-center justify-between gap-2 mb-3 min-h-[2rem]">
-                <TagStack tags={event.tags} editable onChange={(tags) => setTags(event.id, tags)} onTagClick={setTagFilter} />
+                {event.isExternal
+                  ? <span className="inline-flex items-center gap-1 text-[12px] font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-full px-2 py-0.5">External{event.quarter ? ` · ${event.quarter}` : ''}</span>
+                  : <TagStack tags={event.tags} editable onChange={(tags) => setTags(event.id, tags)} onTagClick={setTagFilter} />}
                 <div className="flex items-center gap-2 shrink-0">
                   {event.attendeeCount != null && (
                     <>
@@ -2393,8 +2327,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                 {showHeader && <TableRow className="hover:bg-transparent"><TableCell colSpan={8} className="px-4 py-2 bg-muted/30 text-sm font-medium text-gray-500">{SECTION_LABEL[sectionOf(event)]}</TableCell></TableRow>}
                 <TableRow
                   {...dropZone(event.id, event.title)}
-                  className={`group/row cursor-pointer transition-colors ${dragOverId === event.id ? 'bg-gray-100' : ''} ${dropBusyId === event.id ? 'opacity-60 pointer-events-none' : ''}`}
-                  onClick={() => setSelectedEventId(event.id)}
+                  className={`group/row cursor-pointer transition-colors ${dragOverId === event.id ? 'bg-gray-100' : event.isExternal ? 'bg-purple-50/40 hover:bg-purple-50' : ''} ${dropBusyId === event.id ? 'opacity-60 pointer-events-none' : ''}`}
+                  onClick={() => (event.isExternal ? setDetail(event) : setSelectedEventId(event.id))}
                 >
                   <TableCell className="px-4 py-4 whitespace-normal">
                     <div className="flex items-center gap-3">
@@ -2402,6 +2336,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
                       <div>
                         <p className="font-medium flex items-center gap-1.5">
                           <span>{event.title}</span>
+                          {event.isExternal && <span className="inline-flex items-center text-[11px] font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-full px-1.5 py-0.5 shrink-0">External</span>}
                           {event.finalRecordComplete && <span title="Complete record" className="inline-flex shrink-0"><BadgeCheck className="w-4 h-4 text-emerald-600" /></span>}
                           {dropBusyId === event.id && <span className="inline-flex items-center gap-1 text-[12px] font-normal text-gray-500 shrink-0"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing…</span>}
                         </p>
@@ -2447,7 +2382,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
       {/* Calendar View — month grid, events on their dates */}
       {!loading && !error && viewMode === 'calendar' && (
-        <CalendarView events={filteredEvents} onOpen={(id) => setSelectedEventId(id)} />
+        <CalendarView events={filteredEvents} onOpen={(id) => { const x = externalEvents.find((e) => e.id === id); if (x) setDetail(x); else setSelectedEventId(id); }} />
       )}
 
       {pastChooser && (
@@ -2496,6 +2431,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           onClose={() => setDeleteTarget(null)}
         />
       )}
+
+      {detail && <ExternalDetail item={detail} onClose={() => setDetail(null)} />}
     </div>
   );
 }
