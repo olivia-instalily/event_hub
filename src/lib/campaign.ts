@@ -2,6 +2,8 @@
 // dashboard tabs and briefs. No DB access here — all functions take data and return values.
 export type Drive = "recruiting" | "culture" | "client";
 
+export interface EstimatedLine { id: string; item: string; detail: string; amount: number; }
+
 export interface Wave { id: string; name: string; start: string | null; end: string | null; eventIds: string[]; }
 
 // Per-wave color, assigned by wave ORDER and reused everywhere a wave appears (Plan, People, Briefs,
@@ -49,9 +51,12 @@ export interface Campaign {
   waves: Wave[];
   people: CampaignPerson[];
   anchorEventIds: string[];
+  currency: string;              // per-series, default "CAD"
+  estimatedLines: EstimatedLine[]; // MANUAL estimated lines only (auto lines are derived, not stored)
+  pendingItems: string[];        // known-but-unsized costs, excluded from the total
 }
 
-export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [] });
+export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [], currency: "CAD", estimatedLines: [], pendingItems: [] });
 
 // Coerce a possibly-partial jsonb blob into a well-formed Campaign (older/absent fields default).
 export function normalizeCampaign(raw: any): Campaign {
@@ -63,6 +68,11 @@ export function normalizeCampaign(raw: any): Campaign {
     waves: Array.isArray(c.waves) ? c.waves.map((w: any) => ({ id: String(w.id), name: w.name ?? "", start: w.start ?? null, end: w.end ?? null, eventIds: Array.isArray(w.eventIds) ? w.eventIds : [] })) : [],
     people: Array.isArray(c.people) ? c.people.map((p: any) => ({ id: String(p.id), profileId: p.profileId ?? null, name: p.name, email: p.email, waveIds: Array.isArray(p.waveIds) ? p.waveIds : [], travel: p.travel === "local" ? "local" : "flying", lodging: p.lodging ?? null, travelDetail: p.travelDetail ?? null, eventIds: Array.isArray(p.eventIds) ? p.eventIds : undefined, role: CREW_ROLES.includes(p.role) ? p.role : "eng", status: p.status === "proposed" ? "proposed" : "confirmed", spans: p.spans && typeof p.spans === "object" ? p.spans : undefined, statusByWave: p.statusByWave && typeof p.statusByWave === "object" ? p.statusByWave : undefined, travelByWave: p.travelByWave && typeof p.travelByWave === "object" ? p.travelByWave : undefined, plannedCount: typeof p.plannedCount === "number" ? p.plannedCount : null })) : [],
     anchorEventIds: Array.isArray(c.anchorEventIds) ? c.anchorEventIds : [],
+    currency: typeof c.currency === "string" && c.currency.trim() ? c.currency : "CAD",
+    estimatedLines: Array.isArray(c.estimatedLines)
+      ? c.estimatedLines.map((l: any) => ({ id: String(l.id), item: l.item ?? "", detail: l.detail ?? "", amount: typeof l.amount === "number" ? l.amount : 0 }))
+      : [],
+    pendingItems: Array.isArray(c.pendingItems) ? c.pendingItems.filter((s: any) => typeof s === "string") : [],
   };
 }
 
@@ -221,6 +231,36 @@ export function accommodationEstimate(c: Campaign, eventDates: Record<string, st
   const rate = c.accommodationRatePerNight ?? 0;
   const nights = c.people.reduce((s, p) => s + personNights(c, p, eventDates), 0);
   return { nights, cost: nights * rate };
+}
+
+// Currency-aware money formatter (no cents). Falls back to a plain $ if the code is unknown.
+export function formatMoney(amount: number, currency = "CAD"): string {
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }).format(amount); }
+  catch { return `$${Math.round(amount).toLocaleString()}`; }
+}
+
+export function manualEstimatedTotal(c: Campaign): number {
+  return c.estimatedLines.reduce((s, l) => s + (l.amount || 0), 0);
+}
+
+export interface AutoEstimateLine { key: "travel" | "hotel"; item: string; detail: string; amount: number; }
+// Travel + hotel estimate lines DERIVED from the rate helpers × People data. Present only when their
+// rate is set. Never stored — recomputed each render so they can't drift.
+export function autoEstimateLines(c: Campaign, eventDates: Record<string, string | null> = {}): AutoEstimateLine[] {
+  const out: AutoEstimateLine[] = [];
+  if (c.travelRatePerWave != null) {
+    const travelers = c.people.filter((p) => p.travel === "flying").length;
+    out.push({ key: "travel", item: "Flights / travel", detail: `${travelers} traveler${travelers === 1 ? "" : "s"} × wave × ${formatMoney(c.travelRatePerWave, c.currency)}`, amount: travelEstimate(c) });
+  }
+  if (c.accommodationRatePerNight != null) {
+    const acc = accommodationEstimate(c, eventDates);
+    out.push({ key: "hotel", item: "Accommodation", detail: `${acc.nights} traveler-night${acc.nights === 1 ? "" : "s"} × ${formatMoney(c.accommodationRatePerNight, c.currency)}`, amount: acc.cost });
+  }
+  return out;
+}
+
+export function estimatedSubtotal(c: Campaign, eventDates: Record<string, string | null> = {}): number {
+  return manualEstimatedTotal(c) + autoEstimateLines(c, eventDates).reduce((s, l) => s + l.amount, 0);
 }
 
 export interface BriefEvent { id: string; name: string; date: string | null; location: string | null; }

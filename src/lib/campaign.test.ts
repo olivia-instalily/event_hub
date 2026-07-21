@@ -10,6 +10,9 @@ function fixture(): Campaign {
     travelRatePerWave: 500,
     accommodationRatePerNight: null,
     anchorEventIds: ["e-hack"],
+    currency: "CAD",
+    estimatedLines: [],
+    pendingItems: [],
     waves: [
       { id: "w1", name: "Wave 1", start: "2026-09-01", end: "2026-09-07", eventIds: ["e-hack", "e-mixer"] },
       { id: "w2", name: "Wave 2", start: "2026-09-08", end: "2026-09-14", eventIds: ["e-hack"] },
@@ -78,5 +81,60 @@ describe("personBrief", () => {
   });
   it("returns null for an unknown person", () => {
     expect(personBrief(fixture(), "nope", eventsById)).toBeNull();
+  });
+});
+
+import {
+  normalizeCampaign, manualEstimatedTotal, autoEstimateLines, estimatedSubtotal, formatMoney,
+} from "./campaign";
+
+describe("budget: normalizeCampaign defaults", () => {
+  it("defaults currency to CAD and budget arrays to empty", () => {
+    const c = normalizeCampaign({});
+    expect(c.currency).toBe("CAD");
+    expect(c.estimatedLines).toEqual([]);
+    expect(c.pendingItems).toEqual([]);
+  });
+  it("preserves provided budget fields", () => {
+    const c = normalizeCampaign({ currency: "USD", estimatedLines: [{ id: "l1", item: "Merch", detail: "tees", amount: 300 }], pendingItems: ["videographer TBD"] });
+    expect(c.currency).toBe("USD");
+    expect(c.estimatedLines).toEqual([{ id: "l1", item: "Merch", detail: "tees", amount: 300 }]);
+    expect(c.pendingItems).toEqual(["videographer TBD"]);
+  });
+});
+
+describe("budget: estimated totals", () => {
+  const base = normalizeCampaign({
+    currency: "CAD",
+    travelRatePerWave: 500,
+    accommodationRatePerNight: null,
+    estimatedLines: [{ id: "l1", item: "Merch", detail: "tees", amount: 300 }, { id: "l2", item: "Signage", detail: "banner", amount: 200 }],
+    waves: [{ id: "w1", name: "W1", start: "2026-09-01", end: "2026-09-03", eventIds: [] }],
+    people: [{ id: "p1", waveIds: ["w1"], travel: "flying" }, { id: "p2", waveIds: ["w1"], travel: "local" }],
+  });
+  it("sums manual estimated lines", () => {
+    expect(manualEstimatedTotal(base)).toBe(500);
+  });
+  it("derives a travel auto line (1 flyer × 1 wave × 500)", () => {
+    const autos = autoEstimateLines(base);
+    const travel = autos.find((a) => a.key === "travel");
+    expect(travel?.amount).toBe(500);
+  });
+  it("omits the hotel auto line when the rate is null", () => {
+    expect(autoEstimateLines(base).some((a) => a.key === "hotel")).toBe(false);
+  });
+  it("estimated subtotal = manual + autos (500 manual + 500 travel)", () => {
+    expect(estimatedSubtotal(base)).toBe(1000);
+  });
+  it("no travel auto line when the travel rate is null", () => {
+    const c = normalizeCampaign({ ...base, travelRatePerWave: null });
+    expect(autoEstimateLines(c).some((a) => a.key === "travel")).toBe(false);
+    expect(estimatedSubtotal(c)).toBe(500); // just the manual lines
+  });
+});
+
+describe("budget: formatMoney", () => {
+  it("formats with the given currency, no cents", () => {
+    expect(formatMoney(1500, "CAD")).toMatch(/1,500/);
   });
 });
