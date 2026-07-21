@@ -1201,7 +1201,7 @@ function PhaseEditor({
 }) {
   const [open, setOpen] = useState(false);
   const [addName, setAddName] = useState("");
-  const [editNames, setEditNames] = useState<Record<number, string>>({});
+  const [editNames, setEditNames] = useState<Record<string, string>>({}); // keyed by phase name (stable across reorder)
   const [busy, setBusy] = useState(false);
 
   // Sorted copy for rendering
@@ -1283,20 +1283,20 @@ function PhaseEditor({
       {open && (
         <div className="px-5 pb-4 space-y-2">
           {sorted.map((p, i) => {
-            const editing = editNames[p.order] ?? p.name;
+            const editing = editNames[p.name] ?? p.name;
             return (
               <div key={p.name} className="flex items-center gap-2">
                 <input
                   className="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
                   value={editing}
-                  onChange={(e) => setEditNames((m) => ({ ...m, [p.order]: e.target.value }))}
+                  onChange={(e) => setEditNames((m) => ({ ...m, [p.name]: e.target.value }))}
                   onBlur={() => {
-                    const v = editNames[p.order];
+                    const v = editNames[p.name];
                     if (v !== undefined && v.trim() && v.trim() !== p.name) {
                       void handleRename(p.name, v.trim());
-                      setEditNames((m) => { const n = { ...m }; delete n[p.order]; return n; });
+                      setEditNames((m) => { const n = { ...m }; delete n[p.name]; return n; });
                     } else {
-                      setEditNames((m) => { const n = { ...m }; delete n[p.order]; return n; });
+                      setEditNames((m) => { const n = { ...m }; delete n[p.name]; return n; });
                     }
                   }}
                   onKeyDown={(e) => {
