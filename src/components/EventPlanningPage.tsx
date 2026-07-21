@@ -57,6 +57,7 @@ import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
 import { LinearLauncher } from "./LinearLauncher";
 import { OpenInLinear } from "./OpenInLinear";
+import { SeriesAttach } from "./SeriesAttach";
 import { DateEdit } from "./DateEdit";
 import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
 import { parseVendors } from "../lib/vendorImport";
@@ -3974,6 +3975,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             </div>
             <div className="mb-4 flex items-center gap-4 flex-wrap">
               <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
+              <SeriesAttach eventId={eventId} />
               <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || loadScoping(eventId).strategicJustification || "" }} />
               {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
               {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}

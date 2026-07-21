@@ -19,6 +19,7 @@ import {
   type BudgetView,
 } from "../lib/db";
 import { TagStack } from "./TagStack";
+import { SeriesAttach } from "./SeriesAttach";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { StatusControl } from "./StatusControl";
 import { CoverImage } from "./CoverImage";
@@ -305,7 +306,7 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
                 <TagStack tags={event.tags} editable onChange={saveTags} />
               </div>
               <h1 className="text-3xl mb-1">{event.title}</h1>
-              {event.seriesName && <p className="text-gray-500 mb-2">part of {event.seriesName}</p>}
+              <div className="mb-2"><SeriesAttach eventId={event.id} seriesId={event.seriesId} seriesName={event.seriesName} /></div>
               {event.description && <p className="text-gray-700 mb-2 whitespace-pre-wrap">{event.description}</p>}
               <div className="mb-2"><FormatPicker value={parseFormats(event.format)} onChange={saveFormat} /></div>
               {event.audience && <p className="text-gray-600 mb-4">{event.audience}</p>}
