@@ -4,9 +4,10 @@ import { DndContext, pointerWithin, PointerSensor, KeyboardSensor, useSensor, us
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
 import { type Wave, waveColor } from "../lib/campaign";
-import { listEvents, setEventSeries, type EventListItem, type SeriesEvent } from "../lib/db";
+import { listEvents, setEventSeries, extractBrief, createPlanningEvent, type EventListItem, type SeriesEvent } from "../lib/db";
 import { DateEdit } from "./DateEdit";
 import { WavePresence } from "./WavePresence";
+import { ConfirmModal } from "./Modal";
 
 const newWaveId = () => "w-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
 
@@ -86,6 +87,8 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
   // or a wave id = add straight into that wave.
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<EventListItem[]>([]);
+  const [dropTarget, setDropTarget] = useState<{ waveId: string; files: File[] } | null>(null); // file dropped on a wave → confirm create
+  const [fileOverWave, setFileOverWave] = useState<string | null>(null); // wave currently under a file-drag
   useEffect(() => {
     if (pickerFor === null) { setCandidates([]); return; }
     listEvents().then((all) => setCandidates(all.filter((e) => !e.isTemplate && e.seriesId !== seriesId))).catch(() => setCandidates([]));
@@ -114,6 +117,32 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
     reloadEvents(); // refetch ONLY the member events — leaves the optimistic wave assignment intact
   };
 
+  // Drop a brief FILE onto a wave → confirm → create an event from it and assign it to that wave.
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+  const createFromDrop = async () => {
+    if (!dropTarget) return;
+    const { waveId, files } = dropTarget;
+    setDropTarget(null);
+    const file = files[0];
+    const text = await file.text().catch(() => "");
+    let ex: Awaited<ReturnType<typeof extractBrief>> | null = null;
+    try { ex = await extractBrief(text); } catch { ex = null; }
+    const name = (ex?.title && ex.title.trim()) || file.name.replace(/\.[^.]+$/, "") || "Untitled event";
+    // Assume this year (or next occurrence) for a year-less/stale date — matches the create flow.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    let date = (ex?.date && ex.date.trim()) || null;
+    if (date && date < todayIso) { const d = new Date(date + "T00:00:00"); const now = new Date(); d.setFullYear(now.getFullYear()); if (d.toISOString().slice(0, 10) < todayIso) d.setFullYear(now.getFullYear() + 1); date = d.toISOString().slice(0, 10); }
+    const id = await createPlanningEvent({
+      name, date, location: (ex?.location && ex.location.trim()) || null, tags: [],
+      format: (ex?.format && ex.format.trim()) || null,
+      template: { name, vendorCategories: [], budgetLines: [], progressCategories: [] },
+    }).catch(() => null);
+    if (!id) return;
+    await setEventSeries(id, seriesId).catch(() => {});
+    assignEvent(id, waveId);
+    reloadEvents();
+  };
+
   // Drag a row onto a wave → assign there; onto the pending bin → unassign.
   const onDragEnd = (e: DragEndEvent) => {
     if (!e.over) return;
@@ -135,7 +164,13 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
         {campaign.waves.map((w, wi) => {
           const wc = waveColor(wi);
           return (
-          <section key={w.id} className={`rounded-xl border ${wc.border} p-4`}>
+          <section
+            key={w.id}
+            onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(w.id); } }}
+            onDragLeave={(e) => { e.stopPropagation(); if (e.currentTarget === e.target) setFileOverWave((cur) => (cur === w.id ? null : cur)); }}
+            onDrop={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(null); const fs = Array.from(e.dataTransfer.files); if (fs.length) setDropTarget({ waveId: w.id, files: fs }); } }}
+            className={`rounded-xl border p-4 transition-colors ${fileOverWave === w.id ? "border-gray-400 ring-2 ring-gray-300 bg-gray-50" : wc.border}`}
+          >
             <div className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${wc.dot}`} title={`${wc.name} wave`} />
               <input value={w.name} onChange={(e) => patchWave(w.id, { name: e.target.value })} placeholder="Wave name" className="font-medium text-[15px] flex-1 min-w-0 border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none" />
@@ -148,7 +183,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             </div>
             <DropZone id={w.id} empty={w.eventIds.length === 0}>
               {w.eventIds.length === 0
-                ? <p className="text-[13px] text-gray-400 px-1 py-1.5">No events yet — drag one here or use “Add event”.</p>
+                ? <p className="text-[13px] text-gray-400 px-1 py-1.5">No events yet — drop a brief, drag one here, or use “Add event”.</p>
                 : w.eventIds.map((id) => eventsById[id] && (
                     <EventChip key={id} event={eventsById[id]} anchor={campaign.anchorEventIds.includes(id)} inWave waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onUnassign={unassign} onAssign={assignEvent} />
                   ))}
@@ -192,6 +227,16 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
           </div>
         </section>
       </div>
+
+      {dropTarget && (
+        <ConfirmModal
+          title="Create event + assign to this wave?"
+          message={`Create an event from “${dropTarget.files[0]?.name ?? "this file"}” and add it to ${campaign.waves.find((w) => w.id === dropTarget.waveId)?.name || "this wave"}?`}
+          confirmLabel="Create + assign"
+          onConfirm={() => void createFromDrop()}
+          onClose={() => setDropTarget(null)}
+        />
+      )}
     </DndContext>
   );
 }
