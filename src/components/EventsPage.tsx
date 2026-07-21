@@ -2,8 +2,8 @@ import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, Chevr
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
-import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
-import { categoryOf, CategoryDots, ExternalDetail, ALL_CATS, type CatKey } from "./externalEvents";
+import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
+import { ExternalDetail } from "./externalEvents";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
@@ -1838,10 +1838,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
   const [bookmarkedEvents, setBookmarkedEvents] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines' | 'calendar'>('cards');
-  // Category filter shown as colored dots (Future/In-Process/Past/External) — toggle any in/out.
-  // Default: all on. Templates is a separate exclusive view.
-  const [selectedCats, setSelectedCats] = useState<Set<CatKey>>(() => new Set(ALL_CATS));
+  // Status filter presets: "All" (the DEFAULT) or exactly one of future / in-process / past —
+  // operated events only. Templates and External are separate exclusive views (their own buttons).
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
   const [templatesView, setTemplatesView] = useState(false);
+  const [externalView, setExternalView] = useState(false); // "External" button — show only external conferences
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
@@ -1924,9 +1925,6 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       .catch((e) => setError(e.message ?? String(e)))
       .finally(() => setLoading(false));
 
-  // Toggle a colored-dot category in/out; never allow an empty selection (falls back to all).
-  const toggleCat = (k: CatKey) => { setTemplatesView(false); setSelectedCats((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n.size ? n : new Set(ALL_CATS); }); };
-
   // Drop a doc/folder onto an event card/row to add to it (shared with Home, etc.).
   const { dropZone, dragOverId, dropBusyId, overlays: dropOverlays } = useEventDrop(() => void load());
 
@@ -1972,11 +1970,12 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   const sectionOf = (e: EventListItem): 'upcoming' | 'past' =>
     e.isExternal ? ((e.date && e.date < todayIso) ? 'past' : 'upcoming') : (e.status === 'past' ? 'past' : 'upcoming');
 
-  // Regular events + external conferences (we're attending), filtered by the colored-dot categories.
-  const filteredEvents = [...events, ...externalEvents].filter(event => {
-    // The Templates view shows only templates; every other view excludes them (external included).
-    if (templatesView ? !event.isTemplate : event.isTemplate) return false;
-    if (!templatesView && !selectedCats.has(categoryOf(event))) return false;
+  // Three exclusive views: Templates (only templates), External (only external conferences), or the
+  // default status view (operated events filtered by the selected status). Common filters apply to all.
+  const base = templatesView ? events.filter(e => e.isTemplate)
+    : externalView ? externalEvents
+    : events.filter(e => !e.isTemplate && selectedStatuses.has(e.status));
+  const filteredEvents = base.filter(event => {
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
     if (ownerFilter !== 'all' && !event.owners.some(o => o.name === ownerFilter)) return false;
     if (tagFilter !== 'all' && !event.tags.includes(tagFilter)) return false;
@@ -2045,11 +2044,52 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       {/* Status Tabs */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
-          {/* Colored-dot category filter — toggle Future/In-Process/Past/External in and out. */}
-          <CategoryDots selected={templatesView ? new Set() : selectedCats} onToggle={toggleCat} />
-          <span className="w-px h-5 bg-border mx-1" />
           <button
-            onClick={() => setTemplatesView((v) => !v)}
+            onClick={() => { setTemplatesView(false); setExternalView(false); setSelectedStatuses(new Set(['future', 'in-process', 'past'] as EventStatus[])); }}
+            aria-pressed={!templatesView && !externalView && selectedStatuses.size === 3}
+            title="Show all"
+            className={`px-2 py-1 rounded-lg border transition-all ${
+              !templatesView && !externalView && selectedStatuses.size === 3
+                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            All
+          </button>
+          {(['future', 'in-process', 'past'] as EventStatus[]).map((s) => {
+            const active = !templatesView && !externalView && selectedStatuses.size === 1 && selectedStatuses.has(s);
+            const label = s === 'future' ? 'Future' : s === 'in-process' ? 'In-Process' : 'Past';
+            return (
+              <button
+                key={s}
+                onClick={() => { setTemplatesView(false); setExternalView(false); setSelectedStatuses(new Set([s])); }}
+                aria-pressed={active}
+                title={`Show only ${label}`}
+                className={`px-2 py-1 rounded-lg border transition-all ${
+                  active
+                    ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                    : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+          {/* External — its own view: only the external conferences we're attending (purple dot). */}
+          <button
+            onClick={() => { setTemplatesView(false); setExternalView(true); }}
+            aria-pressed={externalView}
+            title="Show only external events we're attending"
+            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border transition-all ${
+              externalView
+                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
+                : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-purple-500" /> External
+          </button>
+          <button
+            onClick={() => { setExternalView(false); setTemplatesView(true); }}
             aria-pressed={templatesView}
             className={`px-2 py-1 rounded-lg border transition-all ${
               templatesView
