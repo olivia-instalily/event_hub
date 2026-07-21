@@ -45,7 +45,7 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
   const removePending = (i: number) => save({ ...campaign, pendingItems: campaign.pendingItems.filter((_, j) => j !== i) });
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="space-y-6">
       {/* Total estimate — top-right corner, to the right of everything else. */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-[13px] text-amber-800">
