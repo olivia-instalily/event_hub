@@ -1842,7 +1842,9 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // operated events only. Templates and External are separate exclusive views (their own buttons).
   const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
   const [templatesView, setTemplatesView] = useState(false);
-  const [externalView, setExternalView] = useState(false); // "External" button — show only external conferences
+  // "External" is an additive modifier (not an exclusive view): when on, show only external events,
+  // still narrowed by the selected status tag (their status is derived from their dates).
+  const [externalOn, setExternalOn] = useState(false);
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
@@ -1970,10 +1972,17 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   const sectionOf = (e: EventListItem): 'upcoming' | 'past' =>
     e.isExternal ? ((e.date && e.date < todayIso) ? 'past' : 'upcoming') : (e.status === 'past' ? 'past' : 'upcoming');
 
-  // Three exclusive views: Templates (only templates), External (only external conferences), or the
-  // default status view (operated events filtered by the selected status). Common filters apply to all.
+  // External events have no stored status — derive it from their dates so the status tags apply.
+  const extStatus = (e: EventListItem): EventStatus => {
+    const end = e.endDate ?? e.date;
+    if (end && end < todayIso) return 'past';
+    if (e.date && e.date > todayIso) return 'future';
+    return 'in-process';
+  };
+  // Templates is an exclusive view (ignores the status tags). External is an additive modifier: when
+  // on, show only external events narrowed by the status tags; otherwise operated events by status.
   const base = templatesView ? events.filter(e => e.isTemplate)
-    : externalView ? externalEvents
+    : externalOn ? externalEvents.filter(e => selectedStatuses.has(extStatus(e)))
     : events.filter(e => !e.isTemplate && selectedStatuses.has(e.status));
   const filteredEvents = base.filter(event => {
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
@@ -2045,11 +2054,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => { setTemplatesView(false); setExternalView(false); setSelectedStatuses(new Set(['future', 'in-process', 'past'] as EventStatus[])); }}
-            aria-pressed={!templatesView && !externalView && selectedStatuses.size === 3}
+            onClick={() => { setTemplatesView(false); setSelectedStatuses(new Set(['future', 'in-process', 'past'] as EventStatus[])); }}
+            aria-pressed={!templatesView && selectedStatuses.size === 3}
             title="Show all"
             className={`px-2 py-1 rounded-lg border transition-all ${
-              !templatesView && !externalView && selectedStatuses.size === 3
+              !templatesView && selectedStatuses.size === 3
                 ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
                 : 'bg-white border-border text-gray-700 hover:bg-gray-50'
             }`}
@@ -2057,12 +2066,12 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
             All
           </button>
           {(['future', 'in-process', 'past'] as EventStatus[]).map((s) => {
-            const active = !templatesView && !externalView && selectedStatuses.size === 1 && selectedStatuses.has(s);
+            const active = !templatesView && selectedStatuses.size === 1 && selectedStatuses.has(s);
             const label = s === 'future' ? 'Future' : s === 'in-process' ? 'In-Process' : 'Past';
             return (
               <button
                 key={s}
-                onClick={() => { setTemplatesView(false); setExternalView(false); setSelectedStatuses(new Set([s])); }}
+                onClick={() => { setTemplatesView(false); setSelectedStatuses(new Set([s])); }}
                 aria-pressed={active}
                 title={`Show only ${label}`}
                 className={`px-2 py-1 rounded-lg border transition-all ${
@@ -2075,21 +2084,23 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               </button>
             );
           })}
-          {/* External — its own view: only the external conferences we're attending (purple dot). */}
+          {/* External — additive modifier (borderless to signal it differs): narrows the current
+              status view to only the external events we're attending. Grey background when on. */}
           <button
-            onClick={() => { setTemplatesView(false); setExternalView(true); }}
-            aria-pressed={externalView}
-            title="Show only external events we're attending"
-            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border transition-all ${
-              externalView
-                ? 'bg-gray-900 border-gray-900 text-white shadow-sm'
-                : 'bg-white border-border text-gray-700 hover:bg-gray-50'
+            onClick={() => { setTemplatesView(false); setExternalOn((v) => !v); }}
+            aria-pressed={!templatesView && externalOn}
+            title="Also filter to only external events we're attending"
+            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg transition-all ${
+              !templatesView && externalOn ? 'bg-gray-200 text-gray-900' : 'text-gray-700 hover:bg-gray-100'
             }`}
           >
             <span className="w-2 h-2 rounded-full bg-purple-500" /> External
           </button>
+
+          {/* Templates is a different kind of view (exclusive) — set slightly apart. */}
+          <span className="w-px h-5 bg-border mx-1" />
           <button
-            onClick={() => { setExternalView(false); setTemplatesView(true); }}
+            onClick={() => { setExternalOn(false); setTemplatesView(true); }}
             aria-pressed={templatesView}
             className={`px-2 py-1 rounded-lg border transition-all ${
               templatesView
