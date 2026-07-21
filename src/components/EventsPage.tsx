@@ -483,10 +483,18 @@ function LumaSwatch({ url, fallback }: { url: string | null; fallback: string })
 }
 
 // Month-grid calendar of the (filtered) events, placed on their dates. Click an event to open it.
-export function CalendarView({ events, onOpen }: { events: EventListItem[]; onOpen: (id: string) => void }) {
+export function CalendarView({ events, onOpen, jump }: { events: EventListItem[]; onOpen: (id: string) => void; jump?: { date: string; nonce: number } }) {
   const pad = (n: number) => String(n).padStart(2, "0");
   const now = new Date();
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  // Jump to a given date's month when asked (the Calendar page's Future/In-Process/Past keys). The
+  // nonce lets the same date re-trigger a jump after manual navigation.
+  useEffect(() => {
+    if (!jump?.date) return;
+    const d = new Date(jump.date + "T12:00:00");
+    setCursor({ y: d.getFullYear(), m: d.getMonth() });
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [jump?.nonce]);
   const todayIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
   const byDay = useMemo(() => {
