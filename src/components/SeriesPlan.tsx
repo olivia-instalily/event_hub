@@ -182,7 +182,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(w.id); } }}
             onDragLeave={(e) => { e.stopPropagation(); if (e.currentTarget === e.target) setFileOverWave((cur) => (cur === w.id ? null : cur)); }}
             onDrop={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(null); const fs = Array.from(e.dataTransfer.files); if (fs.length) setDropTarget({ waveId: w.id, files: fs }); } }}
-            className={`rounded-xl p-3 transition-colors ${fileOverWave === w.id ? "ring-2 ring-gray-300 bg-gray-50" : ""}`}
+            className={`px-1 pt-1 pb-5 transition-colors ${fileOverWave === w.id ? "ring-2 ring-gray-300 bg-gray-50 rounded-xl" : "border-b border-gray-200"}`}
           >
             {/* Borderless header: color dot + bold name, then dates in gray; remove sits far right. */}
             <div className="flex items-center gap-2 mb-1.5">
