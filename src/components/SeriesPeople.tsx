@@ -1,6 +1,6 @@
 import { useState, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Plus, X, Plane, MapPin, Clock, Check, GripVertical } from "lucide-react";
+import { Plus, X, Plane, MapPin, Clock, Check, GripVertical, ChevronDown } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
@@ -270,15 +270,20 @@ function DotPopover({ person, wave, days, onClose, onRole, onStatus, onTravel, o
           {days.length === 0 ? (
             <p className="text-[12px] text-gray-400">Set the wave's dates on the Plan tab first.</p>
           ) : (
-            <div className="grid grid-cols-[2rem_1fr] items-center gap-x-2 gap-y-1.5">
-              <span className="text-[12px] text-gray-400">From</span>
-              <select value={from} onChange={(e) => onSpan(e.target.value, to < e.target.value ? e.target.value : to)} className={`${selCls} w-full`}>
-                {days.map((d) => <option key={d} value={d}>{fmtDay(d)}</option>)}
-              </select>
-              <span className="text-[12px] text-gray-400">To</span>
-              <select value={to} onChange={(e) => onSpan(from, e.target.value)} className={`${selCls} w-full`}>
-                {days.filter((d) => d >= from).map((d) => <option key={d} value={d}>{fmtDay(d)}</option>)}
-              </select>
+            <div className="flex items-center gap-1.5">
+              <div className="relative flex-1 min-w-0">
+                <select value={from} onChange={(e) => onSpan(e.target.value, to < e.target.value ? e.target.value : to)} className={`${selCls} w-full appearance-none pr-6`}>
+                  {days.map((d) => <option key={d} value={d}>{fmtDay(d)}</option>)}
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+              <span className="text-[12px] text-gray-400 shrink-0">→</span>
+              <div className="relative flex-1 min-w-0">
+                <select value={to} onChange={(e) => onSpan(from, e.target.value)} className={`${selCls} w-full appearance-none pr-6`}>
+                  {days.filter((d) => d >= from).map((d) => <option key={d} value={d}>{fmtDay(d)}</option>)}
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
             </div>
           )}
         </div>

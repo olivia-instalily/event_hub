@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, X, Star, GripVertical } from "lucide-react";
+import { Plus, X, Star, GripVertical, AlertCircle } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
@@ -187,6 +187,10 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
         {view === "plan" && <>
         {campaign.waves.map((w, wi) => {
           const wc = waveColor(wi);
+          // Events assigned to this wave whose date falls outside the wave's own date range (both set).
+          const outOfRange = (w.start && w.end)
+            ? w.eventIds.map((id) => eventsById[id]).filter((e): e is SeriesEvent => !!e && !!e.date && (e.date < w.start! || e.date > w.end!))
+            : [];
           return (
           <section
             key={w.id}
@@ -206,6 +210,14 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
               </span>
               <button onClick={() => removeWave(w.id)} className="shrink-0 text-gray-300 hover:text-red-600" aria-label="Remove wave"><X className="w-4 h-4" /></button>
             </div>
+            {outOfRange.length > 0 && (
+              <p className="flex items-start gap-1 text-[12px] text-red-600 mb-1.5 ml-[1.125rem]">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                <span>{outOfRange.length === 1
+                  ? `“${outOfRange[0].name}” (${outOfRange[0].date}) falls outside this wave's dates.`
+                  : `${outOfRange.length} events fall outside this wave's dates: ${outOfRange.map((e) => e.name).join(", ")}.`}</span>
+              </p>
+            )}
             <div className="flex">
               {/* Colored left rail — same color as the dot, dropping straight down from it (with a
                   gap below the dot). Acts as the wave's left edge; content is indented to its right. */}

@@ -145,39 +145,68 @@ export function WavePresence({ campaign, events }: { campaign: Campaign; events:
                   {/* Start / end dates — bigger, on the band's ends, in line with the event titles. */}
                   {w.start && <span className="absolute top-1.5 left-0 text-[13px] font-medium text-gray-600">{fmtDay(w.start)}</span>}
                   {w.end && w.end !== w.start && <span className="absolute top-1.5 right-0 text-[13px] font-medium text-gray-600">{fmtDay(w.end)}</span>}
-                  {waveEvents.map((e) => {
-                    const i = days.indexOf(e.date!);
+                  {(() => {
                     const colW = 100 / days.length;
-                    const centerPct = days.length > 1 ? (i + 0.5) / days.length * 100 : 50; // centered on its day (the white line)
-                    // Highlight when the event's day column is hovered (the block that lights up) — or the dot itself.
-                    const on = eventHover === e.id || (hover?.waveId === w.id && hover?.day === e.date);
-                    const tf = timeFrame(e.startTime, e.endTime);
+                    // Group events by day — a day can hold several.
+                    const byDay = new Map<string, SeriesEvent[]>();
+                    for (const e of waveEvents) { const a = byDay.get(e.date!) ?? []; a.push(e); byDay.set(e.date!, a); }
                     return (
-                      <span key={e.id}>
-                        {/* On hover the dot disappears and the event's time range highlights on the line in
-                            the wave's color (layered above the dot so it's never covered). */}
-                        {on && (
-                          <span className="absolute top-0 -translate-y-1/2 pointer-events-none z-30 transition-all duration-150"
-                            style={{ left: `${(i + tf.startFrac) * colW + (tf.endFrac - tf.startFrac) * colW * 0.1}%`, width: `${(tf.endFrac - tf.startFrac) * colW * 0.8}%` }}>
-                            {/* light rectangular highlight over the line, with a thin solid line down its middle */}
-                            <span className={`relative block h-2 ${wc.soft}`}>
-                              <span className={`absolute inset-x-0 top-1/2 -translate-y-1/2 h-px ${wc.strong}`} />
+                      <>
+                        {/* Time-range highlights — shown ONLY when the day's BLOCK is hovered (one per event). */}
+                        {hover?.waveId === w.id && (byDay.get(hover.day) ?? []).map((e) => {
+                          const i = days.indexOf(e.date!);
+                          const tf = timeFrame(e.startTime, e.endTime);
+                          return (
+                            <span key={`tl-${e.id}`} className="absolute top-0 -translate-y-1/2 pointer-events-none z-30 transition-all duration-150"
+                              style={{ left: `${(i + tf.startFrac) * colW + (tf.endFrac - tf.startFrac) * colW * 0.1}%`, width: `${(tf.endFrac - tf.startFrac) * colW * 0.8}%` }}>
+                              <span className={`relative block h-2 ${wc.soft}`}><span className={`absolute inset-x-0 top-1/2 -translate-y-1/2 h-px ${wc.strong}`} /></span>
+                              <span className={`absolute -top-5 left-1/2 -translate-x-1/2 rounded px-1 py-px text-[10px] font-semibold whitespace-nowrap ${wc.text} ${wc.bg}`}>{tf.label}</span>
                             </span>
-                            <span className={`absolute -top-5 left-1/2 -translate-x-1/2 rounded px-1 py-px text-[10px] font-semibold whitespace-nowrap ${wc.text} ${wc.bg}`}>{tf.label}</span>
-                          </span>
-                        )}
-                        {/* Donut dot centered on its day; fades out on hover (replaced by the range above). */}
-                        <span className="absolute top-0 -translate-x-1/2 z-20" style={{ left: `${centerPct}%` }}
-                          onMouseEnter={() => setEventHover(e.id)} onMouseLeave={() => setEventHover(null)}>
-                          <span className={`block w-3 h-3 rounded-full border-[3px] border-white ring-2 -translate-y-1/2 transition-opacity duration-150 ${wc.dot} ${wc.ring} ${on ? "opacity-0" : "opacity-100"}`} />
-                          <span className="absolute top-1.5 left-1/2 -translate-x-1/2 w-20 text-center pointer-events-none">
-                            <span className="block text-[10px] leading-tight text-gray-600 truncate">{e.name}</span>
-                            {e.date && <span className="block text-[9px] text-gray-400">{fmtDay(e.date)}</span>}
-                          </span>
-                        </span>
-                      </span>
+                          );
+                        })}
+                        {/* One dot per day; its label lists the day's event(s); hovering the dot pops the list. */}
+                        {[...byDay.entries()].map(([date, evs]) => {
+                          const i = days.indexOf(date);
+                          const centerPct = days.length > 1 ? (i + 0.5) / days.length * 100 : 50;
+                          const key = `${w.id}|${date}`;
+                          const dh = eventHover === key;
+                          return (
+                            <span key={date} className="absolute top-0 -translate-x-1/2 z-20" style={{ left: `${centerPct}%` }}
+                              onMouseEnter={() => setEventHover(key)} onMouseLeave={() => setEventHover(null)}>
+                              <span className={`block w-3 h-3 rounded-full border-[3px] border-white ring-2 -translate-y-1/2 ${wc.dot} ${wc.ring}`} />
+                              <span className="absolute top-1.5 left-1/2 -translate-x-1/2 w-24 text-center pointer-events-none">
+                                {evs.length === 1 ? (
+                                  <span className="block text-[10px] leading-tight text-gray-600 truncate">{evs[0].name}</span>
+                                ) : (
+                                  <ul className="inline-block text-left text-[10px] leading-tight text-gray-600">
+                                    {evs.map((e) => <li key={e.id} className="list-disc ml-3 truncate">{e.name}</li>)}
+                                  </ul>
+                                )}
+                                <span className="block text-[9px] text-gray-400">{fmtDay(date)}</span>
+                              </span>
+                              {/* Dot-hover popup: the day's events as a list. */}
+                              {dh && (
+                                <span className="absolute top-full mt-1 left-1/2 -translate-x-1/2 z-40 w-max max-w-[240px] rounded-lg border border-border bg-white shadow-lg p-2 text-left">
+                                  <span className="block text-[11px] font-medium text-gray-700 mb-1">{fmtDay(date)} · {evs.length} event{evs.length === 1 ? "" : "s"}</span>
+                                  <ul className="space-y-1.5">
+                                    {evs.map((e) => {
+                                      const tf = timeFrame(e.startTime, e.endTime);
+                                      return (
+                                        <li key={e.id} className="text-[12px] text-gray-800">
+                                          <span className="flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full shrink-0 ${wc.dot}`} />{e.name}</span>
+                                          <span className="block ml-3 text-[10px] text-gray-400">{tf.label}{e.location ? ` · ${e.location}` : ""}</span>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })}
+                      </>
                     );
-                  })}
+                  })()}
                 </div>
               </div>
             </div>
