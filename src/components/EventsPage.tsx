@@ -1,5 +1,5 @@
 import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, ChevronDown, ChevronLeft, ChevronRight, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight, Sparkles, BadgeCheck, Loader2 } from "lucide-react";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
 import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
@@ -503,7 +503,7 @@ function LumaSwatch({ url, fallback }: { url: string | null; fallback: string })
 }
 
 // Month-grid calendar of the (filtered) events, placed on their dates. Click an event to open it.
-export function CalendarView({ events, onOpen, jump }: { events: EventListItem[]; onOpen: (id: string) => void; jump?: { date: string; nonce: number } }) {
+export function CalendarView({ events, onOpen, jump, footerRight }: { events: EventListItem[]; onOpen: (id: string) => void; jump?: { date: string; nonce: number }; footerRight?: ReactNode }) {
   const pad = (n: number) => String(n).padStart(2, "0");
   const now = new Date();
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() });
@@ -522,7 +522,9 @@ export function CalendarView({ events, onOpen, jump }: { events: EventListItem[]
     for (const e of events) { if (!e.date) continue; const arr = map.get(e.date); if (arr) arr.push(e); else map.set(e.date, [e]); }
     return map;
   }, [events]);
-  const undated = events.filter((e) => !e.date);
+  // Templates have no date by design — they're reusable Event Types, not calendar instances — so they
+  // must never surface in the "No date" list. Only real undated events belong there.
+  const undated = events.filter((e) => !e.date && !e.isTemplate);
   // Hover preview (with cover) — fixed-positioned so it escapes the grid's overflow clipping.
   const [preview, setPreview] = useState<{ e: EventListItem; top: number; left: number } | null>(null);
   const onChipEnter = (ev: React.MouseEvent, e: EventListItem) => {
@@ -574,13 +576,20 @@ export function CalendarView({ events, onOpen, jump }: { events: EventListItem[]
           </div>
         ))}
       </div>
-      {undated.length > 0 && (
-        <div className="mt-3 text-[13px] text-gray-500">
-          <span className="text-gray-400">No date ({undated.length}):</span>{" "}
-          {undated.slice(0, 10).map((e) => (
-            <button key={e.id} onClick={() => onOpen(e.id)} className="underline decoration-dotted underline-offset-2 mr-2 hover:text-gray-900">{e.title}</button>
-          ))}
-          {undated.length > 10 && <span className="text-gray-400">+{undated.length - 10} more</span>}
+      {(undated.length > 0 || footerRight) && (
+        <div className="mt-3 flex items-start justify-between gap-4">
+          <div className="text-[13px] text-gray-500 min-w-0">
+            {undated.length > 0 && (
+              <>
+                <span className="text-gray-400">No date ({undated.length}):</span>{" "}
+                {undated.slice(0, 10).map((e) => (
+                  <button key={e.id} onClick={() => onOpen(e.id)} className="underline decoration-dotted underline-offset-2 mr-2 hover:text-gray-900">{e.title}</button>
+                ))}
+                {undated.length > 10 && <span className="text-gray-400">+{undated.length - 10} more</span>}
+              </>
+            )}
+          </div>
+          {footerRight && <div className="shrink-0">{footerRight}</div>}
         </div>
       )}
 

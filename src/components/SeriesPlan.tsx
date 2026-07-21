@@ -189,7 +189,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
         {view === "plan" && <>
         {/* Sticky wave nav — always visible; click a wave to jump to its section. */}
         {campaign.waves.length > 1 && (
-          <div className="sticky top-0 z-20 -mx-1 mb-2 flex flex-wrap gap-1.5 border-b border-border bg-white/95 px-1 py-2 backdrop-blur">
+          <div className="sticky top-0 z-30 -mx-1 mb-2 flex flex-wrap gap-1.5 border-b border-border bg-white px-1 py-2 shadow-sm">
             {campaign.waves.map((w, wi) => {
               const wc = waveColor(wi);
               const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });

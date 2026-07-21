@@ -81,15 +81,16 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
       {loading ? (
         <p className="text-gray-400 py-12 text-center">Loading…</p>
       ) : (
-        <CalendarView events={shown} onOpen={onOpen} jump={jump ?? undefined} />
-      )}
-
-      {onOpenEventsPage && (
-        <div className="mt-6 flex justify-center">
-          <button onClick={onOpenEventsPage} className="inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 border border-border rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors">
-            <Calendar className="w-4 h-4" /> Events
-          </button>
-        </div>
+        <CalendarView
+          events={shown}
+          onOpen={onOpen}
+          jump={jump ?? undefined}
+          footerRight={onOpenEventsPage && (
+            <button onClick={onOpenEventsPage} className="inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 border border-border rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors">
+              <Calendar className="w-4 h-4" /> Events
+            </button>
+          )}
+        />
       )}
 
       {addOpen && <ExternalConferenceForm onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); load(); }} />}

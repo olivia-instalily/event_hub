@@ -3773,12 +3773,20 @@ function TimeRangeEditor({ eventId, startTime, endTime, onSaved }: { eventId: st
   const [e, setE] = useState(endTime ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setS(startTime ?? ""); setE(endTime ?? ""); }, [startTime, endTime]);
   const dirty = (s || null) !== (startTime ?? null) || (e || null) !== (endTime ?? null);
   const save = async () => {
-    setSaving(true);
-    try { await updateEvent(eventId, { startTime: s || null, endTime: e || null }); onSaved(s || null, e || null); setSaved(true); setTimeout(() => setSaved(false), 1800); }
-    finally { setSaving(false); }
+    setSaving(true); setErr(null);
+    try {
+      await updateEvent(eventId, { startTime: s || null, endTime: e || null });
+      onSaved(s || null, e || null); setSaved(true); setTimeout(() => setSaved(false), 1800);
+    } catch (ex: any) {
+      // Surface the failure instead of leaving the button silently stuck — otherwise a rejected write
+      // (e.g. a stale PostgREST schema cache that doesn't know the time columns) just looks like "Save
+      // does nothing." The edit stays in the fields so nothing is lost.
+      setErr(ex?.message ?? String(ex));
+    } finally { setSaving(false); }
   };
   const cls = "px-1.5 py-0.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
   return (
@@ -3788,6 +3796,7 @@ function TimeRangeEditor({ eventId, startTime, endTime, onSaved }: { eventId: st
       <input type="time" value={e} onChange={(ev) => setE(ev.target.value)} title="End time" className={cls} />
       {dirty && <button onClick={() => void save()} disabled={saving} className="text-[12px] px-2 py-0.5 rounded bg-gray-900 text-white hover:bg-black disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>}
       {saved && !dirty && <span className="text-[12px] text-emerald-600 inline-flex items-center gap-0.5"><Check className="w-3 h-3" /> Saved</span>}
+      {err && <span className="text-[12px] text-red-600" title={err}>Couldn’t save — {err}</span>}
     </span>
   );
 }
