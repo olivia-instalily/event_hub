@@ -1302,7 +1302,7 @@ function PhaseEditor({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") e.currentTarget.blur();
                     if (e.key === "Escape") {
-                      setEditNames((m) => { const n = { ...m }; delete n[p.order]; return n; });
+                      setEditNames((m) => { const n = { ...m }; delete n[p.name]; return n; });
                     }
                   }}
                   disabled={busy}
