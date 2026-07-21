@@ -5,7 +5,7 @@ import { SourceMaterials } from "./SourceMaterials";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical,
+  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
@@ -34,6 +34,7 @@ import {
   type PlanningFacts, type VendorSuggestion, type BudgetStatus, BUDGET_STATUSES,
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   getBudgetApproval, type BudgetApproval,
+  setEventReferenceLinks, type ReferenceLink,
 } from "../lib/db";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
@@ -3560,7 +3561,91 @@ function StringListEditor({ title, initial, onSave, variant, addLabel, placehold
   );
 }
 
-function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean }) {
+// ── Resources (reference links) ──────────────────────────────────────────────
+// Open-only: Google Docs / Sheets / Drive folders. Never processed or ingested.
+function ResourcesSection({ links, eventId, setPlan }: { links: ReferenceLink[]; eventId: string; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
+  const [label, setLabel] = useState("");
+  const [url, setUrl] = useState("");
+  const [isFolder, setIsFolder] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const persist = async (next: ReferenceLink[]) => {
+    await setEventReferenceLinks(eventId, next);
+    setPlan((p) => (p ? { ...p, referenceLinks: next } : p));
+  };
+
+  const add = async () => {
+    const u = url.trim();
+    const l = label.trim();
+    if (!l) { setErr("Label is required."); return; }
+    if (!u.startsWith("http")) { setErr("URL must start with http."); return; }
+    setErr(null);
+    const id = "rl-" + (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+    const next: ReferenceLink[] = [...links, { id, label: l, url: u, kind: isFolder ? "folder" : "link" }];
+    await persist(next);
+    setLabel(""); setUrl(""); setIsFolder(false);
+  };
+
+  const remove = async (id: string) => {
+    await persist(links.filter((l) => l.id !== id));
+  };
+
+  const hostOf = (u: string) => { try { return new URL(u).hostname; } catch { return u; } };
+
+  return (
+    <div className="bg-white rounded-2xl border border-border p-5">
+      <h3 className="font-medium mb-3">Resources</h3>
+      {links.length === 0 ? (
+        <p className="text-sm text-gray-400 mb-4">No linked resources yet — add a Google Doc, sheet, or folder.</p>
+      ) : (
+        <ul className="space-y-2 mb-4">
+          {links.map((rl) => (
+            <li key={rl.id} className="flex items-center gap-3 group">
+              <span className="shrink-0 text-gray-400">
+                {rl.kind === "folder" ? <Folder className="w-4 h-4" /> : <Link2 className="w-4 h-4" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <a href={rl.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-blue-600 hover:underline truncate block">{rl.label}</a>
+                <span className="text-xs text-gray-400 truncate block">{hostOf(rl.url)}</span>
+              </div>
+              <button onClick={() => remove(rl.id)} className="shrink-0 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity" aria-label="Remove">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Label"
+          className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm w-36 focus:outline-none focus:ring-1 focus:ring-gray-400"
+        />
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://…"
+          className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm w-56 focus:outline-none focus:ring-1 focus:ring-gray-400"
+          onKeyDown={(e) => { if (e.key === "Enter") { void add(); } }}
+        />
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+          <input type="checkbox" checked={isFolder} onChange={(e) => setIsFolder(e.target.checked)} className="rounded" />
+          Folder
+        </label>
+        <button
+          onClick={() => { void add(); }}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-gray-700"
+        >
+          <Plus className="w-3.5 h-3.5" /> Add
+        </button>
+      </div>
+      {err && <p className="text-xs text-red-500 mt-1.5">{err}</p>}
+    </div>
+  );
+}
+
+function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
   const facts = buildFacts(plan);
   // Phase-aware view: the timeline's date-derived "now" sets the default; clicking a node
   // previews another phase's view (Overview-internal state, not tab navigation).
@@ -3752,6 +3837,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
       {scopingOpen && (
         <ScopingForm plan={plan} scoping={scoping} roughTotal={roughTotal} onChange={updateScoping} onClose={() => setScopingOpen(false)} />
       )}
+
+      {/* Resources — open-only reference links (Google Docs / Sheets / folders). */}
+      <ResourcesSection links={plan.referenceLinks} eventId={eventId} setPlan={setPlan} />
 
       {/* Carried lessons */}
       <div>
@@ -4309,7 +4397,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         {/* Skip the setup wizard for anything that's already run: setup-complete, wrapped, or past by
             date. Those land on the actual page (Overview), not the from-scratch setup flow. */}
         {tab === "overview" && ((plan.setupComplete || wrapped || pastByDate)
-          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} />
+          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} setPlan={setPlan} />
           : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
