@@ -2002,12 +2002,18 @@ export async function createSeries(name: string, drive: Drive): Promise<string> 
   return id;
 }
 
+// Member events of a series (non-template). Split out so callers can refetch just the events
+// without re-reading the campaign jsonb (which would clobber an optimistic in-flight campaign save).
+export async function getSeriesEvents(seriesId: string): Promise<SeriesEvent[]> {
+  const { data: evs, error } = await supabase.from("event").select("id, name, event_date, location, event_budget_target").eq("series_id", seriesId).eq("is_template", false);
+  if (error) throw error;
+  return (evs ?? []).map((e: any) => ({ id: e.id, name: e.name, date: e.event_date ?? null, location: e.location ?? null, eventBudgetTarget: e.event_budget_target ?? null }));
+}
+
 export async function getSeriesCampaign(seriesId: string): Promise<{ id: string; name: string; campaign: Campaign; events: SeriesEvent[] }> {
   const { data: s, error } = await supabase.from("event_series").select("id, name, extras").eq("id", seriesId).single();
   if (error) throw error;
-  const { data: evs, error: evErr } = await supabase.from("event").select("id, name, event_date, location, event_budget_target").eq("series_id", seriesId).eq("is_template", false);
-  if (evErr) throw evErr;
-  const events: SeriesEvent[] = (evs ?? []).map((e: any) => ({ id: e.id, name: e.name, date: e.event_date ?? null, location: e.location ?? null, eventBudgetTarget: e.event_budget_target ?? null }));
+  const events = await getSeriesEvents(seriesId);
   return { id: s.id, name: s.name, campaign: normalizeCampaign((s as any).extras?.campaign), events };
 }
 

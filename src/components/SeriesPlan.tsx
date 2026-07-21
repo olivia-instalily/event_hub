@@ -79,7 +79,7 @@ function EventPicker({ candidates, onPick, onCancel }: { candidates: EventListIt
   );
 }
 
-export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, reload }: TabProps) {
+export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, reloadEvents }: TabProps) {
   const [adding, setAdding] = useState(false);
   const [wName, setWName] = useState("");
   // Which target the "add event" picker is open for: null = closed, "pending" = add to series only,
@@ -109,9 +109,9 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
   // member list / pending); if a wave is given, also drops it straight into that wave.
   const addToSeries = async (eventId: string, waveId?: string) => {
     await setEventSeries(eventId, seriesId).catch(() => {});
-    if (waveId) assignEvent(eventId, waveId);
+    if (waveId) assignEvent(eventId, waveId); // optimistic wave assignment (persisted via save)
     setPickerFor(null);
-    reload(); // refetch member events so the new one shows up
+    reloadEvents(); // refetch ONLY the member events — leaves the optimistic wave assignment intact
   };
 
   // Drag a row onto a wave → assign there; onto the pending bin → unassign.

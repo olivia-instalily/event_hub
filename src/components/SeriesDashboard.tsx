@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
-import { getSeriesCampaign, saveCampaign, type SeriesEvent } from "../lib/db";
+import { getSeriesCampaign, getSeriesEvents, saveCampaign, type SeriesEvent } from "../lib/db";
 import { type Campaign, emptyCampaign } from "../lib/campaign";
 import { SeriesPlan } from "./SeriesPlan";
 import { SeriesPeople } from "./SeriesPeople";
@@ -14,6 +14,7 @@ export interface TabProps {
   save: (next: Campaign) => void;
   onOpenEvent?: (id: string) => void;
   reload: () => void;
+  reloadEvents: () => void; // refetch only the member events (leaves the optimistic campaign intact)
 }
 type Tab = "plan" | "people" | "budget" | "briefs";
 const TABS: { key: Tab; label: string }[] = [
@@ -35,7 +36,9 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent }: { seriesId: s
   // Optimistic save: update local state immediately, persist in the background, reload on error.
   const save = (next: Campaign) => { setSaveError(null); setCampaign(next); saveCampaign(seriesId, next).then(() => setSaveError(null)).catch((e: unknown) => { setSaveError(e instanceof Error && e.message ? `Couldn't save — your last change was reverted (${e.message})` : "Couldn't save — your last change was reverted."); load(); }); };
 
-  const props: TabProps = { seriesId, campaign, events, save, onOpenEvent, reload: load };
+  const reloadEvents = () => { getSeriesEvents(seriesId).then(setEvents).catch(() => {}); };
+
+  const props: TabProps = { seriesId, campaign, events, save, onOpenEvent, reload: load, reloadEvents };
 
   return (
     <div className="max-w-5xl mx-auto">
