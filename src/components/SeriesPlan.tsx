@@ -90,6 +90,7 @@ function EventPicker({ candidates, onPick, onCancel }: { candidates: EventListIt
 export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, reloadEvents }: TabProps) {
   const [adding, setAdding] = useState(false);
   const [wName, setWName] = useState("");
+  const [view, setView] = useState<"viz" | "plan">("viz"); // toggle: visualization vs. waves/events editor
   // Which target the "add event" picker is open for: null = closed, "pending" = add to series only,
   // or a wave id = add straight into that wave.
   const [pickerFor, setPickerFor] = useState<string | null>(null);
@@ -168,12 +169,22 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
   return (
     <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={onDragEnd}>
       <div className="space-y-6">
-        {/* Wave-presence visualization up top; the wave/event planning controls sit beneath it. */}
-        {campaign.waves.length > 0 && (
+        {/* Toggle between the visualization and the waves/events editor so both are one click away. */}
+        <div className="inline-flex rounded-lg border border-border bg-gray-50 p-0.5 text-sm">
+          {([["viz", "Visualization"], ["plan", "Waves & events"]] as const).map(([k, label]) => (
+            <button key={k} onClick={() => setView(k)} className={`px-3 py-1 rounded-md transition-colors ${view === k ? "bg-white shadow-sm text-gray-900" : "text-gray-500 hover:text-gray-800"}`}>{label}</button>
+          ))}
+        </div>
+
+        {/* Wave-presence visualization */}
+        {view === "viz" && (
           <section className="rounded-xl border border-border p-4">
             <WavePresence campaign={campaign} events={events} />
           </section>
         )}
+
+        {/* Waves + pending events editor */}
+        {view === "plan" && <>
         {campaign.waves.map((w, wi) => {
           const wc = waveColor(wi);
           return (
@@ -182,7 +193,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             onDragOver={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(w.id); } }}
             onDragLeave={(e) => { e.stopPropagation(); if (e.currentTarget === e.target) setFileOverWave((cur) => (cur === w.id ? null : cur)); }}
             onDrop={(e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); setFileOverWave(null); const fs = Array.from(e.dataTransfer.files); if (fs.length) setDropTarget({ waveId: w.id, files: fs }); } }}
-            className={`px-1 pt-1 pb-5 transition-colors ${fileOverWave === w.id ? "ring-2 ring-gray-300 bg-gray-50 rounded-xl" : "border-b border-gray-200"}`}
+            className={`px-1 pt-1 pb-5 transition-colors ${fileOverWave === w.id ? "ring-2 ring-gray-300 bg-gray-50 rounded-xl" : ""}`}
           >
             {/* Borderless header: color dot + bold name, then dates in gray; remove sits far right. */}
             <div className="flex items-center gap-2 mb-1.5">
@@ -195,19 +206,28 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
               </span>
               <button onClick={() => removeWave(w.id)} className="shrink-0 text-gray-300 hover:text-red-600" aria-label="Remove wave"><X className="w-4 h-4" /></button>
             </div>
-            <DropZone id={w.id} empty={w.eventIds.length === 0}>
-              {w.eventIds.length === 0
-                ? <p className="text-[13px] text-gray-400 px-1 py-1.5">No events yet — drop a brief, drag one here, or use “Add event”.</p>
-                : w.eventIds.map((id) => eventsById[id] && (
-                    <EventChip key={id} event={eventsById[id]} anchor={campaign.anchorEventIds.includes(id)} inWave waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onUnassign={unassign} onAssign={assignEvent} />
-                  ))}
-            </DropZone>
-            <div className="mt-2">
-              {pickerFor === w.id ? (
-                <EventPicker candidates={candidates} onPick={(id) => void addToSeries(id, w.id)} onCancel={() => setPickerFor(null)} />
-              ) : (
-                <button onClick={() => setPickerFor(w.id)} className="inline-flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-900"><Plus className="w-3.5 h-3.5" /> Add event</button>
-              )}
+            <div className="flex">
+              {/* Colored left rail — same color as the dot, dropping straight down from it (with a
+                  gap below the dot). Acts as the wave's left edge; content is indented to its right. */}
+              <div className="relative w-2.5 shrink-0 mr-2" aria-hidden="true">
+                <div className={`absolute top-1 bottom-0 left-1/2 -translate-x-1/2 w-0.5 rounded-full ${wc.dot}`} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <DropZone id={w.id} empty={w.eventIds.length === 0}>
+                  {w.eventIds.length === 0
+                    ? <p className="text-[13px] text-gray-400 py-1.5">No events yet — drop a brief, drag one here, or use “Add event”.</p>
+                    : w.eventIds.map((id) => eventsById[id] && (
+                        <EventChip key={id} event={eventsById[id]} anchor={campaign.anchorEventIds.includes(id)} inWave waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onUnassign={unassign} onAssign={assignEvent} />
+                      ))}
+                </DropZone>
+                <div className="mt-2">
+                  {pickerFor === w.id ? (
+                    <EventPicker candidates={candidates} onPick={(id) => void addToSeries(id, w.id)} onCancel={() => setPickerFor(null)} />
+                  ) : (
+                    <button onClick={() => setPickerFor(w.id)} className="inline-flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-900"><Plus className="w-3.5 h-3.5" /> Add event</button>
+                  )}
+                </div>
+              </div>
             </div>
           </section>
           );
@@ -240,6 +260,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             )}
           </div>
         </section>
+        </>}
       </div>
 
       {dropTarget && (
