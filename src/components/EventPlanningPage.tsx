@@ -3839,7 +3839,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
       )}
 
       {/* Resources — open-only reference links (Google Docs / Sheets / folders). */}
-      <ResourcesSection links={plan.referenceLinks} eventId={eventId} setPlan={setPlan} />
+      <ResourcesSection links={plan.referenceLinks ?? []} eventId={eventId} setPlan={setPlan} />
 
       {/* Carried lessons */}
       <div>
