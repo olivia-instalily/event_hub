@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { TabProps } from "./SeriesDashboard";
 import { type Wave, waveColor, waveBounds } from "../lib/campaign";
 import { listEvents, setEventSeries, extractBrief, createPlanningEvent, type EventListItem, type SeriesEvent } from "../lib/db";
+import { defaultPhases } from "../lib/eventPhases";
 import { DateEdit } from "./DateEdit";
 import { WavePresence } from "./WavePresence";
 import { ConfirmModal } from "./Modal";
@@ -151,6 +152,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
     const id = await createPlanningEvent({
       name, date, location: (ex?.location && ex.location.trim()) || null, tags: [],
       format: (ex?.format && ex.format.trim()) || null,
+      phases: defaultPhases(date),
       template: { name, vendorCategories: [], budgetLines: [], progressCategories: [] },
     }).catch(() => null);
     if (!id) return;

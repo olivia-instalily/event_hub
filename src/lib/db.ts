@@ -9,6 +9,7 @@ import { eventFocus } from './eventFocus';
 import type { BackfillExtract, TemplateLite, TemplateAdditions } from './backfill';
 import { generalizeStaffRole } from './backfill';
 import { vendorStage, type VendorRow as VendorListRow } from './vendorImport';
+import { defaultPhases } from './eventPhases';
 import { type Campaign, type Drive, emptyCampaign, normalizeCampaign } from "./campaign";
 
 // A template must be name-free: reduce staff roles to their general form and drop bare names / dups.
@@ -349,6 +350,7 @@ export async function backfillEvent(input: { name: string; date: string | null; 
   const id = newId('evt');
   const { error } = await supabase.from('event').insert({
     id, name: input.name, event_date: input.date, location: input.location, description: input.description,
+    phases: defaultPhases(input.date),
   });
   if (error) throw error;
   return id;

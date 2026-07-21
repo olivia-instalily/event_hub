@@ -5,6 +5,7 @@ import { EventDetailPage } from "./EventDetailPage";
 import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
 import { ExternalDetail } from "./externalEvents";
 import { looksLikeBackfill } from "../lib/backfill";
+import { defaultPhases } from "../lib/eventPhases";
 import { DateEdit } from "./DateEdit";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
@@ -957,6 +958,8 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
     } else {
       ({ phases, deliverables } = briefs[0]?.text ? parsePhasesAndDeliverables(briefs[0].text!) : { phases: [], deliverables: [] });
     }
+    // No explicit phases from brief or LLM → seed date-aware defaults for a real event (not a template).
+    if (!isTemplate && phases.length === 0) phases = defaultPhases(fields.date || null);
     const roles = ex
       ? { vendors: ex.vendors, staff: ex.staff, reflections: ex.guardrails, agenda: ex.agenda }
       : (briefs[0]?.text ? parseProseRoles(briefs[0].text!) : { vendors: [], staff: [], reflections: [], agenda: [] });
