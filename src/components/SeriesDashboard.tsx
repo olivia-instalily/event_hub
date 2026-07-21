@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, Folder, ExternalLink, X } from "lucide-react";
-import { getSeriesCampaign, getSeriesEvents, saveCampaign, type SeriesEvent } from "../lib/db";
+import { getSeriesCampaign, getSeriesEvents, saveCampaign, renameSeries, type SeriesEvent } from "../lib/db";
 import { type Campaign, emptyCampaign } from "../lib/campaign";
+import { CopyLinkButton } from "./CopyLinkButton";
 import { SeriesPlan } from "./SeriesPlan";
 import { SeriesEvents } from "./SeriesEvents";
 import { SeriesPeople } from "./SeriesPeople";
@@ -49,7 +50,19 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
   return (
     <div className="max-w-5xl mx-auto">
       <button onClick={onBack} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 mb-3"><ChevronLeft className="w-4 h-4" /> Series</button>
-      <h1 className="text-2xl mb-1">{name}</h1>
+      {/* Title is click-to-edit; commits on blur / Enter. Copy-link button copies the synced URL. */}
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => { void renameSeries(seriesId, name).catch(() => {}); }}
+          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          placeholder="Untitled campaign"
+          aria-label="Series title"
+          className="text-2xl min-w-0 flex-1 bg-transparent rounded border-b border-transparent hover:border-gray-200 focus:border-gray-400 focus:outline-none"
+        />
+        <CopyLinkButton className="mt-2 shrink-0" />
+      </div>
       <div className="flex items-center justify-between gap-3 mb-5">
         <p className="text-sm text-gray-500 capitalize">{campaign.drive} drive · {events.length} event{events.length === 1 ? "" : "s"}</p>
         {/* Single paired Drive folder (open-only). */}

@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { Check, Copy } from "lucide-react";
 import type { TabProps } from "./SeriesDashboard";
 import { personBrief, personLabel, waveColorById, type BriefEvent } from "../lib/campaign";
 
 export function SeriesBriefs({ campaign, events, save }: TabProps) {
   const [selected, setSelected] = useState<string | null>(campaign.people[0]?.id ?? null);
+  const [copied, setCopied] = useState(false);
   const eventsById: Record<string, BriefEvent> = Object.fromEntries(events.map((e) => [e.id, { id: e.id, name: e.name, date: e.date, location: e.location }]));
   const brief = selected ? personBrief(campaign, selected, eventsById) : null;
 
@@ -11,7 +13,7 @@ export function SeriesBriefs({ campaign, events, save }: TabProps) {
     if (!selected) return;
     save({ ...campaign, people: campaign.people.map((p) => (p.id === selected ? { ...p, ...patch } : p)) });
   };
-  const copy = () => { if (brief) void navigator.clipboard?.writeText(briefText(brief)).catch(() => {}); };
+  const copy = () => { if (brief) void navigator.clipboard?.writeText(briefText(brief)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {}); };
 
   if (campaign.people.length === 0) return <p className="text-gray-400">Add people on the People & logistics tab to generate briefs.</p>;
 
@@ -27,7 +29,7 @@ export function SeriesBriefs({ campaign, events, save }: TabProps) {
         <div className="rounded-xl border border-border p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-medium">{brief.label} — trip brief</h2>
-            <button onClick={copy} className="text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1">Copy</button>
+            <button onClick={copy} className={`inline-flex items-center gap-1 text-sm border rounded-lg px-2.5 py-1 transition-colors ${copied ? "border-emerald-300 text-emerald-600" : "border-gray-300 text-gray-600 hover:text-gray-900"}`}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</button>
           </div>
           <p className="text-[13px] text-gray-500 mb-4">{brief.traveling ? "Traveling" : "Local"} · {brief.waves.length} wave{brief.waves.length === 1 ? "" : "s"}</p>
 

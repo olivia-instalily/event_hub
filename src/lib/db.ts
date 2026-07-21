@@ -2047,6 +2047,12 @@ export async function getSeriesCampaign(seriesId: string): Promise<{ id: string;
   return { id: s.id, name: s.name, campaign: normalizeCampaign((s as any).extras?.campaign), events };
 }
 
+// Rename a series (the campaign title). Falls back to a placeholder if cleared.
+export async function renameSeries(seriesId: string, name: string): Promise<void> {
+  const { error } = await supabase.from("event_series").update({ name: name.trim() || "Untitled campaign" }).eq("id", seriesId);
+  if (error) throw error;
+}
+
 // Read-modify-write of extras.campaign (preserve any other extras keys).
 export async function saveCampaign(seriesId: string, campaign: Campaign): Promise<void> {
   const { data: s, error: readErr } = await supabase.from("event_series").select("extras").eq("id", seriesId).single();

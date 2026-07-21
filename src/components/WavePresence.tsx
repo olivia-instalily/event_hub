@@ -263,10 +263,13 @@ export function WavePresence({ campaign, events, save }: { campaign: Campaign; e
                           const centerPct = days.length > 1 ? (i + 0.5) / days.length * 100 : 50;
                           const key = `${w.id}|${date}`;
                           const dh = eventHover === key;
+                          // When this day's stack block is hovered, the circle gives way to the time-range
+                          // highlight that emerges on the line — so it fades out (and stops catching hover).
+                          const blockHover = hover?.waveId === w.id && hover?.day === date;
                           return (
                             <span key={date} className="absolute top-0 -translate-x-1/2 z-20" style={{ left: `${centerPct}%` }}
                               onMouseEnter={() => setEventHover(key)} onMouseLeave={() => setEventHover(null)}>
-                              <span className={`block w-3 h-3 rounded-full border-[3px] border-white ring-2 -translate-y-1/2 ${wc.dot} ${wc.ring}`} />
+                              <span className={`block w-3 h-3 rounded-full border-[3px] border-white ring-2 -translate-y-1/2 transition-opacity duration-150 ${wc.dot} ${wc.ring} ${blockHover ? "opacity-0" : "opacity-100"}`} />
                               <span className="absolute top-3 left-1/2 -translate-x-1/2 w-24 text-left pointer-events-none">
                                 {evs.map((e) => (
                                   <span key={e.id} className="flex items-center gap-1 text-[10px] leading-tight text-gray-600">
