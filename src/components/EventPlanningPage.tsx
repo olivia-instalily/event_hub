@@ -15,7 +15,7 @@ import {
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
-  addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable,
+  addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable, setEventPattern,
   getPlanningSummary, saveOverviewSummary,
   getEventPeopleStats, listAttendeesForEvent, scheduleDebrief,
   extractDebrief, proposeTagsFromDebrief, upsertBudgetLines, type DebriefExtract,
@@ -1182,6 +1182,175 @@ function BudgetTracker({ budget, eventId, eventBudgetTarget = null, engagements 
         Projected view (predicted cost per category from comparable past events) needs more budget history — coming later.
       </p>
     </BudgetDropArea>
+  );
+}
+
+// ── Phase Editor ────────────────────────────────────────────────────────────
+// Collapsible panel for adding / renaming / removing / reordering an event's phases.
+// Never orphans deliverables: remove reassigns them, rename propagates to all of them.
+function PhaseEditor({
+  eventId,
+  phases,
+  deliverables,
+  setPlan,
+}: {
+  eventId: string;
+  phases: EventPhase[];
+  deliverables: { id: string; phase: string | null }[];
+  setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [editNames, setEditNames] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  // Sorted copy for rendering
+  const sorted = [...phases].sort((a, b) => a.order - b.order);
+
+  const persist = async (next: EventPhase[], updatedDeliverables?: { id: string; phase: string | null }[]) => {
+    setBusy(true);
+    try {
+      await setEventPattern(eventId, { phases: next });
+      setPlan((p) => {
+        if (!p) return p;
+        const newDelivs = updatedDeliverables ?? p.deliverables;
+        return { ...p, phases: next, deliverables: newDelivs as typeof p.deliverables };
+      });
+    } catch {
+      // best-effort — let the UI update stand; the user can refresh
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAdd = async () => {
+    const name = addName.trim();
+    if (!name) return;
+    const next = [...sorted, { name, order: sorted.length }];
+    setAddName("");
+    await persist(next);
+  };
+
+  const handleRename = async (oldName: string, newName: string) => {
+    newName = newName.trim();
+    if (!newName || newName === oldName) return;
+    const next = sorted.map((p) => (p.name === oldName ? { ...p, name: newName } : p));
+    // Reassign deliverables that had the old phase name
+    const affected = deliverables.filter((d) => d.phase === oldName);
+    const updatedDeliverables = deliverables.map((d) => d.phase === oldName ? { ...d, phase: newName } : d);
+    await Promise.all(affected.map((d) => setDeliverablePhase(d.id, newName).catch(() => {})));
+    await persist(next, updatedDeliverables as { id: string; phase: string | null }[]);
+  };
+
+  const handleRemove = async (name: string) => {
+    if (sorted.length <= 1) return; // must keep at least one phase
+    const idx = sorted.findIndex((p) => p.name === name);
+    // Fallback phase: previous in order, or first remaining
+    const fallbackIdx = idx > 0 ? idx - 1 : 1;
+    const fallback = sorted.filter((p) => p.name !== name)[fallbackIdx > idx ? fallbackIdx - 1 : fallbackIdx]?.name ?? sorted.find((p) => p.name !== name)!.name;
+    const next = sorted
+      .filter((p) => p.name !== name)
+      .map((p, i) => ({ ...p, order: i }));
+    // Reassign deliverables from the removed phase
+    const affected = deliverables.filter((d) => d.phase === name);
+    const updatedDeliverables = deliverables.map((d) => d.phase === name ? { ...d, phase: fallback } : d);
+    await Promise.all(affected.map((d) => setDeliverablePhase(d.id, fallback).catch(() => {})));
+    await persist(next, updatedDeliverables as { id: string; phase: string | null }[]);
+  };
+
+  const handleMove = async (name: string, dir: -1 | 1) => {
+    const idx = sorted.findIndex((p) => p.name === name);
+    const swapIdx = idx + dir;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const next = sorted.map((p, i) => {
+      if (i === idx) return { ...sorted[swapIdx], order: idx };
+      if (i === swapIdx) return { ...sorted[idx], order: swapIdx };
+      return p;
+    });
+    await persist(next);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-border mb-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-5 py-3 text-sm text-gray-600 hover:text-gray-900"
+      >
+        <span className="font-medium">Edit phases</span>
+        <ChevronRight className={`w-4 h-4 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div className="px-5 pb-4 space-y-2">
+          {sorted.map((p, i) => {
+            const editing = editNames[p.order] ?? p.name;
+            return (
+              <div key={p.name} className="flex items-center gap-2">
+                <input
+                  className="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  value={editing}
+                  onChange={(e) => setEditNames((m) => ({ ...m, [p.order]: e.target.value }))}
+                  onBlur={() => {
+                    const v = editNames[p.order];
+                    if (v !== undefined && v.trim() && v.trim() !== p.name) {
+                      void handleRename(p.name, v.trim());
+                      setEditNames((m) => { const n = { ...m }; delete n[p.order]; return n; });
+                    } else {
+                      setEditNames((m) => { const n = { ...m }; delete n[p.order]; return n; });
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                    if (e.key === "Escape") {
+                      setEditNames((m) => { const n = { ...m }; delete n[p.order]; return n; });
+                    }
+                  }}
+                  disabled={busy}
+                />
+                <button
+                  type="button"
+                  disabled={busy || i === 0}
+                  onClick={() => void handleMove(p.name, -1)}
+                  className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30"
+                  title="Move up"
+                ><ArrowUp className="w-3.5 h-3.5" /></button>
+                <button
+                  type="button"
+                  disabled={busy || i === sorted.length - 1}
+                  onClick={() => void handleMove(p.name, 1)}
+                  className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30"
+                  title="Move down"
+                ><ArrowDown className="w-3.5 h-3.5" /></button>
+                <button
+                  type="button"
+                  disabled={busy || sorted.length <= 1}
+                  onClick={() => void handleRemove(p.name)}
+                  className="p-1 text-gray-400 hover:text-red-600 disabled:opacity-30"
+                  title={sorted.length <= 1 ? "Cannot remove the only phase" : `Remove "${p.name}"`}
+                ><X className="w-3.5 h-3.5" /></button>
+              </div>
+            );
+          })}
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              className="flex-1 min-w-0 px-2 py-1 text-sm border border-dashed border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-300 placeholder:text-gray-400"
+              placeholder="New phase name…"
+              value={addName}
+              onChange={(e) => setAddName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void handleAdd(); }}
+              disabled={busy}
+            />
+            <button
+              type="button"
+              onClick={() => void handleAdd()}
+              disabled={busy || !addName.trim()}
+              className="inline-flex items-center gap-1 px-3 py-1 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+            ><Plus className="w-3.5 h-3.5" /> Add</button>
+          </div>
+          {busy && <p className="text-xs text-gray-400">Saving…</p>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -4149,6 +4318,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && (
           <div className="space-y-6">
+            <PhaseEditor eventId={eventId} phases={plan.phases} deliverables={plan.deliverables} setPlan={setPlan} />
             <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
           </div>
