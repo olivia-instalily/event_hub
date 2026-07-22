@@ -11,7 +11,7 @@ import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, unlinkLinear, deleteEvent, resetEvent,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, resolveGcalMatch, pullEventFromLinear, unlinkLinear, deleteEvent, resetEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   ensureVendor, matchVendors, noteVendorOnBudgetLine, coerceStage, type VendorRow, setEventFocus,
@@ -3720,6 +3720,54 @@ function ResourcesSection({ links, eventId, setPlan }: { links: ReferenceLink[];
   );
 }
 
+type GCalMatchCandidate = { gcalEventId: string; summary: string; start: string; htmlLink: string };
+
+function GCalMatchConfirmCard({ eventId, candidates, onResolved }: { eventId: string; candidates: [string, GCalMatchCandidate][]; onResolved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const resolve = async (decision: 'link' | 'create') => {
+    setBusy(true); setErr(null);
+    try {
+      await resolveGcalMatch(eventId, decision);
+      onResolved();
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <Calendar className="w-5 h-5 text-blue-700 shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-[15px] font-medium text-blue-900">Found a matching calendar event</p>
+          <p className="text-[13px] text-blue-700 mt-0.5">A similar event already exists on your Google Calendar. Link to it or create a separate one.</p>
+          <ul className="mt-2 space-y-1">
+            {candidates.map(([, c]) => (
+              <li key={c.gcalEventId} className="text-[13px] text-blue-800">
+                <a href={c.htmlLink} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-2 hover:text-blue-900">{c.summary}</a>
+                <span className="text-blue-600 ml-1">— {new Date(c.start).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+              </li>
+            ))}
+          </ul>
+          {err && <p className="text-[13px] text-red-600 mt-2">{err}</p>}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button size="sm" variant="secondary" onClick={() => void resolve('link')} disabled={busy}>
+            {busy ? "Working…" : "Link to it"}
+          </Button>
+          <Button size="sm" onClick={() => void resolve('create')} disabled={busy}>
+            Create new
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
   const facts = buildFacts(plan);
   // Phase-aware view: the timeline's date-derived "now" sets the default; clicking a node
@@ -3804,8 +3852,18 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
   const committed = facts.budget?.committed ?? 0;
   const tgt = (approval?.status === "assigned" ? plan.eventBudgetTarget : null) ?? facts.budget?.target ?? null;
 
+  const gcalMatchCandidates = plan.gcalMatchPending
+    ? Object.entries(plan.gcalMatchPending).filter((e): e is [string, { gcalEventId: string; summary: string; start: string; htmlLink: string }] => e[1] !== null)
+    : [];
+
   return (
     <div className="space-y-6">
+      {/* Match-confirmation card: shown when a similar Google Calendar event was found and needs the
+          user to decide whether to link to it or create a fresh one. */}
+      {gcalMatchCandidates.length > 0 && (
+        <GCalMatchConfirmCard eventId={eventId} candidates={gcalMatchCandidates} onResolved={onApplied} />
+      )}
+
       {/* Past or locked → "what would make this a complete record" (+ drop-to-fill), so any
           done event can be finished into a complete record. Upcoming → the GCal prompt. */}
       {(locked || temporal === "past" || pastByDate) ? (
@@ -4357,9 +4415,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                       value={plan.date}
                       onChange={(iso) => {
                         setPlan((p) => (p ? { ...p, date: iso } : p));
-                        void setEventDate(eventId, iso).then(() => {
-                          if (iso && plan.gcalEventId) void syncEventToGoogleCalendar(eventId).catch(() => {});
-                        });
+                        void setEventDate(eventId, iso);
                       }}
                       placeholder="Date TBD"
                     />
