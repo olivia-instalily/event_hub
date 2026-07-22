@@ -111,9 +111,10 @@ event) is linked instead of duplicated.
   - If **no** candidate on either calendar → proceed to the normal upsert below (silent auto-create).
 - **Resolution (frontend calls the function with an explicit action):**
   - **Link** (`action: "link"`) → for each calendar that had a candidate, adopt its id into
-    `gcal_event_ids[calId]` and **PATCH that Google event to inject the EventHub deep-link** into its
-    description (append if absent; do not overwrite the existing title/description). For any calendar
-    that had *no* candidate, create a new event there (normal upsert). Clear `gcal_match_pending`.
+    `gcal_event_ids[calId]` and **PATCH that Google event**: set `summary` to the canonical
+    `gcalTitle(...)` (rename to the consistent format) and inject the EventHub deep-link into its
+    description (append if absent; the rest of the description is preserved). For any calendar that had
+    *no* candidate, create a new event there (normal upsert). Clear `gcal_match_pending`.
   - **Create new** (`action: "create"`) → skip adoption, create on both calendars, clear
     `gcal_match_pending`.
 
@@ -125,10 +126,18 @@ For each target calendar (after the match gate above is resolved or found nothin
 - If `gcal_event_ids[calId]` exists → **PATCH** that event (update in place).
 - Else → **POST** a new event, then store the returned id into `gcal_event_ids[calId]`.
 
-Event body (unchanged from today, plus color): `summary` = event name; `location`; `description`
+Event body: `summary` = the **canonical EventHub title** (see below); `location`; `description`
 combining the event description + Luma link + an EventHub deep link; `start`/`end` as timed
 (`dateTime` + tz) when `start_time` is present, else all-day (`date`). Add a fixed `colorId` so
 EventHub events read as a set within each calendar.
+
+**Canonical title** — a pure, testable helper `gcalTitle(name, location)`:
+- with a location → `"{name} · {location}"` (middle-dot separator),
+- without a location → `"{name}"` (no trailing separator).
+
+Every upsert (create *and* patch) sets `summary` to `gcalTitle(...)`, so EventHub events are
+consistently named on the calendar; a later name/location edit re-normalizes the title on the next
+sync.
 
 Write-back to the DB after a successful sync: update `gcal_event_ids`, `gcal_event_id` (primary),
 `gcal_html_link` (primary).
@@ -218,6 +227,7 @@ and the stray `run.app` calendarList subscription. Remove the now-unused
 
 - **Unit (pure helpers, vitest, `campaign.test.ts` style):**
   - eligibility predicate (dated && !template),
+  - `gcalTitle(name, location)` (with location → `"{name} · {location}"`; without → `"{name}"`),
   - the upsert-vs-patch body builder,
   - **time-overlap** predicate (timed overlap, all-day/multi-day range overlap, no-overlap),
   - **name-similarity** predicate (match above threshold, contains-case, clear non-match),
