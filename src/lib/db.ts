@@ -268,6 +268,9 @@ async function graduateFromConcept(eventId: string): Promise<void> {
 /** Permanently delete an event. FKs cascade (engagements, budget+lines, deliverables,
  *  attendee links, owners, labels, …); shared attendees stay. No undo. */
 export async function deleteEvent(eventId: string): Promise<void> {
+  // Unsync from Google Calendar BEFORE deleting the row — the function reads gcal_event_ids off
+  // the row; if the row is gone first it 404s and orphans calendar copies.
+  await deleteEventFromGoogleCalendar(eventId).catch((e) => console.warn('gcal unsync failed', e));
   const { error } = await supabase.from('event').delete().eq('id', eventId);
   if (error) throw error;
 }
@@ -343,7 +346,10 @@ export async function createPlanningEvent(input: {
     p_event: eventRow, p_engagements: engagements, p_budget: budgetRow, p_budget_lines: budgetLines, p_deliverables: deliverables,
   });
   if (error) throw error;
-  return (data as string) ?? eventId;
+  const createdId = (data as string) ?? eventId;
+  // Auto-sync to Google Calendar when the event has a date and is not a template.
+  if (input.date && !input.isTemplate) autoSyncGcal(createdId);
+  return createdId;
 }
 
 /** Persist a backfilled past event (no template). Returns the new event id. */
@@ -354,6 +360,7 @@ export async function backfillEvent(input: { name: string; date: string | null; 
     phases: defaultPhases(input.date),
   });
   if (error) throw error;
+  if (input.date) autoSyncGcal(id);
   return id;
 }
 
@@ -692,6 +699,9 @@ export async function updateEvent(
   if ('endTime' in fields) patch.end_time = fields.endTime;
   const { error } = await supabase.from('event').update(patch).eq('id', eventId);
   if (error) throw error;
+  // Calendar-relevant fields changed — auto-sync (server guards eligibility / template check).
+  const calendarFields: (keyof typeof fields)[] = ['name', 'location', 'startTime', 'endTime', 'description'];
+  if (calendarFields.some((f) => f in fields)) autoSyncGcal(eventId);
 }
 
 /** Update an event/template's pattern fields (jsonb). Used when re-saving from the review page so
@@ -1837,16 +1847,36 @@ export async function createLumaEvent(
  *  Server-side holds the Google credentials. Requires the event to have a date. */
 export async function syncEventToGoogleCalendar(
   eventId: string,
-): Promise<{ gcalEventId: string; calendarId: string; htmlLink: string | null }> {
-  const { data, error } = await supabase.functions.invoke('gcal-sync', { body: { eventId } });
+  action?: 'auto' | 'link' | 'create' | 'delete',
+): Promise<{ ok?: boolean; status?: string; gcalEventId?: string; calendarId?: string; htmlLink?: string | null; candidates?: unknown[]; gcalEventIds?: Record<string, string>; errors?: unknown[] }> {
+  const body: Record<string, unknown> = { eventId };
+  if (action !== undefined) body.action = action;
+  const appOrigin = typeof location !== 'undefined' ? location.origin : undefined;
+  if (appOrigin !== undefined) body.appOrigin = appOrigin;
+  const { data, error } = await supabase.functions.invoke('gcal-sync', { body });
   if (error) {
     let msg = (data as any)?.error ?? error.message ?? String(error);
-    try { const body = await (error as any).context?.json?.(); if (body?.error) msg = body.error; } catch { /* keep generic */ }
+    try { const body2 = await (error as any).context?.json?.(); if (body2?.error) msg = body2.error; } catch { /* keep generic */ }
     throw new Error(msg);
   }
   if ((data as any)?.error) throw new Error((data as any).error);
   return data as any;
 }
+
+/** Resolve a pending gcal match by choosing to link or create. */
+export async function resolveGcalMatch(eventId: string, decision: 'link' | 'create'): Promise<void> {
+  const { error } = await supabase.functions.invoke('gcal-sync', { body: { eventId, action: decision, appOrigin: typeof location !== 'undefined' ? location.origin : undefined } });
+  if (error) throw error;
+}
+
+/** Delete/unsync this event from Google Calendar (all calendars it was pushed to). */
+export async function deleteEventFromGoogleCalendar(eventId: string): Promise<void> {
+  const { error } = await supabase.functions.invoke('gcal-sync', { body: { eventId, action: 'delete' } });
+  if (error) throw error;
+}
+
+/** Fire-and-forget gcal auto-sync — never blocks the caller. */
+function autoSyncGcal(eventId: string): void { void syncEventToGoogleCalendar(eventId).catch((e) => console.warn('gcal auto-sync failed', e)); }
 
 /** Mirror this event + all its deliverables into Linear: the event becomes a Project under the
  *  single "EventHub" team, and each deliverable an Issue in that project. Idempotent — re-running
@@ -2044,6 +2074,8 @@ export async function addExternalConference(input: ExternalConferenceInput): Pro
     tags: [],
   });
   if (error) throw error;
+  // External conferences always have a date (required above) — auto-sync.
+  autoSyncGcal(id);
   return id;
 }
 
@@ -2527,6 +2559,8 @@ export interface EventPlanning {
   lumaEventId: string | null;
   gcalEventId: string | null;
   gcalHtmlLink: string | null;
+  gcalEventIds: Record<string, string>;
+  gcalMatchPending: Record<string, { gcalEventId: string; summary: string; start: string; htmlLink: string } | null> | null;
   linearProjectId: string | null;
   linearProjectUrl: string | null;
   coverImageUrl: string | null;
@@ -2618,7 +2652,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, gcal_event_ids, gcal_match_pending, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -2732,6 +2766,8 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     lumaEventId: (row as any).luma_event_id ?? null,
     gcalEventId: (row as any).gcal_event_id ?? null,
     gcalHtmlLink: (row as any).gcal_html_link ?? null,
+    gcalEventIds: (row as any).gcal_event_ids ?? {},
+    gcalMatchPending: (row as any).gcal_match_pending ?? null,
     linearProjectId: (row as any).linear_project_id ?? null,
     linearProjectUrl: (row as any).linear_project_url ?? null,
     coverImageUrl: (row as any).cover_image_url ?? null,
@@ -3138,6 +3174,8 @@ export async function setEventDate(eventId: string, date: string | null): Promis
       due.setDate(due.getDate() + d.offset);
       return supabase.from('deliverable').update({ resolved_due_date: due.toISOString().slice(0, 10) }).eq('id', d.id);
     }));
+  // A newly-set date makes this event calendar-eligible — auto-sync.
+  autoSyncGcal(eventId);
 }
 export async function setHeadcount(eventId: string, headcount: number | null): Promise<void> {
   const { error } = await supabase.from('event').update({ headcount }).eq('id', eventId);
