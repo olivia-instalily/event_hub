@@ -157,6 +157,7 @@ async function findCandidate(token: string, calId: string, ev: any): Promise<Can
   const addDays = (d: string, n: number) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
   const dateFrom = addDays(date, -1);
   const dateTo   = addDays(date, 2); // exclusive upper bound → +2 so window covers date+1 fully
+  // Fix 3: timeMin/timeMax are Z-anchored but the ±1-day window is a 3-day UTC span, wider than any real timezone offset, so events dated D always fall inside it regardless of local time.
 
   const items = await gcalListWindow(token, calId, dateFrom, dateTo);
   const eSpan = eventSpan(ev);
@@ -222,7 +223,9 @@ export async function handler(req: Request, res: Response) {
     if (error || !ev) { res.status(404).json({ error: 'event not found' }); return; }
 
     const ids: Record<string, string> = (ev as any).gcal_event_ids ?? {};
-    const coordId = COORD();
+    // Fix 2: capture calendar ids once so coordId is provably the same key used in
+    // gcal_match_pending, upsert loops, and write-back (no repeated process.env reads).
+    const cals = CALENDARS(); // cals[0] = primary, cals[1] = coordination
 
     // ── action: delete (before eligibility guard so any event can be un-synced) ──
     if (action === 'delete') {
@@ -252,14 +255,14 @@ export async function handler(req: Request, res: Response) {
     // ── action: auto (first sync) — look for candidates before creating ───────
     if (action === 'auto' && Object.keys(ids).length === 0) {
       const [candP, candC] = await Promise.all([
-        findCandidate(token, PRIMARY, ev),
-        findCandidate(token, coordId, ev),
+        findCandidate(token, cals[0], ev),
+        findCandidate(token, cals[1], ev),
       ]);
 
       if (candP !== null || candC !== null) {
         const pending: Record<string, Candidate | null> = {
-          [PRIMARY]: candP,
-          [coordId]: candC,
+          [cals[0]]: candP,
+          [cals[1]]: candC,
         };
         await sb.from('event').update({ gcal_match_pending: pending }).eq('id', eventId);
         res.json({ ok: true, status: 'needs_confirmation', candidates: pending });
@@ -271,59 +274,86 @@ export async function handler(req: Request, res: Response) {
     // ── action: link — adopt pending candidates, create where none ────────────
     if (action === 'link') {
       const pending: Record<string, Candidate | null> = (ev as any).gcal_match_pending ?? {};
-      const results: UpsertResult[] = [];
 
-      for (const calId of CALENDARS()) {
-        const cand = pending[calId];
-        if (cand) {
-          // Adopt: patch the candidate so it gains our title, color, and ownership marker
-          const patched = await gcalPatch(token, calId, cand.gcalEventId, buildBody(ev, appLink));
-          if (!patched.id) throw new Error(`gcalPatch failed on ${calId}: ${patched.error?.message ?? 'unknown'}`);
-          results.push({ calId, gid: patched.id, htmlLink: patched.htmlLink ?? null });
-        } else {
-          results.push(await upsertOn(token, calId, ev, ids, appLink));
-        }
-      }
+      // Fix 1: use allSettled so a coordination-calendar failure doesn't discard
+      // a successfully written primary id, preventing orphan-event duplicates.
+      const settled = await Promise.allSettled(
+        cals.map(calId => {
+          const cand = pending[calId];
+          if (cand) {
+            // Adopt: patch the candidate so it gains our title, color, and ownership marker
+            return gcalPatch(token, calId, cand.gcalEventId, buildBody(ev, appLink))
+              .then(patched => {
+                if (!patched.id) throw new Error(`gcalPatch failed on ${calId}: ${patched.error?.message ?? 'unknown'}`);
+                return { calId, gid: patched.id as string, htmlLink: (patched.htmlLink ?? null) as string | null };
+              });
+          } else {
+            return upsertOn(token, calId, ev, ids, appLink);
+          }
+        })
+      );
 
-      // Write-back
-      const nextIds: Record<string, string> = {};
+      // Persist whatever succeeded; always write back to DB.
+      const nextIds: Record<string, string> = { ...ids };
       let primaryHtmlLink: string | null = null;
-      for (const r of results) {
-        nextIds[r.calId] = r.gid;
-        if (r.calId === PRIMARY) primaryHtmlLink = r.htmlLink;
+      const errors: string[] = [];
+      for (const outcome of settled) {
+        if (outcome.status === 'fulfilled') {
+          const r = outcome.value;
+          nextIds[r.calId] = r.gid;
+          if (r.calId === PRIMARY) primaryHtmlLink = r.htmlLink;
+        } else {
+          errors.push(String(outcome.reason?.message ?? outcome.reason));
+        }
       }
       await sb.from('event').update({
         gcal_event_ids: nextIds,
         gcal_event_id: nextIds[PRIMARY] ?? null,
-        gcal_html_link: primaryHtmlLink,
+        gcal_html_link: primaryHtmlLink ?? (ev as any).gcal_html_link ?? null,
         gcal_match_pending: null,
       }).eq('id', eventId);
 
-      res.json({ ok: true, status: 'synced', gcalEventIds: nextIds, htmlLink: primaryHtmlLink });
+      if (errors.length > 0) {
+        res.status(207).json({ ok: false, status: 'partial', gcalEventIds: nextIds, errors });
+      } else {
+        res.json({ ok: true, status: 'synced', gcalEventIds: nextIds, htmlLink: primaryHtmlLink });
+      }
       return;
     }
 
     // ── action: create, OR auto with existing ids (patch) ────────────────────
     // Also handles: auto after finding no candidates above (ids still empty, falls here)
-    const results: UpsertResult[] = await Promise.all(
-      CALENDARS().map(calId => upsertOn(token, calId, ev, ids, appLink))
+    // Fix 1: use allSettled so a coordination-calendar failure doesn't discard
+    // a successfully written primary id, preventing orphan-event duplicates.
+    const settled = await Promise.allSettled(
+      cals.map(calId => upsertOn(token, calId, ev, ids, appLink))
     );
 
-    // Write-back
-    const nextIds: Record<string, string> = {};
+    // Persist whatever succeeded; always write back to DB.
+    const nextIds: Record<string, string> = { ...ids };
     let primaryHtmlLink: string | null = null;
-    for (const r of results) {
-      nextIds[r.calId] = r.gid;
-      if (r.calId === PRIMARY) primaryHtmlLink = r.htmlLink;
+    const errors: string[] = [];
+    for (const outcome of settled) {
+      if (outcome.status === 'fulfilled') {
+        const r = outcome.value;
+        nextIds[r.calId] = r.gid;
+        if (r.calId === PRIMARY) primaryHtmlLink = r.htmlLink;
+      } else {
+        errors.push(String(outcome.reason?.message ?? outcome.reason));
+      }
     }
     await sb.from('event').update({
       gcal_event_ids: nextIds,
       gcal_event_id: nextIds[PRIMARY] ?? null,
-      gcal_html_link: primaryHtmlLink,
+      gcal_html_link: primaryHtmlLink ?? (ev as any).gcal_html_link ?? null,
       gcal_match_pending: null,
     }).eq('id', eventId);
 
-    res.json({ ok: true, status: 'synced', gcalEventIds: nextIds, htmlLink: primaryHtmlLink });
+    if (errors.length > 0) {
+      res.status(207).json({ ok: false, status: 'partial', gcalEventIds: nextIds, errors });
+    } else {
+      res.json({ ok: true, status: 'synced', gcalEventIds: nextIds, htmlLink: primaryHtmlLink });
+    }
 
   } catch (e) {
     console.error(JSON.stringify({ fn: 'gcal-sync', error: String((e as Error)?.message ?? e) }));
