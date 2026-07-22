@@ -18,12 +18,13 @@ import {
   exportPeople,
   setPersonCrewRole,
   createInternalPerson,
+  deleteAttendee,
   type PersonView,
   type PersonEvent,
   type Note,
   type Label,
 } from "../lib/db";
-import { CREW_ROLES, ROLE_LABEL, type CrewRole } from "../lib/campaign";
+import { CREW_ROLES, ROLE_LABEL, ROLE_HUE, type CrewRole } from "../lib/campaign";
 import { internalEmailFor } from "../lib/people";
 import { tagBadgeVariant } from "../lib/tags";
 import { Badge } from "@instalily/ui/badge";
@@ -101,10 +102,16 @@ function displayName(p: PersonView): string {
   return p.name ?? "Unknown";
 }
 
-/** Repeat-attendee badge — same everywhere (global + event-filtered lists). */
-function MultiEventBadge({ count }: { count: number }) {
+// Count-badge tint: internal people with a role use their role hue; everyone else the neutral default.
+function countColor(p: PersonView): string | undefined {
+  return p.isInternal && p.crewRole !== "none" ? ROLE_HUE[p.crewRole].solid : undefined;
+}
+
+/** Repeat-attendee badge — same everywhere (global + event-filtered lists).
+ *  `colorClass` tints it; defaults to a neutral grey (internal people pass their role hue). */
+function MultiEventBadge({ count, colorClass = "bg-gray-200 text-gray-700" }: { count: number; colorClass?: string }) {
   if (count < 2) return null;
-  return <span className="px-1.5 py-0.5 rounded-full text-[15px] bg-gray-900 text-white" title={`Attended ${count} events`}>{count}×</span>;
+  return <span className={`px-1.5 py-0.5 rounded-full text-[15px] ${colorClass}`} title={`Attended ${count} events`}>{count}×</span>;
 }
 
 function relTime(iso: string): string {
@@ -134,6 +141,7 @@ function PersonDetail({
   onClose,
   onSaved,
   onRemoved,
+  onDeletePerson,
   onLabelsChange,
 }: {
   person: PersonView;
@@ -141,6 +149,7 @@ function PersonDetail({
   onClose: () => void;
   onSaved: (patch: Partial<PersonView>) => void;
   onRemoved: () => void;
+  onDeletePerson: () => void;
   onLabelsChange: (labelIds: string[]) => void;
 }) {
   const { current: currentProfile } = useProfile();
@@ -154,6 +163,7 @@ function PersonDetail({
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const uploadPhoto = async (url: string) => { setPhoto(url); await setAttendeePhoto(person.id, url); onSaved({ photoUrl: url }); };
   const toggleSpeaker = async () => {
@@ -232,6 +242,11 @@ function PersonDetail({
                   {eventId && (
                     <button onClick={() => setConfirmRemove(true)} title="Remove from event" aria-label="Remove from event" className="w-6 h-6 rounded-full border border-red-300 text-red-500 hover:bg-red-50 flex items-center justify-center shrink-0">
                       <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {person.isInternal && (
+                    <button onClick={() => setConfirmDelete(true)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border border-red-300 text-red-600 hover:bg-red-50">
+                      <X className="w-3 h-3" /> Remove from team
                     </button>
                   )}
                 </div>
@@ -366,6 +381,16 @@ function PersonDetail({
           danger
           onConfirm={() => void doRemove()}
           onClose={() => setConfirmRemove(false)}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmModal
+          title="Remove from team"
+          message={`Permanently delete ${displayName(person)}? This removes them from the internal team and all their event links. This can't be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={onDeletePerson}
+          onClose={() => setConfirmDelete(false)}
         />
       )}
     </div>
@@ -643,7 +668,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           <span className="inline-flex items-center gap-1.5 flex-wrap">
             {eventFilter && statusBadge(p.registrationStatus, p.checkedIn)}
             {isAdmin && <GreenhouseBadge status={p.applicationStatus} />}
-            <MultiEventBadge count={p.eventsCount} />
+            <MultiEventBadge count={p.eventsCount} colorClass={countColor(p)} />
             {!eventFilter && p.eventsCount < 2 && <span className="text-gray-600">{p.eventsCount}</span>}
             {p.labelIds.map((id) => { const nm = labels.find((l) => l.id === id)?.name; return nm ? <span key={id} className="text-[11px] rounded-full px-2 py-0.5 bg-gray-100 text-gray-700">{nm}</span> : null; })}
           </span>
@@ -849,27 +874,27 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
               onClick={() => setSelectedPerson(p)}
               className="bg-white rounded-xl border border-border p-4 flex flex-col cursor-pointer hover:shadow-md transition-shadow"
             >
-              <div className="flex items-center justify-between mb-2">
-                {p.type && p.type !== "Unknown"
-                  ? <span className={`inline-block px-2 py-0.5 rounded-full text-[15px] ${typeColor(p.type)}`}>{p.type}</span>
-                  : <span />}
-                <div className="flex items-center gap-1">
-                  <MultiEventBadge count={p.eventsCount} />
+              {/* Name always leads; status badges sit top-right. */}
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="text-base font-medium leading-tight min-w-0">{displayName(p)}</h3>
+                <div className="flex items-center gap-1 shrink-0">
+                  <MultiEventBadge count={p.eventsCount} colorClass={countColor(p)} />
                   {eventFilter && statusBadge(p.registrationStatus, p.checkedIn)}
                   {isAdmin && <GreenhouseBadge status={p.applicationStatus} />}
                 </div>
               </div>
 
-              <h3 className="text-base font-medium leading-tight">{displayName(p)}</h3>
-              {p.role && p.role !== "attendee" && (
-                <p className="text-[15px] text-gray-500 capitalize">{p.role}</p>
-              )}
-              {p.isInternal && (
+              {/* Role: internal → dropdown; external → type badge / event role. */}
+              {p.isInternal ? (
                 <div className="mt-2"><RoleSelect value={p.crewRole} onChange={(r) => changeCrewRole(p.id, r)} /></div>
-              )}
-              {p.title && <p className="text-sm text-gray-600 mt-1 truncate">{p.title}</p>}
-              {p.org && <p className="text-sm text-gray-500 truncate">{p.org}</p>}
-              {p.email && <p className="text-[15px] text-gray-400 mt-1 truncate">{p.email}</p>}
+              ) : p.type && p.type !== "Unknown" ? (
+                <span className={`self-start mt-2 inline-block px-2 py-0.5 rounded-full text-[15px] ${typeColor(p.type)}`}>{p.type}</span>
+              ) : p.role && p.role !== "attendee" ? (
+                <p className="text-[15px] text-gray-500 capitalize mt-1">{p.role}</p>
+              ) : null}
+
+              {p.email && <p className="text-[15px] text-gray-500 mt-2 truncate">{p.email}</p>}
+              {p.title && <p className="text-sm text-gray-600 mt-1 truncate">{p.title}{p.org ? ` · ${p.org}` : ""}</p>}
               {p.note && <p className="text-[15px] text-gray-500 mt-2 line-clamp-3">{p.note}</p>}
               {p.labelIds.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-2">
@@ -904,6 +929,12 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           onClose={() => setSelectedPerson(null)}
           onSaved={applyPatch}
           onRemoved={() => { const id = selectedPerson.id; setPeople((prev) => prev.filter((p) => p.id !== id)); setSelectedPerson(null); }}
+          onDeletePerson={() => {
+            const id = selectedPerson.id;
+            setPeople((prev) => prev.filter((p) => p.id !== id));
+            setSelectedPerson(null);
+            deleteAttendee(id).catch(() => setReloadKey((k) => k + 1));
+          }}
           onLabelsChange={(labelIds) => {
             const id = selectedPerson.id;
             setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, labelIds } : p)));

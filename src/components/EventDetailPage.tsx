@@ -364,6 +364,7 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
           customCover={event.customCoverUrl}
           position={event.coverPosition}
           onChange={(patch) => setEvent((ev) => (ev ? { ...ev, coverImageUrl: patch.cover, ...(patch.custom !== undefined ? { customCoverUrl: patch.custom } : {}) } : ev))}
+          onPosition={(coverPosition) => setEvent((ev) => (ev ? { ...ev, coverPosition } : ev))}
         />
         </div>
       </div>

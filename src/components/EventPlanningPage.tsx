@@ -4399,7 +4399,9 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             cover={plan.coverImageUrl}
             lumaCover={plan.lumaCoverUrl}
             customCover={plan.customCoverUrl}
+            position={plan.coverPosition}
             onChange={(patch) => setPlan((p) => (p ? { ...p, coverImageUrl: patch.cover, ...(patch.custom !== undefined ? { customCoverUrl: patch.custom } : {}) } : p))}
+            onPosition={(coverPosition) => setPlan((p) => (p ? { ...p, coverPosition } : p))}
           />
         </div>
         <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} className="absolute bottom-4 right-6" onSynced={() => setReload((x) => x + 1)} />

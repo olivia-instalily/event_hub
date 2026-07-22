@@ -923,6 +923,20 @@ export async function listAllAttendees(): Promise<PersonView[]> {
   });
 }
 
+export interface InternalPerson { id: string; name: string | null; email: string | null; crewRole: CrewRole; }
+
+/** Internal contacts (InstaLILY staff) for the series person bank — explicit flag or @instalily.ai email. */
+export async function listInternalPeople(): Promise<InternalPerson[]> {
+  const { data, error } = await supabase
+    .from('attendee')
+    .select('id, name, email, is_internal, crew_role')
+    .order('name', { nullsFirst: false });
+  if (error) throw error;
+  return (data ?? [])
+    .filter((r: any) => (r.is_internal ?? false) || isInternalEmail(r.email))
+    .map((r: any) => ({ id: r.id, name: r.name, email: r.email, crewRole: coerceRole(r.crew_role) }));
+}
+
 /** Attendees linked to one event, with their per-event role + Luma status. */
 export async function listAttendeesForEvent(eventId: string): Promise<PersonView[]> {
   const { data, error } = await supabase
@@ -1113,6 +1127,14 @@ export async function removeAttendeeFromEvent(eventId: string, attendeeId: strin
   if (error) throw error;
   const { data } = await supabase.from('attendee_event').select('id').eq('attendee_id', attendeeId).limit(1);
   if (!data || data.length === 0) await supabase.from('attendee').delete().eq('id', attendeeId);
+}
+
+/** Hard-delete a person entirely (used to remove internal teammates who've left). Removes their event
+ *  links first — attendee_event has no ON DELETE CASCADE — then the attendee (labels/notes/tags cascade). */
+export async function deleteAttendee(attendeeId: string): Promise<void> {
+  await supabase.from('attendee_event').delete().eq('attendee_id', attendeeId);
+  const { error } = await supabase.from('attendee').delete().eq('id', attendeeId);
+  if (error) throw error;
 }
 
 /** Upload a custom cover: stores it + makes it the active cover (keeps any Luma cover). */
@@ -2510,6 +2532,7 @@ export interface EventPlanning {
   coverImageUrl: string | null;
   lumaCoverUrl: string | null;
   customCoverUrl: string | null;
+  coverPosition: string | null; // CSS object-position ("x% y%") for cropping on cards
   page: PageState;
   pageDraft: PageDraft | null;
   engagements: EngagementWithCandidates[];
@@ -2595,7 +2618,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -2714,6 +2737,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     coverImageUrl: (row as any).cover_image_url ?? null,
     lumaCoverUrl: (row as any).luma_cover_url ?? null,
     customCoverUrl: (row as any).custom_cover_url ?? null,
+    coverPosition: (row as any).cover_position ?? null,
     page: {
       ownership: ((row as any).page_ownership ?? 'generated') as PageOwnership,
       repoRef: (row as any).repo_ref ?? null,

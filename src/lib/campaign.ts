@@ -33,11 +33,21 @@ export const CREW_ROLES: CrewRole[] = ["eng", "growth", "marketing", "leadership
 export const ROLE_LABEL: Record<CrewRole, string> = { eng: "Eng", growth: "Growth", marketing: "Marketing", leadership: "Leadership", none: "Unspecified" };
 // Coerce any stored value to a valid role — maps the legacy "biz" to "growth" so old data keeps working.
 export const coerceRole = (r: any): CrewRole => (r === "biz" ? "growth" : (CREW_ROLES.includes(r) ? r : "eng"));
+// Per-role hue — canonical source shared by the series roster and the People page so role colors match.
+// `solid` = filled chip/badge; `soft` = tinted background. Full literal classes for Tailwind's scan.
+export const ROLE_HUE: Record<CrewRole, { solid: string; soft: string }> = {
+  eng:        { solid: "bg-sky-400 text-white",    soft: "bg-sky-100 text-sky-700" },
+  growth:     { solid: "bg-violet-400 text-white", soft: "bg-violet-100 text-violet-700" },
+  marketing:  { solid: "bg-rose-400 text-white",   soft: "bg-rose-100 text-rose-700" },
+  leadership: { solid: "bg-amber-400 text-white",  soft: "bg-amber-100 text-amber-800" },
+  none:       { solid: "bg-gray-300 text-gray-700", soft: "bg-gray-100 text-gray-600" },
+};
 // Presence span WITHIN a wave (defaults to the full wave when absent → enables the step-down).
 export type PresenceSpan = { from?: string | null; to?: string | null };
 export interface CampaignPerson {
   id: string;
   profileId?: string | null;   // linked account, OR:
+  contactId?: string | null;   // linked internal contact (attendee id), OR:
   name?: string; email?: string; // free-text person (email optional, @instalily.ai)
   waveIds: string[];
   travel: "flying" | "local";

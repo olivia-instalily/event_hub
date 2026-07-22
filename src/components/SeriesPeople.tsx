@@ -1,4 +1,4 @@
-import { useState, useLayoutEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Plus, X, Plane, MapPin, Clock, Check, GripVertical, ChevronDown } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
@@ -9,7 +9,8 @@ import {
   eachDay, waveBounds, campaignPeak, crewTravelCounts, waveColor, CREW_ROLES, ROLE_LABEL,
   type CampaignPerson, type Wave, type CrewRole,
 } from "../lib/campaign";
-import { useProfile } from "../lib/profile";
+import { listInternalPeople, createInternalPerson, type InternalPerson } from "../lib/db";
+import { internalEmailFor } from "../lib/people";
 import { NumberField } from "./NumberField";
 
 const newPersonId = () => "cp-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
@@ -31,12 +32,17 @@ const dotClass = (role: CrewRole, status: "confirmed" | "proposed") => (status =
 // presence, number = anonymous headcount). A person bank on the right lists everyone on the series;
 // drag a person onto a wave to assign (they stay in the bank — people can be in multiple waves).
 export function SeriesPeople({ campaign, events, save }: TabProps) {
-  const { profiles } = useProfile();
   const [openDot, setOpenDot] = useState<string | null>(null); // `${personId}|${waveId}`
   const [dotAnchor, setDotAnchor] = useState<DOMRect | null>(null);
   const [openAdd, setOpenAdd] = useState<string | null>(null); // waveId whose add-menu is open
   const [addAnchor, setAddAnchor] = useState<DOMRect | null>(null);
   const [bankName, setBankName] = useState("");
+  const [contacts, setContacts] = useState<InternalPerson[]>([]); // internal contacts to pick from
+  const [creating, setCreating] = useState(false);               // create-new-teammate form open
+  const [newRole, setNewRole] = useState<CrewRole>("none");
+  const [newEmail, setNewEmail] = useState("");
+  const [emailTouched, setEmailTouched] = useState(false);
+  useEffect(() => { listInternalPeople().then(setContacts).catch(() => {}); }, []);
   const openDotAt = (key: string, el: HTMLElement) => { setOpenDot(openDot === key ? null : key); setDotAnchor(el.getBoundingClientRect()); setOpenAdd(null); };
   const openAddAt = (waveId: string, el: HTMLElement) => { setOpenAdd(openAdd === waveId ? null : waveId); setAddAnchor(el.getBoundingClientRect()); setOpenDot(null); };
 
@@ -89,9 +95,31 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
 
   // Person bank (right column) — everyone on the series, named. Anonymous headcount lives in waves only.
   const bank = campaign.people.filter((p) => !isAnonymous(p));
-  const addProfileToBank = (profileId: string) => { if (campaign.people.some((p) => p.profileId === profileId)) return; const pr = profiles.find((x) => x.id === profileId); if (!pr) return; save({ ...campaign, people: [...campaign.people, { id: newPersonId(), profileId, name: pr.name, email: pr.email ?? undefined, waveIds: [], travel: "flying", role: "eng", status: "proposed" }] }); };
-  const addFreeTextToBank = () => { const n = bankName.trim(); if (!n) return; save({ ...campaign, people: [...campaign.people, { id: newPersonId(), name: n, waveIds: [], travel: "flying", role: "eng", status: "proposed" }] }); setBankName(""); };
+  // Is this contact already on the series (linked by contact id, or matched by email)?
+  const inBank = (c: InternalPerson) => campaign.people.some((p) =>
+    (!!c.id && p.contactId === c.id) || (!!c.email && !!p.email && p.email.toLowerCase() === c.email.toLowerCase()));
+  // Add an internal contact to the bank — role is seeded from their global contact role.
+  const addContactToBank = (c: InternalPerson) => {
+    if (inBank(c)) return;
+    save({ ...campaign, people: [...campaign.people, { id: newPersonId(), contactId: c.id, name: c.name ?? undefined, email: c.email ?? undefined, waveIds: [], travel: "flying", role: c.crewRole, status: "proposed" }] });
+    setBankName(""); setCreating(false);
+  };
+  const startCreate = () => { setNewRole("none"); setNewEmail(internalEmailFor(bankName.trim())); setEmailTouched(false); setCreating(true); };
+  // Create a brand-new internal teammate → lands on the People (Internal) page AND joins this bank.
+  const submitCreate = async () => {
+    const n = bankName.trim();
+    if (!n) return;
+    const p = await createInternalPerson({ name: n, email: newEmail.trim() || null, crewRole: newRole });
+    setContacts((prev) => [...prev, { id: p.id, name: p.name, email: p.email, crewRole: newRole }]);
+    save({ ...campaign, people: [...campaign.people, { id: newPersonId(), contactId: p.id, name: p.name ?? n, email: p.email ?? undefined, waveIds: [], travel: "flying", role: newRole, status: "proposed" }] });
+    setBankName(""); setCreating(false);
+  };
   const removeFromSeries = (id: string) => save({ ...campaign, people: campaign.people.filter((p) => p.id !== id) });
+
+  // Typeahead: internal contacts matching the typed name and not already on the series.
+  const q = bankName.trim().toLowerCase();
+  const contactMatches = q ? contacts.filter((c) => (c.name ?? "").toLowerCase().includes(q) && !inBank(c)).slice(0, 6) : [];
+  const exactMatch = q ? contacts.some((c) => (c.name ?? "").toLowerCase() === q) : false;
   // Planned headcount defaults to FLYING (non-local) so "add N people to a wave" counts toward the
   // per-wave travel estimate by default — flip a group to local on its dot if they're local staff.
   const addPlannedToWave = (waveId: string, role: CrewRole, count: number) => { save({ ...campaign, people: [...campaign.people, { id: newPersonId(), waveIds: [waveId], travel: "flying", role, status: "proposed", statusByWave: { [waveId]: "proposed" }, plannedCount: count }] }); setOpenAdd(null); };
@@ -163,19 +191,53 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
             <p className="text-[12px] text-gray-400 mb-3">Everyone on the series. Drag onto a wave to assign.</p>
             <div className="space-y-1.5 mb-3">
               {bank.length === 0 && <p className="text-[13px] text-gray-400">No one added yet.</p>}
-              {bank.map((p) => <BankPerson key={p.id} person={p} waveNames={campaign.waves.filter((w) => p.waveIds.includes(w.id)).map((w) => w.name || "wave")} onRole={(r) => patchPerson(p.id, { role: r })} onRemove={() => removeFromSeries(p.id)} />)}
+              {bank.map((p) => <BankPerson key={p.id} person={p} waveNames={campaign.waves.filter((w) => p.waveIds.includes(w.id)).map((w) => w.name || "wave")} onRemove={() => removeFromSeries(p.id)} />)}
             </div>
-            <div className="flex gap-1.5">
-              <input value={bankName} onChange={(e) => setBankName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addFreeTextToBank(); }} placeholder="Add by name…" className="flex-1 min-w-0 px-2 py-1 border border-gray-300 rounded text-[13px]" />
-              <button onClick={addFreeTextToBank} disabled={!bankName.trim()} className="px-2 rounded bg-gray-900 text-white text-[13px] disabled:opacity-40">Add</button>
-            </div>
-            <div className="mt-2">
-              <Select value="" onValueChange={(v) => { if (v) addProfileToBank(v as string); }} items={profiles.filter((pr) => !campaign.people.some((p) => p.profileId === pr.id)).map((pr) => ({ value: pr.id, label: pr.name }))}>
-                <SelectTrigger className="w-full h-9 text-[13px]"><SelectValue placeholder="Add a teammate…" /></SelectTrigger>
-                <SelectContent>
-                  {profiles.filter((pr) => !campaign.people.some((p) => p.profileId === pr.id)).map((pr) => <SelectItem key={pr.id} value={pr.id}>{pr.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+            {/* Add by name → pick an internal contact, or create a new internal teammate. */}
+            <div className="relative">
+              <input
+                value={bankName}
+                onChange={(e) => { setBankName(e.target.value); setCreating(false); if (!emailTouched) setNewEmail(internalEmailFor(e.target.value.trim())); }}
+                placeholder="Add by name…"
+                className="w-full px-2 py-1 border border-gray-300 rounded text-[13px]"
+              />
+              {q && !creating && (
+                <div className="mt-1 border border-border rounded-lg bg-white shadow-sm overflow-hidden">
+                  {contactMatches.map((c) => (
+                    <button key={c.id} onClick={() => addContactToBank(c)} className="w-full flex items-center gap-2 text-left px-2 py-1.5 text-[13px] hover:bg-gray-50">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${HUE[c.crewRole].solid.split(" ")[0]}`} />
+                      <span className="flex-1 min-w-0 truncate">{c.name || c.email}</span>
+                      <span className="text-[11px] text-gray-400">{ROLE_LABEL[c.crewRole]}</span>
+                    </button>
+                  ))}
+                  {!exactMatch && (
+                    <button onClick={startCreate} className="w-full text-left px-2 py-1.5 text-[13px] text-gray-700 hover:bg-gray-50 border-t border-gray-100 inline-flex items-center gap-1">
+                      <Plus className="w-3.5 h-3.5" /> Create “{bankName.trim()}” as new teammate
+                    </button>
+                  )}
+                  {contactMatches.length === 0 && exactMatch && (
+                    <p className="px-2 py-1.5 text-[12px] text-gray-400">Already on the series.</p>
+                  )}
+                </div>
+              )}
+              {creating && (
+                <div className="mt-2 border border-border rounded-lg p-2 space-y-2">
+                  <p className="text-[12px] font-medium text-gray-700">New internal teammate</p>
+                  <input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="Name" className="w-full px-2 py-1 border border-gray-300 rounded text-[13px]" />
+                  <div className="flex items-center gap-2">
+                    <span className="text-[12px] text-gray-500">Role</span>
+                    <Select value={newRole} onValueChange={(v) => setNewRole(v as CrewRole)} items={CREW_ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))}>
+                      <SelectTrigger className="h-8 flex-1 text-[13px]"><SelectValue /></SelectTrigger>
+                      <SelectContent>{CREW_ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <input value={newEmail} onChange={(e) => { setEmailTouched(true); setNewEmail(e.target.value); }} placeholder="name@instalily.ai" className="w-full px-2 py-1 border border-gray-300 rounded text-[13px]" />
+                  <div className="flex justify-end gap-1.5">
+                    <button onClick={() => setCreating(false)} className="px-2 py-1 rounded text-[12px] border border-border text-gray-600 hover:bg-gray-50">Cancel</button>
+                    <button onClick={() => void submitCreate()} disabled={!bankName.trim()} className="px-2 py-1 rounded bg-gray-900 text-white text-[12px] disabled:opacity-40">Create &amp; add</button>
+                  </div>
+                </div>
+              )}
             </div>
           </aside>
         </div>
@@ -262,23 +324,16 @@ function PlannedDrop({ groupId, children }: { groupId: string; children: React.R
   return <div ref={setNodeRef} className={`rounded-full transition-shadow ${isOver ? "ring-2 ring-gray-500 ring-offset-1" : ""}`}>{children}</div>;
 }
 
-function BankPerson({ person, waveNames, onRole, onRemove }: { person: CampaignPerson; waveNames: string[]; onRole: (r: CrewRole) => void; onRemove: () => void }) {
+function BankPerson({ person, waveNames, onRemove }: { person: CampaignPerson; waveNames: string[]; onRemove: () => void }) {
   const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({ id: person.id });
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50, position: "relative" as const } : undefined;
   const role = crewRole(person);
   return (
     <div ref={setNodeRef} style={style} className={`group flex items-center gap-2 rounded-lg border border-border bg-white px-2 py-1.5 ${isDragging ? "shadow-lg opacity-90" : ""}`}>
       <button {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 touch-none" aria-label="Drag to a wave"><GripVertical className="w-4 h-4" /></button>
-      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${HUE[role].solid.split(" ")[0]}`} />
+      {/* Role dot — color from the person's role (set on their contact record). */}
+      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${HUE[role].solid.split(" ")[0]}`} title={ROLE_LABEL[role]} />
       <span className="flex-1 min-w-0 text-[13px] truncate">{personLabel(person)}{waveNames.length > 0 && <span className="block text-[11px] text-gray-400 truncate">{waveNames.join(", ")}</span>}</span>
-      {/* Role is person-level (not wave-dependent) — assign it right here. Brand Select, matching the
-          other dropdowns. Stop pointer-down so opening it doesn't start a drag. */}
-      <span className="shrink-0" onPointerDown={(e) => e.stopPropagation()}>
-        <Select value={role} onValueChange={(v) => onRole(v as CrewRole)} items={CREW_ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))}>
-          <SelectTrigger className="h-7 w-[5.5rem] text-[11px]"><SelectValue /></SelectTrigger>
-          <SelectContent>{CREW_ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}</SelectContent>
-        </Select>
-      </span>
       <button onClick={onRemove} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100" aria-label="Remove from series"><X className="w-3.5 h-3.5" /></button>
     </div>
   );
