@@ -15,15 +15,15 @@ export interface Wave { id: string; name: string; start: string | null; end: str
 // Per-wave color, assigned by wave ORDER and reused everywhere a wave appears (Plan, People, Briefs,
 // presence viz) so a wave reads the same across the whole dashboard. Light versions of the general
 // site palette; cycles if there are more waves than colors. Full literal classes for Tailwind's scan.
-export interface WaveColor { name: string; dot: string; strong: string; soft: string; textSoft: string; bg: string; border: string; text: string; ring: string; }
+export interface WaveColor { name: string; dot: string; strong: string; soft: string; textSoft: string; bg: string; border: string; borderStrong: string; text: string; ring: string; }
 export const WAVE_COLORS: WaveColor[] = [
-  { name: "green",  dot: "bg-green-400",  strong: "bg-green-600",  soft: "bg-green-200",  textSoft: "text-green-200",  bg: "bg-green-50",  border: "border-green-200",  text: "text-green-700",  ring: "ring-green-300" },
-  { name: "yellow", dot: "bg-amber-400",  strong: "bg-amber-600",  soft: "bg-amber-200",  textSoft: "text-amber-200",  bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-700",  ring: "ring-amber-300" },
-  { name: "purple", dot: "bg-purple-400", strong: "bg-purple-600", soft: "bg-purple-200", textSoft: "text-purple-200", bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-700", ring: "ring-purple-300" },
-  { name: "blue",   dot: "bg-blue-400",   strong: "bg-blue-600",   soft: "bg-blue-200",   textSoft: "text-blue-200",   bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-700",   ring: "ring-blue-300" },
-  { name: "pink",   dot: "bg-pink-400",   strong: "bg-pink-600",   soft: "bg-pink-200",   textSoft: "text-pink-200",   bg: "bg-pink-50",   border: "border-pink-200",   text: "text-pink-700",   ring: "ring-pink-300" },
-  { name: "teal",   dot: "bg-teal-400",   strong: "bg-teal-600",   soft: "bg-teal-200",   textSoft: "text-teal-200",   bg: "bg-teal-50",   border: "border-teal-200",   text: "text-teal-700",   ring: "ring-teal-300" },
-  { name: "orange", dot: "bg-orange-400", strong: "bg-orange-600", soft: "bg-orange-200", textSoft: "text-orange-200", bg: "bg-orange-50", border: "border-orange-200", text: "text-orange-700", ring: "ring-orange-300" },
+  { name: "green",  dot: "bg-green-400",  strong: "bg-green-600",  soft: "bg-green-200",  textSoft: "text-green-200",  bg: "bg-green-50",  border: "border-green-200",  borderStrong: "border-green-400",  text: "text-green-700",  ring: "ring-green-300" },
+  { name: "yellow", dot: "bg-amber-400",  strong: "bg-amber-600",  soft: "bg-amber-200",  textSoft: "text-amber-200",  bg: "bg-amber-50",  border: "border-amber-200",  borderStrong: "border-amber-400",  text: "text-amber-700",  ring: "ring-amber-300" },
+  { name: "purple", dot: "bg-purple-400", strong: "bg-purple-600", soft: "bg-purple-200", textSoft: "text-purple-200", bg: "bg-purple-50", border: "border-purple-200", borderStrong: "border-purple-400", text: "text-purple-700", ring: "ring-purple-300" },
+  { name: "blue",   dot: "bg-blue-400",   strong: "bg-blue-600",   soft: "bg-blue-200",   textSoft: "text-blue-200",   bg: "bg-blue-50",   border: "border-blue-200",   borderStrong: "border-blue-400",   text: "text-blue-700",   ring: "ring-blue-300" },
+  { name: "pink",   dot: "bg-pink-400",   strong: "bg-pink-600",   soft: "bg-pink-200",   textSoft: "text-pink-200",   bg: "bg-pink-50",   border: "border-pink-200",   borderStrong: "border-pink-400",   text: "text-pink-700",   ring: "ring-pink-300" },
+  { name: "teal",   dot: "bg-teal-400",   strong: "bg-teal-600",   soft: "bg-teal-200",   textSoft: "text-teal-200",   bg: "bg-teal-50",   border: "border-teal-200",   borderStrong: "border-teal-400",   text: "text-teal-700",   ring: "ring-teal-300" },
+  { name: "orange", dot: "bg-orange-400", strong: "bg-orange-600", soft: "bg-orange-200", textSoft: "text-orange-200", bg: "bg-orange-50", border: "border-orange-200", borderStrong: "border-orange-400", text: "text-orange-700", ring: "ring-orange-300" },
 ];
 export const waveColor = (index: number): WaveColor => WAVE_COLORS[((index % WAVE_COLORS.length) + WAVE_COLORS.length) % WAVE_COLORS.length];
 export const waveColorById = (waves: { id: string }[], waveId: string): WaveColor => waveColor(Math.max(0, waves.findIndex((w) => w.id === waveId)));
@@ -69,6 +69,7 @@ export interface Campaign {
   waves: Wave[];
   people: CampaignPerson[];
   anchorEventIds: string[];
+  tentativeEventIds: string[];   // events not yet confirmed for the series (dotted/italic in the UI)
   currency: string;              // per-series, default "USD"
   estimatedLines: EstimatedLine[]; // MANUAL estimated lines only (auto lines are derived, not stored)
   pendingItems: string[];        // known-but-unsized costs, excluded from the total
@@ -76,7 +77,7 @@ export interface Campaign {
   folderUrl: string | null;      // single paired Drive folder for the series (open-only)
 }
 
-export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [], currency: "USD", estimatedLines: [], pendingItems: [], logistics: [], folderUrl: null });
+export const emptyCampaign = (): Campaign => ({ drive: "recruiting", travelRatePerWave: null, accommodationRatePerNight: null, waves: [], people: [], anchorEventIds: [], tentativeEventIds: [], currency: "USD", estimatedLines: [], pendingItems: [], logistics: [], folderUrl: null });
 
 // Coerce a possibly-partial jsonb blob into a well-formed Campaign (older/absent fields default).
 export function normalizeCampaign(raw: any): Campaign {
@@ -88,6 +89,7 @@ export function normalizeCampaign(raw: any): Campaign {
     waves: Array.isArray(c.waves) ? c.waves.map((w: any) => ({ id: String(w.id), name: w.name ?? "", start: w.start ?? null, end: w.end ?? null, eventIds: Array.isArray(w.eventIds) ? w.eventIds : [] })) : [],
     people: Array.isArray(c.people) ? c.people.map((p: any) => ({ id: String(p.id), profileId: p.profileId ?? null, name: p.name, email: p.email, waveIds: Array.isArray(p.waveIds) ? p.waveIds : [], travel: p.travel === "local" ? "local" : "flying", lodging: p.lodging ?? null, travelDetail: p.travelDetail ?? null, eventIds: Array.isArray(p.eventIds) ? p.eventIds : undefined, role: coerceRole(p.role), status: p.status === "proposed" ? "proposed" : "confirmed", spans: p.spans && typeof p.spans === "object" ? p.spans : undefined, statusByWave: p.statusByWave && typeof p.statusByWave === "object" ? p.statusByWave : undefined, travelByWave: p.travelByWave && typeof p.travelByWave === "object" ? p.travelByWave : undefined, plannedCount: typeof p.plannedCount === "number" ? p.plannedCount : null })) : [],
     anchorEventIds: Array.isArray(c.anchorEventIds) ? c.anchorEventIds : [],
+    tentativeEventIds: Array.isArray(c.tentativeEventIds) ? c.tentativeEventIds : [],
     currency: typeof c.currency === "string" && c.currency.trim() ? c.currency : "USD",
     estimatedLines: Array.isArray(c.estimatedLines)
       ? c.estimatedLines.map((l: any) => ({ id: String(l.id), item: l.item ?? "", detail: l.detail ?? "", amount: typeof l.amount === "number" ? l.amount : 0 }))

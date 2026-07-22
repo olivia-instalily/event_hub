@@ -37,6 +37,8 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
   const [openAdd, setOpenAdd] = useState<string | null>(null); // waveId whose add-menu is open
   const [addAnchor, setAddAnchor] = useState<DOMRect | null>(null);
   const [bankName, setBankName] = useState("");
+  // Pending role-mismatch confirmation when dropping a person onto a differently-roled planned group.
+  const [mismatch, setMismatch] = useState<{ personId: string; personName: string; personRole: CrewRole; groupRole: CrewRole; waveId: string } | null>(null);
   const [contacts, setContacts] = useState<InternalPerson[]>([]); // internal contacts to pick from
   const [creating, setCreating] = useState(false);               // create-new-teammate form open
   const [newRole, setNewRole] = useState<CrewRole>("none");
@@ -75,7 +77,11 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
     if (!person || !group || personId === groupId || !isAnonymous(group)) return;
     const waveId = group.waveIds[0];
     if (!waveId) return;
-    if (crewRole(person) !== crewRole(group)) { assignToWave(personId, waveId); return; } // role mismatch → plain assign
+    // Role mismatch → don't silently fill a slot they don't match; warn and let the user decide.
+    if (crewRole(person) !== crewRole(group)) {
+      setMismatch({ personId, personName: personLabel(person), personRole: crewRole(person), groupRole: crewRole(group), waveId });
+      return;
+    }
     const nextCount = bodyCount(group) - 1;
     const groupSpan = group.spans?.[waveId];
     const groupStatus = waveStatus(group, waveId);
@@ -154,12 +160,26 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
               const bounds = waveBounds(w, eventDates);
               const inWave = campaign.people.filter((p) => p.waveIds.includes(w.id));
               const wc = waveColor(wi);
+              const waveEvents = w.eventIds.map((id) => events.find((e) => e.id === id)).filter((e): e is NonNullable<typeof e> => !!e);
               return (
                 <WaveDrop key={w.id} waveId={w.id}>
-                  <div className="flex items-baseline gap-2 mb-3">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${wc.dot}`} title={`${wc.name} wave`} />
-                    <span className="text-[15px] font-medium">{w.name || "Untitled wave"}</span>
-                    <span className="text-[12px] text-gray-400">{bounds.start ? `${fmtDay(bounds.start)}${bounds.end && bounds.end !== bounds.start ? ` – ${fmtDay(bounds.end)}` : ""}` : "no dates"}</span>
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${wc.dot}`} title={`${wc.name} wave`} />
+                      <span className="text-[15px] font-medium">{w.name || "Untitled wave"}</span>
+                      <span className="text-[12px] text-gray-400">{bounds.start ? `${fmtDay(bounds.start)}${bounds.end && bounds.end !== bounds.start ? ` – ${fmtDay(bounds.end)}` : ""}` : "no dates"}</span>
+                    </div>
+                    {/* Events in this phase — tentative ones italicized. */}
+                    {waveEvents.length > 0 && (
+                      <div className="shrink-0 max-w-[45%] text-right">
+                        <p className="text-[11px] uppercase tracking-wide text-gray-400 mb-0.5">Events</p>
+                        <ul className="space-y-0.5">
+                          {waveEvents.map((e) => (
+                            <li key={e.id} className={`text-[12px] text-gray-600 truncate ${campaign.tentativeEventIds.includes(e.id) ? "italic" : ""}`}>{e.name}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {inWave.length === 0 && <span className="text-[13px] text-gray-400">Drop people here, or use +.</span>}
@@ -274,6 +294,23 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
           </AnchoredPopover>
         );
       })()}
+
+      {/* Role-mismatch warning — dropping a person onto a differently-roled planned group. */}
+      {mismatch && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/30 p-4" onClick={() => setMismatch(null)}>
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-white shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[15px] font-medium mb-1">Role doesn’t match</p>
+            <p className="text-sm text-gray-600">
+              <span className="font-medium">{mismatch.personName}</span> is <span className="font-medium">{ROLE_LABEL[mismatch.personRole]}</span>, but that group is{" "}
+              <span className="font-medium">{ROLE_LABEL[mismatch.groupRole]}</span>. They won’t fill a {ROLE_LABEL[mismatch.groupRole]} slot — add them to the wave anyway?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setMismatch(null)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+              <button onClick={() => { assignToWave(mismatch.personId, mismatch.waveId); setMismatch(null); }} className="px-4 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black">Add to wave anyway</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

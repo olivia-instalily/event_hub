@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, X, Star, GripVertical, AlertCircle, Plane, StickyNote } from "lucide-react";
+import { Plus, X, Star, GripVertical, AlertCircle, Plane, StickyNote, CircleDashed } from "lucide-react";
 import { DndContext, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import type { TabProps } from "./SeriesDashboard";
@@ -28,13 +28,15 @@ function WaveSelect({ waves, onPick }: { waves: Wave[]; onPick: (waveId: string)
 
 // A draggable event row. Module-scope component (uses the useDraggable hook) so it isn't redefined on
 // every render. Drag is isolated to the grip handle; the name/anchor/select stay clickable.
-function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUnassign, onAssign, onRemove }: {
+function EventChip({ event, anchor, tentative, inWave, waves, onOpen, onToggleAnchor, onToggleTentative, onUnassign, onAssign, onRemove }: {
   event: SeriesEvent;
   anchor: boolean;
+  tentative: boolean;
   inWave: boolean;
   waves: Wave[];
   onOpen?: (id: string) => void;
   onToggleAnchor: (id: string) => void;
+  onToggleTentative: (id: string) => void;
   onUnassign: (id: string) => void;
   onAssign: (id: string, waveId: string) => void;
   onRemove?: (id: string) => void; // pending only: remove the event from the series entirely
@@ -47,9 +49,10 @@ function EventChip({ event, anchor, inWave, waves, onOpen, onToggleAnchor, onUna
       <button {...attributes} {...listeners} className="shrink-0 cursor-grab active:cursor-grabbing text-gray-200 group-hover/row:text-gray-400 hover:text-gray-600 touch-none" title="Drag to a wave" aria-label="Drag event"><GripVertical className="w-4 h-4" /></button>
       {anchor && <Star className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
       <button onClick={() => onOpen?.(event.id)} className="flex-1 min-w-0 text-left">
-        <span className="block text-sm font-medium text-gray-900 truncate group-hover/row:underline">{event.name}</span>
+        <span className={`block text-sm font-medium text-gray-900 truncate group-hover/row:underline ${tentative ? "italic" : ""}`}>{event.name}{tentative && <span className="ml-1 not-italic text-[11px] font-normal text-gray-400">tentative</span>}</span>
         {subtitle && <span className="block text-[12px] text-gray-400 truncate">{subtitle}</span>}
       </button>
+      <button onClick={() => onToggleTentative(event.id)} title={tentative ? "Mark confirmed" : "Mark tentative"} className={`shrink-0 ${tentative ? "text-gray-600" : "text-gray-300 hover:text-gray-600"}`}><CircleDashed className="w-4 h-4" /></button>
       <button onClick={() => onToggleAnchor(event.id)} title={anchor ? "Unmark anchor" : "Mark as anchor"} className={`shrink-0 ${anchor ? "text-amber-500" : "text-gray-300 hover:text-amber-500"}`}><Star className="w-4 h-4" /></button>
       {inWave ? (
         <button onClick={() => onUnassign(event.id)} title="Remove from wave" className="shrink-0 text-gray-300 hover:text-red-600"><X className="w-4 h-4" /></button>
@@ -118,6 +121,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
   const assignEvent = (eventId: string, waveId: string) => save({ ...campaign, waves: campaign.waves.map((w) => ({ ...w, eventIds: w.id === waveId ? [...new Set([...w.eventIds, eventId])] : w.eventIds.filter((id) => id !== eventId) })) });
   const unassign = (eventId: string) => save({ ...campaign, waves: campaign.waves.map((w) => ({ ...w, eventIds: w.eventIds.filter((id) => id !== eventId) })) });
   const toggleAnchor = (eventId: string) => save({ ...campaign, anchorEventIds: campaign.anchorEventIds.includes(eventId) ? campaign.anchorEventIds.filter((id) => id !== eventId) : [...campaign.anchorEventIds, eventId] });
+  const toggleTentative = (eventId: string) => save({ ...campaign, tentativeEventIds: campaign.tentativeEventIds.includes(eventId) ? campaign.tentativeEventIds.filter((id) => id !== eventId) : [...campaign.tentativeEventIds, eventId] });
   // Remove a pending event from the series entirely (unlink it — the event itself is not deleted).
   const removeFromSeries = async (eventId: string) => {
     await setEventSeries(eventId, null).catch(() => {});
@@ -254,7 +258,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
                   {w.eventIds.length === 0
                     ? <p className="text-[13px] text-gray-400 py-1.5">No events yet — drop a brief, drag one here, or use “Add event”.</p>
                     : w.eventIds.map((id) => eventsById[id] && (
-                        <EventChip key={id} event={eventsById[id]} anchor={campaign.anchorEventIds.includes(id)} inWave waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onUnassign={unassign} onAssign={assignEvent} />
+                        <EventChip key={id} event={eventsById[id]} anchor={campaign.anchorEventIds.includes(id)} tentative={campaign.tentativeEventIds.includes(id)} inWave waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onToggleTentative={toggleTentative} onUnassign={unassign} onAssign={assignEvent} />
                       ))}
                 </DropZone>
                 <div className="mt-2">
@@ -304,7 +308,7 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
             {pending.length === 0
               ? <p className="text-[13px] text-gray-400 px-1 py-1.5">All member events are assigned.{events.length === 0 ? " Add one below." : " Drag one here to unassign it."}</p>
               : pending.map((e) => (
-                  <EventChip key={e.id} event={e} anchor={campaign.anchorEventIds.includes(e.id)} inWave={false} waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onUnassign={unassign} onAssign={assignEvent} onRemove={(id) => void removeFromSeries(id)} />
+                  <EventChip key={e.id} event={e} anchor={campaign.anchorEventIds.includes(e.id)} tentative={campaign.tentativeEventIds.includes(e.id)} inWave={false} waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onToggleTentative={toggleTentative} onUnassign={unassign} onAssign={assignEvent} onRemove={(id) => void removeFromSeries(id)} />
                 ))}
           </DropZone>
           <div className="mt-3">

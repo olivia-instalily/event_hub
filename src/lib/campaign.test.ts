@@ -10,6 +10,7 @@ function fixture(): Campaign {
     travelRatePerWave: 500,
     accommodationRatePerNight: null,
     anchorEventIds: ["e-hack"],
+    tentativeEventIds: [],
     currency: "USD",
     estimatedLines: [],
     pendingItems: [],

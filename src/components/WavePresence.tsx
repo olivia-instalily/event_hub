@@ -68,6 +68,7 @@ export function WavePresence({ campaign, events, save }: { campaign: Campaign; e
   const eventById: Record<string, SeriesEvent> = {};
   for (const e of events) { eventDates[e.id] = e.date; eventById[e.id] = e; }
 
+  const isTentative = (id: string) => campaign.tentativeEventIds.includes(id);
   // Who a logistics leg involves: named people if given, else an anonymous head-count ("5 people").
   const logWho = (l: DayLogistic): string => {
     if (l.peopleIds && l.peopleIds.length) return l.peopleIds.map((id) => { const p = campaign.people.find((x) => x.id === id); return p ? personLabel(p) : null; }).filter(Boolean).join(", ");
@@ -266,15 +267,20 @@ export function WavePresence({ campaign, events, save }: { campaign: Campaign; e
                           // When this day's stack block is hovered, the circle gives way to the time-range
                           // highlight that emerges on the line — so it fades out (and stops catching hover).
                           const blockHover = hover?.waveId === w.id && hover?.day === date;
+                          // A day reads as tentative when every event on it is tentative — then the dot
+                          // is an open dashed ring with a smaller inner circle (vs the solid confirmed dot).
+                          const dayTentative = evs.every((e) => isTentative(e.id));
                           return (
                             <span key={date} className="absolute top-0 -translate-x-1/2 z-20" style={{ left: `${centerPct}%` }}
                               onMouseEnter={() => setEventHover(key)} onMouseLeave={() => setEventHover(null)}>
-                              <span className={`block w-3 h-3 rounded-full border-[3px] border-white ring-2 -translate-y-1/2 transition-opacity duration-150 ${wc.dot} ${wc.ring} ${blockHover ? "opacity-0" : "opacity-100"}`} />
+                              {dayTentative
+                                ? <span className={`flex items-center justify-center w-4 h-4 rounded-full border-2 border-dashed ${wc.borderStrong} ${wc.bg} ring-2 ring-white -translate-y-1/2 transition-opacity duration-150 ${blockHover ? "opacity-0" : "opacity-100"}`}><span className={`w-1 h-1 rounded-full ${wc.dot}`} /></span>
+                                : <span className={`block w-3 h-3 rounded-full border-[3px] border-white ring-2 -translate-y-1/2 transition-opacity duration-150 ${wc.dot} ${wc.ring} ${blockHover ? "opacity-0" : "opacity-100"}`} />}
                               <span className="absolute top-3 left-1/2 -translate-x-1/2 w-24 text-left pointer-events-none">
                                 {evs.map((e) => (
                                   <span key={e.id} className="flex items-center gap-1 text-[10px] leading-tight text-gray-600">
                                     <span className="w-1 h-1 rounded-full bg-gray-400 shrink-0" />
-                                    <span className="truncate">{e.name}</span>
+                                    <span className={`truncate ${isTentative(e.id) ? "italic" : ""}`}>{e.name}</span>
                                   </span>
                                 ))}
                                 <span className="block text-[9px] text-gray-400 mt-0.5">{fmtDay(date)}</span>
@@ -288,7 +294,7 @@ export function WavePresence({ campaign, events, save }: { campaign: Campaign; e
                                       const tf = timeFrame(e.startTime, e.endTime);
                                       return (
                                         <li key={e.id} className="text-[12px] text-gray-800">
-                                          <span className="flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full shrink-0 ${wc.dot}`} />{e.name}</span>
+                                          <span className="flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full shrink-0 ${wc.dot}`} /><span className={isTentative(e.id) ? "italic" : ""}>{e.name}</span>{isTentative(e.id) && <span className="text-[10px] text-gray-400">· tentative</span>}</span>
                                           <span className="block ml-3 text-[10px] text-gray-400">{tf.label}{e.location ? ` · ${e.location}` : ""}</span>
                                         </li>
                                       );
