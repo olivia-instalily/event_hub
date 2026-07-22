@@ -1,7 +1,7 @@
-import { Bookmark, LayoutGrid, List, Search, Star } from "lucide-react";
+import { Bookmark, LayoutGrid, List, Search, Star, Calendar as CalendarIcon, CheckCircle2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import { useEffect, useState } from "react";
-import { listVendors, type VendorRow } from "../lib/db";
+import { listVendors, getVendorUsage, type VendorRow, type VendorUsage } from "../lib/db";
 import { tagBadgeVariant } from "../lib/tags";
 import { Badge } from "@instalily/ui/badge";
 import { Input } from "@instalily/ui/input";
@@ -12,6 +12,17 @@ export function VendorsPage() {
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Which vendor's "used at" detail is expanded, and a cache of each vendor's engagements.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [usage, setUsage] = useState<Record<string, VendorUsage[] | "loading">>({});
+  const openVendor = (id: string) => {
+    setOpenId((cur) => (cur === id ? null : id));
+    if (usage[id] === undefined) {
+      setUsage((m) => ({ ...m, [id]: "loading" }));
+      getVendorUsage(id).then((u) => setUsage((m) => ({ ...m, [id]: u }))).catch(() => setUsage((m) => ({ ...m, [id]: [] })));
+    }
+  };
 
   const [bookmarked, setBookmarked] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'cards' | 'lines'>('cards');
@@ -111,10 +122,10 @@ export function VendorsPage() {
       {!loading && !error && viewMode === 'cards' && filtered.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {filtered.map((v) => (
-            <div key={v.id} className="bg-white rounded-2xl border border-border p-6 hover:shadow-md transition-shadow">
+            <div key={v.id} onClick={() => openVendor(v.id)} className={`bg-white rounded-2xl border p-6 hover:shadow-md transition-shadow cursor-pointer ${openId === v.id ? "border-gray-400 shadow-sm" : "border-border"}`}>
               <div className="flex items-start justify-between mb-3">
                 <Badge variant={tagBadgeVariant(v.category)}>{v.category ?? 'Uncategorized'}</Badge>
-                <button onClick={() => toggleBookmark(v.id)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Bookmark vendor">
+                <button onClick={(e) => { e.stopPropagation(); toggleBookmark(v.id); }} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Bookmark vendor">
                   <Bookmark className={`w-5 h-5 ${bookmarked.has(v.id) ? 'fill-current text-gray-900' : 'text-gray-400'}`} />
                 </button>
               </div>
@@ -125,6 +136,13 @@ export function VendorsPage() {
                 </span>
               )}
               {v.notes && <p className="text-sm text-gray-600 mt-2">{v.notes}</p>}
+              {/* "Used at" — events/series this vendor has been engaged on (click to expand). */}
+              {openId === v.id && (
+                <div className="mt-4 pt-3 border-t border-gray-100" onClick={(e) => e.stopPropagation()}>
+                  <p className="text-[13px] font-medium text-gray-500 mb-2">Used at</p>
+                  <VendorUsageList usage={usage[v.id]} />
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -145,5 +163,28 @@ export function VendorsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+const fmtUsageDate = (d: string | null) => (d ? new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : null);
+
+function VendorUsageList({ usage }: { usage: VendorUsage[] | "loading" | undefined }) {
+  if (usage === "loading" || usage === undefined) return <p className="text-[13px] text-gray-400">Loading…</p>;
+  if (usage.length === 0) return <p className="text-[13px] text-gray-400">Not used on any event yet.</p>;
+  return (
+    <ul className="space-y-1.5">
+      {usage.map((u) => (
+        <li key={u.engagementId} className="flex items-start gap-2 text-[13px]">
+          {u.contracted ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" /> : <CalendarIcon className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0" />}
+          <span className="min-w-0">
+            <span className="text-gray-800">{u.eventName ?? u.seriesName ?? "Untitled"}</span>
+            {u.category && <span className="text-gray-400"> · {u.category}</span>}
+            <span className="block text-[11px] text-gray-400">
+              {u.contracted ? "Contracted" : "Sourced"}{fmtUsageDate(u.date) ? ` · ${fmtUsageDate(u.date)}` : ""}
+            </span>
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -9,7 +9,10 @@ export type EventFocus = "hiring" | "client" | "neither";
 const HIRING = /recruit|hir(e|ing)|talent|fireside|campus|career|candidate|intern/i;
 const CLIENT = /client|gtm|sales|customer|prospect|account|exec|briefing|partner|sponsor/i;
 
-export function eventFocus(tags: string[], format?: string | null): EventFocus {
+// A human-set override always wins over the keyword guess (so a mis-matched event can be corrected).
+// override null/undefined → auto: fall back to the tag/format classifier.
+export function eventFocus(tags: string[], format?: string | null, override?: EventFocus | null): EventFocus {
+  if (override === "hiring" || override === "client" || override === "neither") return override;
   const hay = [...(tags ?? []), format ?? ""].join(" ").toLowerCase();
   if (HIRING.test(hay)) return "hiring";
   if (CLIENT.test(hay)) return "client";
@@ -18,6 +21,6 @@ export function eventFocus(tags: string[], format?: string | null): EventFocus {
 
 export const FOCUS_LABEL: Record<EventFocus, string> = {
   hiring: "Hiring-focused",
-  client: "Client-focused",
+  client: "Client / conference",
   neither: "Community — engagement, not triage",
 };

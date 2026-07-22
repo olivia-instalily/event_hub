@@ -16,11 +16,15 @@ import {
   listLabels,
   createLabel,
   exportPeople,
+  setPersonCrewRole,
+  createInternalPerson,
   type PersonView,
   type PersonEvent,
   type Note,
   type Label,
 } from "../lib/db";
+import { CREW_ROLES, ROLE_LABEL, type CrewRole } from "../lib/campaign";
+import { internalEmailFor } from "../lib/people";
 import { tagBadgeVariant } from "../lib/tags";
 import { Badge } from "@instalily/ui/badge";
 import { Button } from "@instalily/ui/button";
@@ -419,6 +423,65 @@ function AddPersonModal({ eventFilter, onClose, onAdded }: {
   );
 }
 
+// Inline crew-role picker for internal people — same taxonomy as the series roster.
+// Stops click propagation so changing the role doesn't open the person slide-over.
+function RoleSelect({ value, onChange }: { value: CrewRole; onChange: (r: CrewRole) => void }) {
+  return (
+    <div onClick={(e) => e.stopPropagation()}>
+      <Select value={value} onValueChange={(v) => onChange(v as CrewRole)} items={CREW_ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))}>
+        <SelectTrigger className="h-7 data-[size=default]:h-7 w-32 text-[13px] font-normal"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {CREW_ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+// Add a person as internal (global — not tied to an event). Email autofills to
+// firstname@instalily.ai from the name, but stays editable.
+function AddInternalPersonModal({ onClose, onAdded }: { onClose: () => void; onAdded: (p: PersonView) => void }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [crewRole, setCrewRole] = useState<CrewRole>("none");
+  const [busy, setBusy] = useState(false);
+
+  const onName = (v: string) => {
+    setName(v);
+    if (!emailTouched) setEmail(internalEmailFor(v)); // autofill until the user edits the email
+  };
+
+  const submit = async () => {
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true);
+    try {
+      const p = await createInternalPerson({ name: n, email: email.trim() || null, crewRole });
+      onAdded(p);
+      onClose();
+    } finally { setBusy(false); }
+  };
+
+  const field = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
+  return (
+    <Modal title="Add internal person" onClose={onClose}>
+      <div className="space-y-2">
+        <input autoFocus value={name} onChange={(e) => onName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} placeholder="Name (required)" className={field} />
+        <input value={email} onChange={(e) => { setEmailTouched(true); setEmail(e.target.value); }} placeholder="name@instalily.ai" className={field} />
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">Role</span>
+          <RoleSelect value={crewRole} onChange={setCrewRole} />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+        <Button size="sm" onClick={() => void submit()} disabled={busy || !name.trim()}>{busy ? "Adding…" : "Add person"}</Button>
+      </div>
+    </Modal>
+  );
+}
+
 export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
   const { current } = useProfile();
   const isAdmin = !!current?.isAdmin; // gate: the cross-context applicant flag is admin-only
@@ -443,7 +506,15 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
   const [labels, setLabels] = useState<Label[]>([]);
   const [labelFilter, setLabelFilter] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
+  const [addInternalOpen, setAddInternalOpen] = useState(false);
+  const [internalOnly, setInternalOnly] = useState(false); // Internal tab (global view)
   const [newLabelOpen, setNewLabelOpen] = useState(false);
+
+  // Persist a person's crew role (optimistic).
+  const changeCrewRole = (id: string, role: CrewRole) => {
+    setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, crewRole: role } : p)));
+    setPersonCrewRole(id, role).catch(() => setReloadKey((k) => k + 1));
+  };
 
   useEffect(() => { listLabels("person").then(setLabels).catch(() => {}); }, []);
 
@@ -514,6 +585,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
       (p.org ?? "").toLowerCase().includes(q) ||
       (p.title ?? "").toLowerCase().includes(q);
     if (!matches) return false;
+    if (internalOnly && !p.isInternal) return false;
     if (typeFilter !== "all" && p.type !== typeFilter) return false;
     if (labelFilter !== "all" && !p.labelIds.includes(labelFilter)) return false;
     if (p.eventsCount < minEvents) return false;
@@ -552,6 +624,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
           <div>
             <p className="font-medium">{displayName(p)}</p>
             {p.role && p.role !== "attendee" && <p className="text-[15px] text-gray-500 capitalize">{p.role}</p>}
+            {p.isInternal && <div className="mt-1"><RoleSelect value={p.crewRole} onChange={(r) => changeCrewRole(p.id, r)} /></div>}
           </div>
         );
       },
@@ -606,7 +679,7 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
       ) : (
         /* No page header (matches Events/Vendors). City "place" tabs are the top row, styled
            like the Events status tabs. */
-        <div className="flex flex-wrap gap-2 mb-6">
+        <div className="flex flex-wrap items-center gap-2 mb-6">
           {CITY_TABS.map((c) => (
             <button
               key={c.label}
@@ -616,6 +689,19 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
               {c.label}
             </button>
           ))}
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+          {/* Internal tab — filters to InstaLILY staff (additive to the city tab). */}
+          <button
+            onClick={() => setInternalOnly((v) => !v)}
+            className={`px-2 py-0.5 rounded-lg text-[13px] transition-colors ${internalOnly ? "bg-gray-900 text-white" : "bg-white border border-border text-gray-700 hover:bg-gray-50"}`}
+          >
+            Internal
+          </button>
+          {internalOnly && (
+            <button onClick={() => setAddInternalOpen(true)} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[13px] bg-gray-200 text-black hover:bg-gray-300">
+              <Plus className="w-3.5 h-3.5" /> Add internal person
+            </button>
+          )}
         </div>
       )}
 
@@ -778,6 +864,9 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
               {p.role && p.role !== "attendee" && (
                 <p className="text-[15px] text-gray-500 capitalize">{p.role}</p>
               )}
+              {p.isInternal && (
+                <div className="mt-2"><RoleSelect value={p.crewRole} onChange={(r) => changeCrewRole(p.id, r)} /></div>
+              )}
               {p.title && <p className="text-sm text-gray-600 mt-1 truncate">{p.title}</p>}
               {p.org && <p className="text-sm text-gray-500 truncate">{p.org}</p>}
               {p.email && <p className="text-[15px] text-gray-400 mt-1 truncate">{p.email}</p>}
@@ -825,6 +914,9 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
 
       {addOpen && (
         <AddPersonModal eventFilter={eventFilter ? { id: eventFilter.id, name: eventFilter.name } : null} onClose={() => setAddOpen(false)} onAdded={onPersonAdded} />
+      )}
+      {addInternalOpen && (
+        <AddInternalPersonModal onClose={() => setAddInternalOpen(false)} onAdded={onPersonAdded} />
       )}
       {newLabelOpen && (
         <PromptModal title="New label" label="Label name" placeholder="e.g. VIPs" submitLabel="Create" onClose={() => setNewLabelOpen(false)} onSubmit={(v) => void createNewLabel(v)} />

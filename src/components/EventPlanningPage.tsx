@@ -5,7 +5,7 @@ import { SourceMaterials } from "./SourceMaterials";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Mic, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
+  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
@@ -14,6 +14,7 @@ import {
   getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, syncEventToGoogleCalendar, pullEventFromLinear, unlinkLinear, deleteEvent, resetEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
+  ensureVendor, matchVendors, noteVendorOnBudgetLine, coerceStage, type VendorRow, setEventFocus,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
   addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable, setEventPattern,
   getPlanningSummary, saveOverviewSummary,
@@ -64,13 +65,14 @@ import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } fr
 import { parseVendors } from "../lib/vendorImport";
 import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
 import { BackfillModal } from "./BackfillModal";
+import { SpeakerField } from "./SpeakerField";
 import { filesFromDrop } from "../lib/drop";
 import { EventSetup } from "./EventSetup";
 import { ScopingForm } from "./ScopingForm";
 import { PeoplePage } from "./PeoplePage";
 import { loadScoping, saveScoping, fundingFor, type ScopingForm as ScopingData } from "../lib/scoping";
 import { takePendingScopingBudget } from "../lib/deepLink";
-import { eventFocus, FOCUS_LABEL } from "../lib/eventFocus";
+import { eventFocus, FOCUS_LABEL, type EventFocus } from "../lib/eventFocus";
 import { templateAdditions, hasAdditions, matchTemplates, type TemplateMatch } from "../lib/backfill";
 import { canonicalPhaseFor } from "../lib/phaseMerge";
 import { domainFromUrl, isFreeMailDomain } from "../lib/url";
@@ -468,8 +470,8 @@ function VendorCardModal({ eventId, engagementId, candidate, onClose, onSaved }:
   );
 }
 
-// Advancing INTO these stages prompts for a comment/attachment first.
-const PROMPTED_STAGES = new Set(["Selected", "Contracted"]);
+// Advancing to Contracted prompts to pick the winning candidate; a comment/attachment is optional.
+const PROMPTED_STAGES = new Set(["Contracted"]);
 
 function DecisionCard({ initial, eventId, location, onDelete, onChange }: { initial: EngagementWithCandidates; eventId: string; location?: string | null; onDelete: () => void; onChange?: (e: EngagementWithCandidates) => void }) {
   const [eng, setEng] = useState(initial);
@@ -487,24 +489,41 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange }: { init
   const [prompt, setPrompt] = useState<string | null>(null); // stage we're advancing into
   const [comment, setComment] = useState("");
   const [attach, setAttach] = useState("");
+  // When a typed vendor name is similar (not identical) to directory vendors, confirm before creating.
+  const [vendorConfirm, setVendorConfirm] = useState<{ name: string; contract: boolean; near: VendorRow[] } | null>(null);
 
-  const stageIdx = ENGAGEMENT_STAGES.indexOf((eng.stage ?? "") as any);
+  const stageIdx = ENGAGEMENT_STAGES.indexOf(coerceStage(eng.stage));
   const selected = eng.candidates.find((c) => c.isSelected) ?? null;
-  const contracted = eng.stage === "Contracted";
+  const contracted = coerceStage(eng.stage) === "Contracted";
   const next = ENGAGEMENT_STAGES[stageIdx + 1];
   const prev = ENGAGEMENT_STAGES[stageIdx - 1];
 
   const patchCand = (id: string, f: Partial<VendorCandidate>) =>
     setEng((e) => ({ ...e, candidates: e.candidates.map((c) => (c.id === id ? { ...c, ...f } : c)) }));
 
-  const addCand = async () => {
-    const name = candName.trim();
-    const link = candLink.trim();
-    if (!name || !link) return; // info (a link) is required
+  // Add a candidate AND ensure it exists in the vendor directory. Exact-name match reuses that
+  // directory vendor; a near match asks first; otherwise a new vendor row is created. `contract`
+  // jumps straight to Contracted (the quick "we already picked them" path).
+  const finalizeAdd = async (name: string, vendorId: string | null, contract: boolean) => {
     const quote = candQuote.trim() === "" ? null : Number(candQuote);
-    const c = await addCandidate(eng.id, name, quote, link);
+    const link = candLink.trim();
+    const vId = vendorId ?? await ensureVendor(name, eng.category ?? null);
+    const c = await addCandidate(eng.id, name, quote, link, vId);
     setEng((e) => ({ ...e, candidates: [...e.candidates, c] }));
-    setCandName(""); setCandQuote(""); setCandLink(""); setAddingCand(false);
+    setCandName(""); setCandQuote(""); setCandLink(""); setAddingCand(false); setVendorConfirm(null);
+    if (contract) {
+      await selectCandidate(eng.id, c.id);
+      await setEngagementStage(eng.id, "Contracted", { confirmedAmount: quote });
+      await noteVendorOnBudgetLine(eventId, eng.category ?? null, name, quote);
+      setEng((e) => ({ ...e, stage: "Contracted", confirmedAmount: quote, candidates: e.candidates.map((x) => ({ ...x, isSelected: x.id === c.id })) }));
+    }
+  };
+  const addCand = async (contract = false) => {
+    const name = candName.trim();
+    if (!name) return; // only the name is required now (link/quote optional)
+    const { exact, near } = await matchVendors(name);
+    if (!exact && near.length) { setVendorConfirm({ name, contract, near }); return; }
+    await finalizeAdd(name, exact ? exact.id : null, contract);
   };
   const removeCand = async (id: string) => {
     await deleteCandidate(id);
@@ -536,9 +555,10 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange }: { init
     if (!prompt || !selected) return;
     const note = comment.trim() || null;
     const docUrl = attach.trim() || null;
-    const lock = prompt === "Contracted";
-    await setEngagementStage(eng.id, prompt, { note, docUrl, ...(lock ? { confirmedAmount: selected.quoteAmount } : {}) });
-    setEng((e) => ({ ...e, stage: prompt, note, ...(lock ? { confirmedAmount: selected.quoteAmount } : {}) }));
+    await setEngagementStage(eng.id, "Contracted", { note, docUrl, confirmedAmount: selected.quoteAmount });
+    // Drop the contracted vendor onto its category budget line (create the line if missing).
+    await noteVendorOnBudgetLine(eventId, eng.category ?? null, selected.vendorName ?? "", selected.quoteAmount);
+    setEng((e) => ({ ...e, stage: "Contracted", note, confirmedAmount: selected.quoteAmount }));
     setPrompt(null); setComment(""); setAttach("");
   };
   const revert = async () => {
@@ -557,9 +577,10 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange }: { init
       finally { setSuggesting(false); }
     }
   };
-  // Add a suggested vendor as a candidate on this decision.
+  // Add a suggested vendor as a candidate on this decision (also lands it in the directory).
   const addSuggestion = async (s: VendorSuggestion) => {
-    const c = await addCandidate(eng.id, s.name, null, s.link ?? s.note ?? s.location ?? "—");
+    const vId = await ensureVendor(s.name, eng.category ?? null);
+    const c = await addCandidate(eng.id, s.name, null, s.link ?? s.note ?? s.location ?? "", vId);
     setEng((e) => ({ ...e, candidates: [...e.candidates, c] }));
     setSuggestions((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev));
   };
@@ -603,21 +624,16 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange }: { init
       {notice && <p className="text-[15px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">{notice}</p>}
       {prompt && selected && (
         <div className="text-sm bg-gray-50 border border-border rounded-lg px-3 py-2 mb-3">
-          {prompt === "Contracted"
-            ? <>Lock <span className="font-medium">{selected.vendorName}</span>’s {money(selected.quoteAmount)} as the confirmed cost. Add a comment or attachment:</>
-            : <>Marking <span className="font-medium">{selected.vendorName}</span> as selected. Add a comment or attachment:</>}
+          Lock <span className="font-medium">{selected.vendorName}</span>’s {money(selected.quoteAmount)} as the confirmed cost. Add a comment or attachment (optional):
           <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="Comment (why this vendor, terms, next steps…)" className="w-full mt-2 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
           <div className="flex items-center gap-2 mt-2">
             <input value={attach} onChange={(e) => setAttach(e.target.value)} placeholder="Attachment URL (quote, contract…)" className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
             <FileDrop compact label="drop file" onUploaded={(url) => setAttach(url)} />
           </div>
           <div className="flex gap-2 mt-2">
-            <button onClick={confirmPrompt} disabled={!comment.trim() && !attach.trim()} className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm disabled:opacity-50">
-              {prompt === "Contracted" ? "Confirm & lock" : "Confirm"}
-            </button>
+            <button onClick={confirmPrompt} className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">Confirm &amp; lock</button>
             <button onClick={() => setPrompt(null)} className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
           </div>
-          <p className="text-[15px] text-gray-400 mt-1">A comment or an attachment is required.</p>
         </div>
       )}
 
@@ -664,18 +680,34 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange }: { init
         </table>
       </div>
 
-      {/* Add candidate — fields appear only after clicking; name + a link are required. */}
+      {/* Add candidate — fields appear only after clicking; only the name is required. "Add & contract"
+          is the shortcut when you've already decided on them. */}
       {addingCand ? (
         <div className="mt-3 space-y-2 bg-gray-50 border border-gray-200 rounded-lg p-2">
           <div className="flex gap-2">
-            <input autoFocus value={candName} onChange={(e) => setCandName(e.target.value)} placeholder="Vendor name" className="flex-1 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+            <input autoFocus value={candName} onChange={(e) => setCandName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addCand(); }} placeholder="Vendor name" className="flex-1 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
             <input value={candQuote} onChange={(e) => setCandQuote(e.target.value)} type="number" placeholder="Quote" className="w-24 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
           </div>
-          <input value={candLink} onChange={(e) => setCandLink(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addCand(); }} placeholder="Link / info (required) — site, quote, profile…" className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          <div className="flex gap-2">
-            <button onClick={addCand} disabled={!candName.trim() || !candLink.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add vendor</button>
-            <button onClick={() => { setAddingCand(false); setCandName(""); setCandQuote(""); setCandLink(""); }} className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
-          </div>
+          <input value={candLink} onChange={(e) => setCandLink(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addCand(); }} placeholder="Link / info (optional) — site, quote, profile…" className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+          {/* Near-match confirm: the typed name resembles existing directory vendors. */}
+          {vendorConfirm ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-sm">
+              <p className="mb-1.5">“{vendorConfirm.name}” looks similar to {vendorConfirm.near.length === 1 ? "an existing vendor" : "existing vendors"}. Use one, or create new?</p>
+              <div className="flex flex-wrap gap-1.5">
+                {vendorConfirm.near.map((v) => (
+                  <button key={v.id} onClick={() => void finalizeAdd(vendorConfirm.name, v.id, vendorConfirm.contract)} className="px-2.5 py-1 rounded-full border border-gray-300 bg-white text-[13px] hover:bg-gray-50">Use “{v.name}”</button>
+                ))}
+                <button onClick={() => void finalizeAdd(vendorConfirm.name, null, vendorConfirm.contract)} className="px-2.5 py-1 rounded-full bg-gray-900 text-white text-[13px] hover:bg-black">Create new</button>
+                <button onClick={() => setVendorConfirm(null)} className="px-2.5 py-1 text-[13px] text-gray-600 hover:text-gray-900">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => void addCand(false)} disabled={!candName.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add vendor</button>
+              <button onClick={() => void addCand(true)} disabled={!candName.trim()} className="px-3 py-1 bg-gray-900 text-white rounded text-sm hover:bg-black disabled:opacity-50">Add &amp; contract</button>
+              <button onClick={() => { setAddingCand(false); setCandName(""); setCandQuote(""); setCandLink(""); setVendorConfirm(null); }} className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="mt-3 flex items-center gap-4">
@@ -2079,7 +2111,7 @@ function DayOfView({ plan, temporal }: { plan: EventPlanning; temporal: "past" |
 // and the page-level "drop project knowledge" handler so both judge gaps identically. Budget/vendors
 // aren't load-bearing for community ("neither") events, so they're skipped there.
 export function completenessFields(plan: EventPlanning): { key: string; label: string; present: boolean }[] {
-  const focus = eventFocus(plan.tags, plan.format);
+  const focus = eventFocus(plan.tags, plan.format, plan.focusOverride);
   return ([
     { key: "date", label: "Event date", present: !!plan.date },
     { key: "location", label: "Venue / location", present: !!plan.location },
@@ -2262,7 +2294,7 @@ function parseRunOfShow(text: string): { time: string; title: string }[] {
 // Lists fields a complete record of this category has but this backfilled event lacks; dropping a
 // doc (e.g. a budget sheet) extracts it and fills only the gaps. Resolved fields drop off the list.
 function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: string; onApplied: () => void }) {
-  const focus = eventFocus(plan.tags, plan.format);
+  const focus = eventFocus(plan.tags, plan.format, plan.focusOverride);
   const fields = completenessFields(plan);
   const gaps = fields.filter((f) => !f.present);
 
@@ -2644,7 +2676,52 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
 // Locked rundown: a settled event is a read-only record. No phase navigation, no editing —
 // just the summarized info (outcome, the numbers, what shipped, lessons, who filled which role,
 // who mattered, the debrief notes).
-function LockedRundown({ plan, assignedTarget, onOpenPeople, onOpenBudget, onApplied }: { plan: EventPlanning; assignedTarget: number | null; onOpenPeople: () => void; onOpenBudget?: () => void; onApplied?: () => void }) {
+// The focus classification, as an editable pill. Hover shows an × to clear it to "Community" (which
+// drops the hiring/client-only tiles); clicking opens a picker (Hiring / Client / Community / Auto).
+// Auto (null) falls back to the keyword classifier. Persists via setEventFocus and lifts the change
+// so the surrounding view re-derives its tiles immediately.
+function FocusPill({ eventId, focus, override, onChange }: { eventId: string; focus: EventFocus; override: EventFocus | null; onChange: (f: EventFocus | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+  const set = (f: EventFocus | null) => { onChange(f); void setEventFocus(eventId, f).catch(() => {}); setOpen(false); };
+  const color = focus === "hiring" ? "bg-violet-50 text-violet-700 border border-violet-200" : focus === "client" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-gray-100 text-gray-500 border border-transparent";
+  const opts: { key: EventFocus | null; label: string }[] = [
+    { key: "hiring", label: "Hiring-focused" }, { key: "client", label: "Client / conference" },
+    { key: "neither", label: "Community" }, { key: null, label: "Auto-detect" },
+  ];
+  return (
+    <span ref={ref} className="relative group/focus inline-flex items-center">
+      <button onClick={() => setOpen((o) => !o)} title="Set what this event is for" className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full ${color} hover:brightness-95`}>
+        {FOCUS_LABEL[focus]}
+        {override && <span className="text-[9px] opacity-60">·set</span>}
+      </button>
+      {/* Hover-to-clear: only shown when there's a non-community focus to remove. */}
+      {focus !== "neither" && (
+        <button onClick={() => set("neither")} title="Remove focus (→ Community)" className="ml-0.5 opacity-0 group-hover/focus:opacity-100 text-gray-400 hover:text-red-600 transition-opacity"><X className="w-3 h-3" /></button>
+      )}
+      {open && (
+        <span className="absolute z-50 top-full right-0 mt-1 w-40 rounded-lg border border-border bg-white shadow-lg p-1 text-left">
+          {opts.map((o) => {
+            const active = o.key === null ? override === null : override === o.key;
+            return (
+              <button key={o.label} onClick={() => set(o.key)} className={`block w-full text-left px-2 py-1 rounded text-[13px] ${active ? "bg-gray-100 font-medium" : "hover:bg-gray-50"}`}>
+                {o.label}{o.key === null && <span className="text-gray-400"> (keyword guess)</span>}
+              </button>
+            );
+          })}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function LockedRundown({ plan, assignedTarget, onOpenPeople, onOpenBudget, onApplied, onFocusChange }: { plan: EventPlanning; assignedTarget: number | null; onOpenPeople: () => void; onOpenBudget?: () => void; onApplied?: () => void; onFocusChange?: (f: EventFocus | null) => void }) {
   const [stats, setStats] = useState<PeopleStats | null>(null);
   const [tags, setTags] = useState<EventPersonTag[]>([]);
   const [lessons, setLessons] = useState<string[]>(plan.reflections ?? []);
@@ -2672,7 +2749,7 @@ function LockedRundown({ plan, assignedTarget, onOpenPeople, onOpenBudget, onApp
   const spent = lines.filter((l) => l.status === "paid").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
   const target = assignedTarget ?? plan.budget?.targetAmount ?? null;
   const perHead = counted ? Math.round(spent / counted) : null;
-  const focus = eventFocus(plan.tags, plan.format);
+  const focus = eventFocus(plan.tags, plan.format, plan.focusOverride);
   const roles = Object.entries(plan.roleAssignments ?? {});
   const tagged = new Map<string, { name: string | null; starred: boolean }>();
   for (const t of tags.filter((t) => t.status === "confirmed")) {
@@ -2702,7 +2779,7 @@ function LockedRundown({ plan, assignedTarget, onOpenPeople, onOpenBudget, onApp
           <Lock className="w-4 h-4 text-gray-400" />
           <h3 className="font-medium">Final record</h3>
           {plan.settledAt && <span className="text-[12px] text-gray-400">settled {fmtShort(plan.settledAt.slice(0, 10))}</span>}
-          <span className={`ml-auto text-[11px] px-2 py-0.5 rounded-full ${focus === "hiring" ? "bg-violet-50 text-violet-700 border border-violet-200" : focus === "client" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-gray-100 text-gray-500"}`}>{FOCUS_LABEL[focus]}</span>
+          <span className="ml-auto"><FocusPill eventId={plan.id} focus={focus} override={plan.focusOverride} onChange={(f) => onFocusChange?.(f)} /></span>
         </div>
         <p className="text-sm text-gray-800">{plan.verdict ? plan.verdict : <span className="text-gray-400">No verdict recorded.</span>}</p>
       </div>
@@ -2916,7 +2993,7 @@ function SettlingTracker({ plan, spent, target, onApplied }: { plan: EventPlanni
 // ── Post-event view: how it went → close it out → reflection → attendees ──────
 // Stats, close-out and attendee tagging render immediately on wrap (real captured data);
 // only the reflection section waits on the debrief. This view is past-only — no projections.
-function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assignedTarget, onApplied }: { plan: EventPlanning; temporal: "past" | "current" | "future"; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; assignedTarget: number | null; onApplied: () => void }) {
+function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assignedTarget, onApplied, onFocusChange }: { plan: EventPlanning; temporal: "past" | "current" | "future"; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; assignedTarget: number | null; onApplied: () => void; onFocusChange?: (f: EventFocus | null) => void }) {
   const future = temporal === "future"; // only when previewing post on a not-yet-passed event
   const [stats, setStats] = useState<PeopleStats | null>(null);
   const [attendees, setAttendees] = useState<PersonView[]>([]);
@@ -2942,7 +3019,7 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
   const perHead = checkedIn ? Math.round(spent / checkedIn) : null;
   const flagged = attendees.filter((a) => a.applicationStatus && a.applicationStatus !== "none").length;
   // What the event is FOR shapes how we measure turnout (candidate vs client signal vs none).
-  const focus = eventFocus(plan.tags, plan.format);
+  const focus = eventFocus(plan.tags, plan.format, plan.focusOverride);
   const clientCount = attendees.filter((a) => a.type === "Client" || a.type === "Partner").length;
 
   // Dropping a file ANYWHERE on the post-event view = debrief / post-event material → route it
@@ -2987,7 +3064,7 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
       <section>
         <div className="flex items-center gap-2 mb-3">
           <h3 className="text-lg font-medium">How it went</h3>
-          <span className={`text-[11px] px-2 py-0.5 rounded-full ${focus === "hiring" ? "bg-violet-50 text-violet-700 border border-violet-200" : focus === "client" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-gray-100 text-gray-500"}`}>{FOCUS_LABEL[focus]}</span>
+          <FocusPill eventId={plan.id} focus={focus} override={plan.focusOverride} onChange={(f) => onFocusChange?.(f)} />
         </div>
         <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${focus === "neither" ? "lg:grid-cols-3" : "lg:grid-cols-4"}`}>
           <div className="bg-white rounded-2xl border border-border p-5">
@@ -3787,13 +3864,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
 
       {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
       {locked ? (
-        <LockedRundown plan={plan} assignedTarget={tgt} onOpenPeople={onOpenPeople} onOpenBudget={onOpenBudget} onApplied={onApplied} />
+        <LockedRundown plan={plan} assignedTarget={tgt} onOpenPeople={onOpenPeople} onOpenBudget={onOpenBudget} onApplied={onApplied} onFocusChange={(f) => setPlan((p) => (p ? { ...p, focusOverride: f } : p))} />
       ) : selectedView === "day-before" ? (
         <DayBeforeView plan={plan} temporal={temporal} />
       ) : selectedView === "day-of" ? (
         <DayOfView plan={plan} temporal={temporal} />
       ) : selectedView === "post" ? (
-        <PostEventView plan={plan} temporal={temporal} onOpenDeliverable={onOpenDeliverable} onOpenPeople={onOpenPeople} assignedTarget={tgt} onApplied={onApplied} />
+        <PostEventView plan={plan} temporal={temporal} onOpenDeliverable={onOpenDeliverable} onOpenPeople={onOpenPeople} assignedTarget={tgt} onApplied={onApplied} onFocusChange={(f) => setPlan((p) => (p ? { ...p, focusOverride: f } : p))} />
       ) : (
         // PLANNING view — the build-it spine (budget, deliverables, guardrails, staffing).
         <div className="space-y-6">
@@ -4312,9 +4389,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               <button onClick={() => goPeople('all')} className="flex items-center gap-2 hover:text-gray-900 text-left">
                 <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
               </button>
-              <button onClick={() => goPeople('speakers')} className="flex items-center gap-2 hover:text-gray-900 text-left">
-                <Mic className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">Speakers</span>
-              </button>
+              <SpeakerField eventId={eventId} />
               <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
             </div>
             <MacroStepper eventId={eventId} initial={plan.macroStage} eventDate={plan.date} />
@@ -4359,7 +4434,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                   <div className="space-y-6">
                     {/* gaps + drop-to-fill (budget, turnout, …) — what would make this record complete */}
                     <CompletenessPanel plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
-                    <LockedRundown plan={plan} assignedTarget={plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null} onOpenPeople={() => setEventSubTab("people")} onOpenBudget={() => setEventSubTab("budget")} onApplied={() => setReload((r) => r + 1)} />
+                    <LockedRundown plan={plan} assignedTarget={plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null} onOpenPeople={() => setEventSubTab("people")} onOpenBudget={() => setEventSubTab("budget")} onApplied={() => setReload((r) => r + 1)} onFocusChange={(f) => setPlan((p) => (p ? { ...p, focusOverride: f } : p))} />
                   </div>
                 )}
                 {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}

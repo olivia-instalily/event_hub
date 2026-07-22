@@ -2,7 +2,7 @@
 // A vendor list is distinguished from a budget sheet by its HEADER — it must name a vendor column
 // ("Vendor" / "Supplier" / "Company"). Without that we return null so the doc falls through to the
 // budget/prose paths (a bare amount table is a budget, not a vendor list).
-type EngagementStage = "Sourced" | "Quoted" | "Selected" | "Contracted"; // mirrors db.ENGAGEMENT_STAGES
+type EngagementStage = "Sourced" | "Contracted"; // mirrors db.ENGAGEMENT_STAGES
 
 export interface VendorRow {
   category: string;          // the engagement slot (falls back to the vendor name)
@@ -35,12 +35,11 @@ const parseAmt = (s: string | undefined): number | null => {
   return Number.isNaN(n) ? null : (/^\(.*\)$/.test(t) ? -n : n);
 };
 
-/** Map free-text status → a canonical engagement stage. */
+/** Map free-text status → a canonical engagement stage. Committed language → Contracted; everything
+ *  else (sourcing, quoting, selecting) is still "deciding" → Sourced. */
 export function vendorStage(status: string | null): EngagementStage {
   const s = (status ?? "").toLowerCase();
   if (/\b(contract|book(ed)?|confirm|sign(ed)?|won|hired?|paid|final)\b/.test(s)) return "Contracted";
-  if (/\b(select|chosen|decided|picked|await)\b/.test(s)) return "Selected";
-  if (/\b(quote|quoted|bid|propos|estimat)\b/.test(s)) return "Quoted";
   return "Sourced";
 }
 

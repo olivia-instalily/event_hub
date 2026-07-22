@@ -111,11 +111,11 @@ export function SeriesBudget({ seriesId, campaign, events, save }: TabProps) {
         <div className="text-[13px] font-medium text-gray-500 mb-1">Rate helpers <span className="font-normal text-gray-400">· generate the auto lines above from the People tab</span></div>
         <div className="flex items-center justify-between text-sm">
           <span>Travel rate / traveler (per wave)</span>
-          <input type="number" value={campaign.travelRatePerWave ?? ""} onChange={(e) => setRate("travelRatePerWave", e.target.value)} placeholder="—" className="w-28 px-2 py-1 border border-gray-300 rounded text-right" />
+          <input type="number" value={campaign.travelRatePerWave ?? ""} onChange={(e) => setRate("travelRatePerWave", e.target.value)} placeholder="—" className="w-24 pl-2 pr-6 py-1 border border-gray-300 rounded text-right focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400" />
         </div>
         <div className="flex items-center justify-between text-sm">
           <span>Accommodation rate / night (per person)</span>
-          <input type="number" value={campaign.accommodationRatePerNight ?? ""} onChange={(e) => setRate("accommodationRatePerNight", e.target.value)} placeholder="—" className="w-28 px-2 py-1 border border-gray-300 rounded text-right" />
+          <input type="number" value={campaign.accommodationRatePerNight ?? ""} onChange={(e) => setRate("accommodationRatePerNight", e.target.value)} placeholder="—" className="w-24 pl-2 pr-6 py-1 border border-gray-300 rounded text-right focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400" />
         </div>
       </section>
 

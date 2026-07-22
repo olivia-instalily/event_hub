@@ -5,12 +5,13 @@ import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
 import { categoryKey } from './budgetCategories';
-import { eventFocus } from './eventFocus';
+import { eventFocus, type EventFocus } from './eventFocus';
 import type { BackfillExtract, TemplateLite, TemplateAdditions } from './backfill';
 import { generalizeStaffRole } from './backfill';
 import { vendorStage, type VendorRow as VendorListRow } from './vendorImport';
 import { defaultPhases } from './eventPhases';
-import { type Campaign, type Drive, emptyCampaign, normalizeCampaign } from "./campaign";
+import { type Campaign, type Drive, type CrewRole, emptyCampaign, normalizeCampaign, coerceRole } from "./campaign";
+import { isInternalEmail } from "./people";
 
 // A template must be name-free: reduce staff roles to their general form and drop bare names / dups.
 const generalRoles = (roles: string[]): string[] => {
@@ -652,6 +653,12 @@ export async function setEventFormat(eventId: string, format: string | null): Pr
   await updateEvent(eventId, { format });
 }
 
+/** Manually set (or clear → null = auto) an event's focus, overriding the keyword classifier. */
+export async function setEventFocus(eventId: string, focus: EventFocus | null): Promise<void> {
+  const { error } = await supabase.from('event').update({ focus_override: focus }).eq('id', eventId);
+  if (error) throw error;
+}
+
 export async function getAllTags(): Promise<string[]> {
   const { data, error } = await supabase.from('event').select('tags');
   if (error) throw error;
@@ -803,6 +810,8 @@ export interface PersonView {
   linkedinUrl: string | null;
   photoUrl: string | null;
   labelIds: string[];
+  isInternal: boolean; // InstaLILY staff — explicit flag OR an @instalily.ai email
+  crewRole: CrewRole; // stable role, shared taxonomy with the series roster (eng/growth/marketing/leadership/none)
   eventsCount: number; // attendance frequency (all-people view)
   eventDates: string[]; // dates of events attended (all-people view)
   eventCities: string[]; // distinct cities of events attended (all-people view) — drives the city tabs
@@ -882,7 +891,7 @@ export async function getEventPeopleStats(eventId: string): Promise<PeopleStats>
 export async function listAllAttendees(): Promise<PersonView[]> {
   const { data, error } = await supabase
     .from('attendee')
-    .select('id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, application_status, greenhouse_last_synced, attendee_label ( label_id ), attendee_event ( event:event ( event_date, location ) )')
+    .select('id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, is_internal, crew_role, application_status, greenhouse_last_synced, attendee_label ( label_id ), attendee_event ( event:event ( event_date, location ) )')
     .order('name', { nullsFirst: false });
   if (error) throw error;
   return (data ?? []).map((r: any) => {
@@ -903,6 +912,8 @@ export async function listAllAttendees(): Promise<PersonView[]> {
       linkedinUrl: r.linkedin_url ?? null,
       photoUrl: r.photo_url ?? null,
       labelIds: (r.attendee_label ?? []).map((l: any) => l.label_id),
+      isInternal: (r.is_internal ?? false) || isInternalEmail(r.email),
+      crewRole: coerceRole(r.crew_role),
       eventsCount: links.length,
       eventDates: links.map((l: any) => l.event?.event_date).filter(Boolean),
       eventCities: Array.from(new Set(links.map((l: any) => l.event?.location).filter(Boolean))),
@@ -916,7 +927,7 @@ export async function listAllAttendees(): Promise<PersonView[]> {
 export async function listAttendeesForEvent(eventId: string): Promise<PersonView[]> {
   const { data, error } = await supabase
     .from('attendee_event')
-    .select('role_at_event, registration_status, checked_in, attendee:attendee ( id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, application_status, greenhouse_last_synced, attendee_label ( label_id ), attendee_event ( count ) )')
+    .select('role_at_event, registration_status, checked_in, attendee:attendee ( id, name, email, title, org, type, is_aggregate, count_est, note, school, city, industry, linkedin_url, photo_url, is_internal, crew_role, application_status, greenhouse_last_synced, attendee_label ( label_id ), attendee_event ( count ) )')
     .eq('event_id', eventId);
   if (error) throw error;
   return (data ?? []).map((l: any) => ({
@@ -935,6 +946,8 @@ export async function listAttendeesForEvent(eventId: string): Promise<PersonView
     linkedinUrl: l.attendee?.linkedin_url ?? null,
     photoUrl: l.attendee?.photo_url ?? null,
     labelIds: (l.attendee?.attendee_label ?? []).map((x: any) => x.label_id),
+    isInternal: (l.attendee?.is_internal ?? false) || isInternalEmail(l.attendee?.email),
+    crewRole: coerceRole(l.attendee?.crew_role),
     eventsCount: l.attendee?.attendee_event?.[0]?.count ?? 0,
     eventDates: [],
     eventCities: [],
@@ -993,8 +1006,10 @@ async function labelInternalIfInstalily(attendeeId: string, email: string | null
 // ── Attendees: manual add, headshots, per-event speaker tagging ──────────────
 export async function addAttendee(eventId: string, fields: { name: string; title?: string | null; org?: string | null; email?: string | null; isSpeaker?: boolean }): Promise<PersonView> {
   const id = newId('att');
+  const internal = isInternalEmail(fields.email ?? null);
   const { error: aErr } = await supabase.from('attendee').insert({
     id, name: fields.name, title: fields.title ?? null, org: fields.org ?? null, email: fields.email ?? null, type: 'Unknown',
+    is_internal: internal,
   });
   if (aErr) throw aErr;
   const { error: lErr } = await supabase.from('attendee_event').insert({
@@ -1006,9 +1021,37 @@ export async function addAttendee(eventId: string, fields: { name: string; title
   return {
     id, name: fields.name, email: fields.email ?? null, title: fields.title ?? null, org: fields.org ?? null,
     type: 'Unknown', isAggregate: false, countEst: null, note: null, school: null, city: null, industry: null,
-    linkedinUrl: null, photoUrl: null, labelIds: internalId ? [internalId] : [], eventsCount: 1, eventDates: [], eventCities: [],
+    linkedinUrl: null, photoUrl: null, labelIds: internalId ? [internalId] : [], isInternal: internal, crewRole: 'none', eventsCount: 1, eventDates: [], eventCities: [],
     applicationStatus: null, greenhouseLastSynced: null,
     role: fields.isSpeaker ? 'speaker' : 'attendee', registrationStatus: null, checkedIn: false,
+  };
+}
+
+/** Set a person's stable crew role (shared taxonomy with the series roster). */
+export async function setPersonCrewRole(attendeeId: string, role: CrewRole): Promise<void> {
+  const { error } = await supabase.from('attendee').update({ crew_role: role }).eq('id', attendeeId);
+  if (error) throw error;
+}
+
+/**
+ * Create a global internal person (no event link) — used by the People page "Add internal person"
+ * flow. `is_internal` is forced true so they show under the Internal tab even if the email is edited
+ * to a non-instalily address. Also applies the "Internal" label when the email is @instalily.ai.
+ */
+export async function createInternalPerson(fields: { name: string; email?: string | null; crewRole?: CrewRole }): Promise<PersonView> {
+  const id = newId('att');
+  const email = fields.email?.trim() || null;
+  const crewRole = fields.crewRole ?? 'none';
+  const { error } = await supabase.from('attendee').insert({
+    id, name: fields.name, email, type: 'Unknown', is_internal: true, crew_role: crewRole,
+  });
+  if (error) throw error;
+  const internalId = await labelInternalIfInstalily(id, email);
+  return {
+    id, name: fields.name, email, title: null, org: null, type: 'Unknown', isAggregate: false, countEst: null,
+    note: null, school: null, city: null, industry: null, linkedinUrl: null, photoUrl: null,
+    labelIds: internalId ? [internalId] : [], isInternal: true, crewRole, eventsCount: 0, eventDates: [], eventCities: [],
+    applicationStatus: null, greenhouseLastSynced: null,
   };
 }
 
@@ -1902,7 +1945,7 @@ export async function slackSend(channel: string, text: string): Promise<{ channe
 }
 
 const EVENT_LIST_SELECT =
-  'id, name, tag, tags, format, location, office, event_date, end_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, is_external, quarter, why, info_url, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )';
+  'id, name, tag, tags, format, focus_override, location, office, event_date, end_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, is_external, quarter, why, info_url, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )';
 
 export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
@@ -1932,7 +1975,7 @@ export async function listEvents(): Promise<EventListItem[]> {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const row = rows[i] as any;
-    const focus = eventFocus(Array.isArray(row.tags) ? row.tags : [], row.format);
+    const focus = eventFocus(Array.isArray(row.tags) ? row.tags : [], row.format, row.focus_override ?? null);
     const budgetLines: any[] = Array.isArray(row.budget) ? (row.budget[0]?.lines ?? []) : (row.budget?.lines ?? []);
     const hasActual = budgetLines.some((l) => normBudgetStatus(l.payment_status) !== 'estimate' && (Number(l.confirmed_amount) || 0) > 0);
     const agenda = Array.isArray(row.agenda) ? row.agenda : [];
@@ -2338,7 +2381,13 @@ export async function exportPeople(labelId: string): Promise<Record<string, unkn
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const MACRO_STAGES = ['Concept', 'Planning', 'Week-of', 'Live', 'Wrap'] as const;
-export const ENGAGEMENT_STAGES = ['Sourced', 'Quoted', 'Selected', 'Contracted'] as const;
+// Simplified pipeline: you're either still deciding (Sourced) or you've committed (Contracted).
+// Old rows with Quoted/Selected/Negotiating read as Sourced (see coerceStage); stage is free text
+// so no migration is needed.
+export const ENGAGEMENT_STAGES = ['Sourced', 'Contracted'] as const;
+export function coerceStage(s: string | null | undefined): (typeof ENGAGEMENT_STAGES)[number] {
+  return s === 'Contracted' ? 'Contracted' : 'Sourced';
+}
 export type EngagementStage = (typeof ENGAGEMENT_STAGES)[number];
 
 const genId = (prefix: string) => `${prefix}-` + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
@@ -2420,6 +2469,7 @@ export interface EventPlanning {
   title: string;
   tags: string[];
   format: string | null;
+  focusOverride: EventFocus | null; // manual focus correction; null = auto (keyword classifier)
   location: string | null;
   description: string | null;
   date: string | null;
@@ -2545,7 +2595,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, gcal_event_id, gcal_html_link, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -2625,6 +2675,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     title: (row as any).name,
     tags: (row as any).tags ?? [],
     format: (row as any).format ?? null,
+    focusOverride: ((row as any).focus_override ?? null) as EventFocus | null,
     location: (row as any).location ?? (row as any).office ?? null,
     description: (row as any).description ?? null,
     phases: Array.isArray((row as any).phases) ? (row as any).phases as EventPhase[] : [],
@@ -2766,12 +2817,87 @@ export async function setEngagementStage(
   if (error) throw error;
 }
 
+// ── Vendor directory identity ───────────────────────────────────────────────
+// Adding a vendor anywhere should surface it in the persistent directory (Vendors page). We match
+// names case-insensitively, ignoring punctuation/spacing: an exact match is reused silently; a
+// partial ("near") match is returned so the UI can ask before creating a possible duplicate.
+const normVendor = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+export interface VendorMatch { exact: VendorRow | null; near: VendorRow[]; }
+export async function matchVendors(name: string): Promise<VendorMatch> {
+  const n = normVendor(name);
+  if (!n) return { exact: null, near: [] };
+  const all = await listVendors();
+  let exact: VendorRow | null = null;
+  const near: VendorRow[] = [];
+  for (const v of all) {
+    if (!v.name) continue;
+    const vn = normVendor(v.name);
+    if (!vn) continue;
+    if (vn === n) exact = v;
+    else if (vn.includes(n) || n.includes(vn)) near.push(v);
+  }
+  return { exact, near };
+}
+/** Reuse the exact-name directory vendor or create a new one; returns the vendor id. */
+export async function ensureVendor(name: string, category: string | null): Promise<string> {
+  const { exact } = await matchVendors(name);
+  if (exact) return exact.id;
+  const id = genId('vend');
+  const { error } = await supabase.from('vendor').insert({ id, name: name.trim(), category: category ?? null });
+  if (error) throw error;
+  return id;
+}
+
+// Events / series a vendor has been engaged on — for the directory's "used at" detail.
+export interface VendorUsage {
+  engagementId: string; category: string | null; stage: string | null; contracted: boolean;
+  eventId: string | null; eventName: string | null; date: string | null; seriesName: string | null;
+}
+export async function getVendorUsage(vendorId: string): Promise<VendorUsage[]> {
+  const { data, error } = await supabase
+    .from('engagement_candidate')
+    .select('engagement:engagement ( id, category, stage, event:event ( id, name, event_date ), series:event_series ( id, name ) )')
+    .eq('vendor_id', vendorId);
+  if (error) throw error;
+  const seen = new Set<string>();
+  const out: VendorUsage[] = [];
+  for (const row of (data ?? []) as any[]) {
+    const e = row.engagement;
+    if (!e || seen.has(e.id)) continue;
+    seen.add(e.id);
+    out.push({
+      engagementId: e.id, category: e.category ?? null, stage: e.stage ?? null, contracted: e.stage === 'Contracted',
+      eventId: e.event?.id ?? null, eventName: e.event?.name ?? null, date: e.event?.event_date ?? null, seriesName: e.series?.name ?? null,
+    });
+  }
+  return out;
+}
+
+/** On Contracted: append "Vendor: <name>" to the event's budget line for that category, creating
+ *  the line (with the confirmed amount) when none matches. */
+export async function noteVendorOnBudgetLine(eventId: string, category: string | null, vendorName: string, amount: number | null): Promise<void> {
+  if (!category || !vendorName.trim()) return;
+  const { data: bud } = await supabase.from('budget').select('id').eq('event_id', eventId).maybeSingle();
+  if (!bud) return;
+  const lines = await listBudgetLines((bud as any).id);
+  const key = categoryKey(category);
+  const match = lines.find((l) => l.label && categoryKey(l.label) === key);
+  const tag = `Vendor: ${vendorName.trim()}`;
+  if (match) {
+    if (match.note && match.note.includes(tag)) return; // already noted
+    await updateBudgetLine(match.id, { note: [match.note, tag].filter(Boolean).join(' · ') });
+  } else {
+    const line = await addTrackerLine((bud as any).id, category, amount);
+    await updateBudgetLine(line.id, { note: tag });
+  }
+}
+
 // ── Vendor candidates ───────────────────────────────────────────────────────
-export async function addCandidate(engagementId: string, vendorName: string, quoteAmount: number | null, link: string): Promise<VendorCandidate> {
+export async function addCandidate(engagementId: string, vendorName: string, quoteAmount: number | null, link: string, vendorId: string | null = null): Promise<VendorCandidate> {
   const id = genId('cand');
   const { error } = await supabase
     .from('engagement_candidate')
-    .insert({ id, engagement_id: engagementId, vendor_name: vendorName, quote_amount: quoteAmount, link });
+    .insert({ id, engagement_id: engagementId, vendor_name: vendorName, quote_amount: quoteAmount, link, vendor_id: vendorId });
   if (error) throw error;
   return { id, vendorName, quoteAmount, isSelected: false, note: null, link };
 }
@@ -2845,7 +2971,7 @@ export async function importVendors(eventId: string, rows: VendorListRow[], docU
   let vendors = 0, tagged = 0;
   for (const { name, rows: grp } of groups.values()) {
     const stages = grp.map((r) => vendorStage(r.status));
-    const stage = stages.includes('Contracted') ? 'Contracted' : stages.includes('Selected') ? 'Selected' : stages.includes('Quoted') ? 'Quoted' : 'Sourced';
+    const stage = stages.includes('Contracted') ? 'Contracted' : 'Sourced';
     let eng = engByName.get(name.toLowerCase());
     if (!eng) {
       const id = genId('eng');

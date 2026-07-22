@@ -196,6 +196,7 @@ export function SeriesPeople({ campaign, events, save }: TabProps) {
               onStatus={(s) => setWaveMap(p, "statusByWave", w.id, s)}
               onTravel={(t) => setWaveMap(p, "travelByWave", w.id, t)}
               onSpan={(from, to) => { if (bounds.start && bounds.end && from === bounds.start && to === bounds.end) setWaveMap(p, "spans", w.id, undefined); else setWaveMap(p, "spans", w.id, { from, to }); }}
+              onCount={(n) => patchPerson(p.id, { plannedCount: Math.max(1, n) })}
               onRemove={() => removeFromWave(p, w.id)} />
           </AnchoredPopover>
         );
@@ -284,18 +285,21 @@ function BankPerson({ person, waveNames, onRole, onRemove }: { person: CampaignP
 }
 
 // Per-dot detail: role, status, presence span (days within the wave), travel, remove-from-wave.
-function DotPopover({ person, wave, days, onClose, onRole, onStatus, onTravel, onSpan, onRemove }: {
+// For an anonymous planned group, also an editable headcount (click the dot's number → change it).
+function DotPopover({ person, wave, days, onClose, onRole, onStatus, onTravel, onSpan, onCount, onRemove }: {
   person: CampaignPerson; wave: Wave; days: string[];
   onClose: () => void;
   onRole: (r: CrewRole) => void;
   onStatus: (s: "confirmed" | "proposed") => void;
   onTravel: (t: "flying" | "local") => void;
   onSpan: (from: string, to: string) => void;
+  onCount: (n: number) => void;
   onRemove: () => void;
 }) {
   const role = crewRole(person);
   const status = waveStatus(person, wave.id);
   const travel = waveTravel(person, wave.id);
+  const anon = isAnonymous(person);
   const span = person.spans?.[wave.id];
   const from = span?.from && days.includes(span.from) ? span.from : days[0];
   const to = span?.to && days.includes(span.to) ? span.to : days[days.length - 1];
@@ -304,9 +308,17 @@ function DotPopover({ person, wave, days, onClose, onRole, onStatus, onTravel, o
   return (
       <div className="w-full bg-white border border-border rounded-xl shadow-lg p-3 space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-[13px] font-medium truncate">{isAnonymous(person) ? `${bodyCount(person)} ${ROLE_LABEL[role]} planned` : personLabel(person)}</span>
+          <span className="text-[13px] font-medium truncate">{anon ? `${bodyCount(person)} ${ROLE_LABEL[role]} planned` : personLabel(person)}</span>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
         </div>
+
+        {/* Planned headcount — anonymous groups only; edit the number in place. */}
+        {anon && (
+          <div className="flex items-center gap-2">
+            <p className="text-[12px] text-gray-500">Headcount</p>
+            <NumberField value={bodyCount(person)} min={1} onChange={onCount} ariaLabel="Planned headcount" className="w-16 px-1.5 py-1 border border-gray-300 rounded text-[13px]" />
+          </div>
+        )}
 
         {/* Role (person-level) */}
         <div className="flex flex-wrap gap-1.5">

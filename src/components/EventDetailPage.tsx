@@ -1,5 +1,6 @@
-import { Calendar, Users, ChevronLeft, AlertCircle, Pencil, Mic } from "lucide-react";
+import { Calendar, Users, ChevronLeft, AlertCircle, Pencil } from "lucide-react";
 import { LocationEdit, LocationInput } from "./LocationEdit";
+import { SpeakerField } from "./SpeakerField";
 import { SourceMaterials } from "./SourceMaterials";
 import { useEffect, useState } from "react";
 import {
@@ -348,13 +349,7 @@ export function EventDetailPage({ eventId, onBack, onViewPeople }: EventDetailPa
               {event.attendeeCount != null ? `${event.attendeeCount} checked in` : NOT_CAPTURED}
             </span>
           </button>
-          <button
-            onClick={() => onViewPeople({ id: event.id, name: event.title, tag: event.tags[0] ?? null, status: 'speakers' })}
-            className="flex items-center gap-2 hover:text-gray-900 transition-colors"
-          >
-            <Mic className="w-5 h-5" />
-            <span className="underline decoration-dotted underline-offset-4">Speakers</span>
-          </button>
+          <SpeakerField eventId={event.id} />
           <OwnerPicker eventId={event.id} owners={event.owners} onChange={(owners) => setEvent((ev) => (ev ? { ...ev, owners, owner: owners.map((o) => o.name).join(", ") || null } : ev))} />
         </div>
 
