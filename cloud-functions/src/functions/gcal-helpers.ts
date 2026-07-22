@@ -21,18 +21,18 @@ export function timeOverlap(a: Span, b: Span): boolean {
   return ms(a.start) < ms(b.end) && ms(b.start) < ms(a.end);
 }
 
-// Normalized token-set similarity: lowercased, punctuation stripped. Match when one is contained in
-// the other, or Jaccard overlap of word sets ≥ 0.5.
+// Normalized token-set similarity: lowercased, punctuation stripped. Match when every token of the
+// shorter title appears in the longer (token-level containment), or Jaccard overlap of the word sets
+// ≥ 0.5. Containment is token-based (not letter-concatenated) so "Ana" does NOT match "Banana Split".
 function tokens(s: string): Set<string> {
   return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
 }
 export function nameSimilar(a: string, b: string): boolean {
-  const na = a.toLowerCase().replace(/[^a-z0-9]/g, ""), nb = b.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (!na || !nb) return false;
-  if (na.includes(nb) || nb.includes(na)) return true;
   const ta = tokens(a), tb = tokens(b);
   if (!ta.size || !tb.size) return false;
-  let inter = 0; for (const t of ta) if (tb.has(t)) inter++;
+  const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+  let inter = 0; for (const t of small) if (big.has(t)) inter++;
+  if (inter === small.size) return true;      // every token of the shorter title is in the longer
   const union = ta.size + tb.size - inter;
-  return union > 0 && inter / union >= 0.5;
+  return union > 0 && inter / union >= 0.5;    // else fall back to Jaccard overlap
 }
