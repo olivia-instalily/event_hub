@@ -9,7 +9,9 @@ Every dated EventHub event automatically appears on **`calendar@instalily.ai`** 
 calendar most people at Instalily already keep in their Google Calendar sidebar) so that people who
 don't actively seek out events still see them — passive discovery, zero action required from viewers.
 Each event is **also** written to the **Instalily Events Coordination** calendar (the events team's
-dedicated calendar). Both copies stay in sync on edit and are removed on delete.
+dedicated calendar). Both copies stay in sync on edit and are removed on delete. On an event's first
+sync, if a similar event already exists on a calendar, EventHub asks whether to **link** to it
+(adopting it and writing the EventHub deep-link into it) rather than creating a duplicate.
 
 ## Background — current state (verified live 2026-07-22)
 
@@ -69,20 +71,57 @@ One EventHub event now has a Google event id **per calendar**. Add:
 
 ```sql
 ALTER TABLE event ADD COLUMN IF NOT EXISTS gcal_event_ids jsonb NOT NULL DEFAULT '{}'::jsonb;
-GRANT UPDATE (gcal_event_ids) ON event TO anon, authenticated;
+ALTER TABLE event ADD COLUMN IF NOT EXISTS gcal_match_pending jsonb;  -- nullable; holds suggested matches awaiting user confirmation
+GRANT UPDATE (gcal_event_ids, gcal_match_pending) ON event TO anon, authenticated;
 ```
 
 `gcal_event_ids` maps `calendarId → googleEventId`, e.g.
 `{"primary":"abc123","c_fad28…@group.calendar.google.com":"def456"}`.
 
+`gcal_match_pending` (nullable) holds candidate matches the sync found on first sync, awaiting a
+user decision — shape:
+`{ "primary": {"gcalEventId":"…","summary":"…","start":"…","htmlLink":"…"} | null, "<coordId>": {…} | null }`.
+Null/absent means "no decision pending". Cleared once the user links or chooses create-new.
+
 - Keep the existing `gcal_html_link` column, now pointing at the **primary** copy's `htmlLink` (used
-  for the app's "view on calendar" deep link).
+  for the app's "view on calendar" deep link — the EventHub→Google direction).
 - Keep the legacy `gcal_event_id` column populated with the **primary** copy's id for backward
   compatibility with existing UI reads (`plan.gcalEventId`), so the "synced" state still renders.
 
+### Match & adopt existing calendar events (first sync only)
+
+Before an event is created on a calendar for the **first time** (i.e. `gcal_event_ids` has no id for
+that calendar and no decision is pending), the sync searches **both** calendars for an existing event
+to adopt — so a manually-created calendar event (or a backfill onto a calendar that already has the
+event) is linked instead of duplicated.
+
+- **Search:** query each calendar for events in a window around the EventHub event's date (date ±1
+  day, to absorb tz/date-entry slippage), then filter to genuine candidates by two pure predicates:
+  - **Time overlap** — timed events: `[start,end)` overlaps the candidate's `[start,end)`; all-day /
+    multi-day: the date ranges overlap.
+  - **Name similarity** — normalized (lowercased, punctuation-stripped) token-set overlap above a
+    threshold, or one title contains the other.
+  - **Exclude already-owned** — skip candidates whose description already carries the EventHub
+    deep-link marker (they belong to another EventHub event).
+- **Decision (user-gated — "pause & ask"):**
+  - If **any** candidate is found on either calendar → **create nothing**. Persist the per-calendar
+    candidates to `gcal_match_pending` and return. The event page reads `gcal_match_pending` and shows
+    a prompt: *"Found a matching calendar event 'X' on <date> — link to it, or create a new one?"*
+    (showing candidate name/date/calendar/link).
+  - If **no** candidate on either calendar → proceed to the normal upsert below (silent auto-create).
+- **Resolution (frontend calls the function with an explicit action):**
+  - **Link** (`action: "link"`) → for each calendar that had a candidate, adopt its id into
+    `gcal_event_ids[calId]` and **PATCH that Google event to inject the EventHub deep-link** into its
+    description (append if absent; do not overwrite the existing title/description). For any calendar
+    that had *no* candidate, create a new event there (normal upsert). Clear `gcal_match_pending`.
+  - **Create new** (`action: "create"`) → skip adoption, create on both calendars, clear
+    `gcal_match_pending`.
+
+Once an event is linked/created, later syncs never re-search — they go straight to the upsert.
+
 ### Sync operation (per event)
 
-For each target calendar:
+For each target calendar (after the match gate above is resolved or found nothing):
 - If `gcal_event_ids[calId]` exists → **PATCH** that event (update in place).
 - Else → **POST** a new event, then store the returned id into `gcal_event_ids[calId]`.
 
@@ -100,8 +139,13 @@ When an event is deleted, or becomes ineligible (date cleared), issue a **DELETE
 `gcal_event_ids[calId]` on its calendar, then clear `gcal_event_ids`, `gcal_event_id`,
 `gcal_html_link`. A `404`/`410` from Google (already gone) is treated as success (idempotent).
 
-The `/gcal-sync` cloud function gains an `action` discriminator in its body: `{ eventId }` (default
-= upsert) vs `{ eventId, action: "delete" }`.
+The `/gcal-sync` cloud function takes an `action` discriminator in its body:
+- `{ eventId }` (default, `"auto"`) — run the match gate on first sync (may return
+  `needs_confirmation` + persist `gcal_match_pending`), otherwise upsert.
+- `{ eventId, action: "link" }` — adopt the pending candidates + inject the EventHub link, create on
+  any calendar without a candidate, clear pending.
+- `{ eventId, action: "create" }` — force create-new on both, clear pending.
+- `{ eventId, action: "delete" }` — remove both copies.
 
 ### Trigger — automatic
 
@@ -112,15 +156,27 @@ swallowed to a console warn — never block the user's save) from the event muta
 - after **calendar-relevant details** change (name, location, start/end time, description).
 - On **delete**, call the delete action.
 
-Only fire when the event is eligible (dated, non-template). The existing manual `GCalSync` button is
-kept as an explicit "re-sync now" affordance (harmless — it calls the same upsert), but is no longer
-the only path.
+Only fire when the event is eligible (dated, non-template). Auto-sync on an event's **first** sync may
+find a candidate and return without creating (leaving `gcal_match_pending` for the user to resolve on
+the event page) — see the match gate above. The existing manual `GCalSync` button is kept as an
+explicit "re-sync now" affordance (harmless — it calls the same auto action), but is no longer the
+only path.
+
+### UI surfaces
+
+- **Match prompt:** when `plan.gcalMatchPending` is set, the event page shows a confirmation card
+  ("Link to existing 'X'?" / "Create new") wired to the `link` / `create` actions.
+- **EventHub → Google link:** the event page shows a "View on Google Calendar" link built from
+  `gcal_html_link` once synced (the reverse direction; the Google event's description already carries
+  the EventHub deep-link, written on create/link).
 
 ### Backfill
 
 A one-time script (`scripts/gcal-backfill.mjs`, run manually) iterates all dated, non-template events
-and performs the upsert against both calendars, writing ids back. Idempotent — safe to re-run (it
-PATCHes anything already synced). Logs a summary (pushed / updated / skipped / failed).
+and runs the `auto` action against both calendars, writing ids back. Idempotent — safe to re-run (it
+PATCHes anything already synced). Because backfill runs the match gate, events that already exist on a
+calendar surface as `gcal_match_pending` (for the user to resolve in-app) rather than being
+duplicated. Logs a summary (created / updated / pending-match / skipped / failed).
 
 ### Cleanup (manual/controller, one-time)
 
@@ -160,8 +216,14 @@ and the stray `run.app` calendarList subscription. Remove the now-unused
 
 ## Testing
 
-- **Unit:** the eligibility predicate (dated && !template) and the upsert-vs-patch body builder are
-  pure and unit-tested (vitest), following the existing `campaign.test.ts` style.
+- **Unit (pure helpers, vitest, `campaign.test.ts` style):**
+  - eligibility predicate (dated && !template),
+  - the upsert-vs-patch body builder,
+  - **time-overlap** predicate (timed overlap, all-day/multi-day range overlap, no-overlap),
+  - **name-similarity** predicate (match above threshold, contains-case, clear non-match),
+  - **already-owned** exclusion (candidate carrying the EventHub marker is rejected).
 - **Live smoke (manual, throwaway event):** create → verify it appears on both calendars → edit →
-  verify both update → delete → verify both removed. (The create/delete round-trip was already
-  validated live against both calendars during design.)
+  verify both update → delete → verify both removed. Plus a match-gate smoke: pre-place a similarly
+  named event on a calendar → sync → verify it returns `needs_confirmation` (no duplicate) → `link` →
+  verify adoption + EventHub link injected. (The create/delete round-trip was already validated live
+  against both calendars during design.)
