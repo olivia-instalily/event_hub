@@ -36,3 +36,13 @@ export function nameSimilar(a: string, b: string): boolean {
   const union = ta.size + tb.size - inter;
   return union > 0 && inter / union >= 0.5;    // else fall back to Jaccard overlap
 }
+
+// Full containment only — the "strong" signal separating a confident match from an ambiguous one.
+export function nameContained(a: string, b: string): boolean {
+  const tok = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
+  const ta = tok(a), tb = tok(b);
+  if (!ta.size || !tb.size) return false;
+  const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+  for (const t of small) if (!big.has(t)) return false;
+  return true;
+}
