@@ -45,6 +45,15 @@ export function nameSimilar(a: string, b: string): boolean {
   return union > 0 && inter / union >= 0.5;    // else fall back to Jaccard overlap
 }
 
+// Full containment only — the "strong" signal separating a confident match from an ambiguous one.
+export function nameContained(a: string, b: string): boolean {
+  const ta = tokens(a), tb = tokens(b);
+  if (!ta.size || !tb.size) return false;
+  const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+  for (const t of small) if (!big.has(t)) return false;
+  return true;
+}
+
 // ── End inlined helpers ───────────────────────────────────────────────────────
 
 const cors = {
@@ -200,33 +209,36 @@ interface Candidate {
   htmlLink: string;
 }
 
-async function findCandidate(token: string, calId: string, ev: any): Promise<Candidate | null> {
+function candidateDate(item: GCalListItem): string {
+  return item.start.date ?? (item.start.dateTime ?? "").slice(0, 10);
+}
+
+type CalVerdict =
+  | { kind: "create" }
+  | { kind: "confident"; candidate: Candidate }
+  | { kind: "ambiguous"; candidate: Candidate; reason: string };
+
+async function classifyCalendar(token: string, calId: string, ev: any): Promise<CalVerdict> {
   const date: string = ev.event_date;
-  // window: event_date − 1 day … event_date + 1 day
   const addDays = (d: string, n: number) => { const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
-  const dateFrom = addDays(date, -1);
-  const dateTo   = addDays(date, 2); // exclusive upper bound → +2 so window covers date+1 fully
-  // Fix 3: timeMin/timeMax are Z-anchored but the ±1-day window is a 3-day UTC span, wider than any real timezone offset, so events dated D always fall inside it regardless of local time.
+  const items = await gcalListWindow(token, calId, addDays(date, -1), addDays(date, 2));
 
-  const items = await gcalListWindow(token, calId, dateFrom, dateTo);
-  const eSpan = eventSpan(ev);
+  // Name-similar, not-already-ours candidates in the ±1-day window. (No time-overlap filter here:
+  // a same-name event a day off is a near-miss we want reviewed, not silently duplicated.)
+  const matches = items.filter((it) => nameSimilar(ev.name ?? "", it.summary ?? "") && !isOwned(it.description));
+  const asCand = (it: GCalListItem): Candidate => ({ gcalEventId: it.id, summary: it.summary, start: it.start.dateTime ?? it.start.date ?? "", htmlLink: it.htmlLink });
 
-  for (const item of items) {
-    const cSpan = candidateSpan(item);
-    if (
-      timeOverlap(eSpan, cSpan) &&
-      nameSimilar(ev.name ?? "", item.summary ?? "") &&
-      !isOwned(item.description)
-    ) {
-      return {
-        gcalEventId: item.id,
-        summary: item.summary,
-        start: item.start.dateTime ?? item.start.date ?? "",
-        htmlLink: item.htmlLink,
-      };
-    }
+  if (matches.length === 0) return { kind: "create" };
+
+  if (matches.length === 1) {
+    const only = matches[0];
+    const strong = nameContained(ev.name ?? "", only.summary ?? "") && candidateDate(only) === date && timeOverlap(eventSpan(ev), candidateSpan(only));
+    if (strong) return { kind: "confident", candidate: asCand(only) };
+    const reason = candidateDate(only) !== date ? `"${only.summary}" is on ${candidateDate(only)}, a day off` : `title only loosely matches "${only.summary}"`;
+    return { kind: "ambiguous", candidate: asCand(only), reason };
   }
-  return null;
+
+  return { kind: "ambiguous", candidate: asCand(matches[0]), reason: `${matches.length} possible matches nearby` };
 }
 
 // ── Upsert helper ─────────────────────────────────────────────────────────────
@@ -299,22 +311,48 @@ Deno.serve(async (req) => {
     const token   = await accessToken();
     const appLink = makeAppLink(req, eventId, appOrigin);
 
-    // ── action: auto (first sync) — look for candidates before creating ───────
+    // ── action: auto (first sync) — classify each calendar, then act ──────────
     if (action === "auto" && Object.keys(ids).length === 0) {
-      const [candP, candC] = await Promise.all([
-        findCandidate(token, cals[0], ev),
-        findCandidate(token, cals[1], ev),
+      const [vP, vC] = await Promise.all([
+        classifyCalendar(token, cals[0], ev),
+        classifyCalendar(token, cals[1], ev),
       ]);
+      const verdicts: Record<string, CalVerdict> = { [cals[0]]: vP, [cals[1]]: vC };
 
-      if (candP !== null || candC !== null) {
-        const pending: Record<string, Candidate | null> = {
-          [cals[0]]: candP,
-          [cals[1]]: candC,
-        };
+      // Any ambiguity → hold the whole event for review; write nothing to Calendar.
+      if (vP.kind === "ambiguous" || vC.kind === "ambiguous") {
+        const pending: Record<string, (Candidate & { reason?: string }) | null> = {};
+        for (const calId of cals) {
+          const v = verdicts[calId];
+          pending[calId] = v.kind === "ambiguous" ? { ...v.candidate, reason: v.reason } : null;
+        }
         await sb.from("event").update({ gcal_match_pending: pending }).eq("id", eventId);
         return json({ ok: true, status: "needs_confirmation", candidates: pending });
       }
-      // No candidates found — fall through to create on both calendars below
+
+      // All clear: adopt confident candidates, create where none. (Same write-back as `link`.)
+      const settled = await Promise.allSettled(cals.map((calId) => {
+        const v = verdicts[calId];
+        if (v.kind === "confident") {
+          return gcalPatch(token, calId, v.candidate.gcalEventId, buildBody(ev, appLink)).then((patched) => {
+            if (!patched.id) throw new Error(`gcalPatch failed on ${calId}: ${patched.error?.message ?? "unknown"}`);
+            return { calId, gid: patched.id as string, htmlLink: (patched.htmlLink ?? null) as string | null };
+          });
+        }
+        return upsertOn(token, calId, ev, ids, appLink);
+      }));
+
+      const nextIds: Record<string, string> = { ...ids };
+      let primaryHtmlLink: string | null = null;
+      const errors: string[] = [];
+      for (const outcome of settled) {
+        if (outcome.status === "fulfilled") { const r = outcome.value; nextIds[r.calId] = r.gid; if (r.calId === PRIMARY) primaryHtmlLink = r.htmlLink; }
+        else errors.push(String((outcome.reason as any)?.message ?? outcome.reason));
+      }
+      await sb.from("event").update({ gcal_event_ids: nextIds, gcal_event_id: nextIds[PRIMARY] ?? null, gcal_html_link: primaryHtmlLink ?? (ev as any).gcal_html_link ?? null, gcal_match_pending: null }).eq("id", eventId);
+      return errors.length > 0
+        ? json({ ok: false, status: "partial", gcalEventIds: nextIds, errors }, 207)
+        : json({ ok: true, status: "synced", gcalEventIds: nextIds, htmlLink: primaryHtmlLink });
     }
 
     // ── action: link — adopt pending candidates, create where none ────────────
