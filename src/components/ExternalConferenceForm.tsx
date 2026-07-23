@@ -4,7 +4,8 @@ import { Modal } from "./Modal";
 import { Button } from "@instalily/ui/button";
 import { parseTypedDate } from "./DateEdit";
 import { LocationInput } from "./LocationEdit";
-import { addExternalConference, addAttendee, linkAttendeeToEvent, listAllAttendees, type PersonView } from "../lib/db";
+import { addExternalConference, updateExternalConference, createInternalPerson, linkAttendeeToEvent, listInternalPeople, type InternalPerson, type EventListItem } from "../lib/db";
+import { internalEmailFor } from "../lib/people";
 import { EXTERNAL_TYPE_TAGS, type ExternalType } from "../lib/tags";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -90,33 +91,41 @@ function quarterFromDate(dateStr: string): string {
   return m ? `Q${Math.floor((m - 1) / 3) + 1}` : "";
 }
 
-// A person to tag: either an EXISTING attendee (reused person record) or a NEW one (name + optional email).
+// A person to tag: either an EXISTING internal contact (reused person record) or a NEW internal one.
 type Picked = { kind: "existing"; id: string; label: string } | { kind: "new"; name: string; email: string };
 
-// Add an EXTERNAL conference (something we're attending, not running) as a lightweight calendar
-// instance. Fields match the brief exactly; only name + start are required. Attendees reuse the
-// events-page mechanism: tag an existing person (ideal) or add a new name/email.
-export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [name, setName] = useState("");
-  const [type, setType] = useState<ExternalType | null>(null);
-  const [why, setWhy] = useState("");
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
-  const [quarter, setQuarter] = useState("");
-  const [quarterTouched, setQuarterTouched] = useState(false);
-  const [location, setLocation] = useState("");
-  const [infoUrl, setInfoUrl] = useState("");
+// Reverse-map an event's tags to the external Type (Industry / PE) for edit-mode prefill.
+const typeFromTags = (tags: string[] | undefined): ExternalType | null => {
+  if (!tags) return null;
+  for (const t of Object.keys(EXTERNAL_TYPE_TAGS) as ExternalType[]) if (tags.includes(EXTERNAL_TYPE_TAGS[t])) return t;
+  return null;
+};
+
+// Add or EDIT an EXTERNAL conference (something we're attending, not running) as a lightweight calendar
+// instance. Only name + start are required. Who's-going is limited to internal (@instalily) people —
+// same as the series person bank: pick an existing internal contact, or create a new internal teammate.
+export function ExternalConferenceForm({ existing, onClose, onCreated }: { existing?: EventListItem; onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState(existing?.title ?? "");
+  const [type, setType] = useState<ExternalType | null>(existing ? typeFromTags(existing.tags) : null);
+  const [why, setWhy] = useState(existing?.why ?? "");
+  const [start, setStart] = useState(existing?.date ?? "");
+  const [end, setEnd] = useState(existing?.endDate ?? "");
+  const [quarter, setQuarter] = useState(existing?.quarter ?? "");
+  const [quarterTouched, setQuarterTouched] = useState(!!existing?.quarter);
+  const [location, setLocation] = useState(existing?.location ?? "");
+  const [infoUrl, setInfoUrl] = useState(existing?.infoUrl ?? "");
   const [picked, setPicked] = useState<Picked[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Existing roster for tagging.
-  const [roster, setRoster] = useState<PersonView[]>([]);
+  // Internal-only roster for tagging (@instalily people).
+  const [roster, setRoster] = useState<InternalPerson[]>([]);
   const [query, setQuery] = useState("");
   const [addingNew, setAddingNew] = useState(false);
   const [newName, setNewName] = useState("");
   const [newEmail, setNewEmail] = useState("");
-  useEffect(() => { listAllAttendees().then(setRoster).catch(() => setRoster([])); }, []);
+  const [newEmailTouched, setNewEmailTouched] = useState(false);
+  useEffect(() => { listInternalPeople().then(setRoster).catch(() => setRoster([])); }, []);
 
   // Quarter auto-fills from the start date until the user picks one (then their choice sticks).
   const effectiveQuarter = quarterTouched ? quarter : (start ? quarterFromDate(start) : quarter);
@@ -125,12 +134,13 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
   const pickedExistingIds = new Set(picked.filter((p): p is Extract<Picked, { kind: "existing" }> => p.kind === "existing").map((p) => p.id));
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return [] as PersonView[];
-    return roster.filter((p) => !pickedExistingIds.has(p.id) && `${p.name ?? ""} ${p.org ?? ""} ${p.email ?? ""}`.toLowerCase().includes(q)).slice(0, 6);
+    if (!q) return [] as InternalPerson[];
+    return roster.filter((p) => !pickedExistingIds.has(p.id) && `${p.name ?? ""} ${p.email ?? ""}`.toLowerCase().includes(q)).slice(0, 6);
   }, [query, roster, picked]);
 
-  const tagExisting = (p: PersonView) => { setPicked((prev) => [...prev, { kind: "existing", id: p.id, label: `${p.name ?? "Unnamed"}${p.org ? ` · ${p.org}` : ""}` }]); setQuery(""); };
-  const addNew = () => { const n = newName.trim(); if (!n) return; setPicked((prev) => [...prev, { kind: "new", name: n, email: newEmail.trim() }]); setNewName(""); setNewEmail(""); setAddingNew(false); };
+  const tagExisting = (p: InternalPerson) => { setPicked((prev) => [...prev, { kind: "existing", id: p.id, label: `${p.name ?? "Unnamed"}${p.email ? ` · ${p.email}` : ""}` }]); setQuery(""); };
+  const onNewName = (v: string) => { setNewName(v); if (!newEmailTouched) setNewEmail(internalEmailFor(v.trim())); };
+  const addNew = () => { const n = newName.trim(); if (!n) return; setPicked((prev) => [...prev, { kind: "new", name: n, email: newEmail.trim() || internalEmailFor(n) }]); setNewName(""); setNewEmail(""); setNewEmailTouched(false); setAddingNew(false); };
 
   const save = async () => {
     if (!name.trim()) { setErr("Name is required."); return; }
@@ -139,11 +149,14 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
     if (badRange) { setErr("End date must be on or after the start date."); return; }
     setBusy(true); setErr(null);
     try {
-      const id = await addExternalConference({ name, startDate: start, endDate: end || null, why, quarter: effectiveQuarter || null, location, infoUrl, tag: EXTERNAL_TYPE_TAGS[type] });
+      const payload = { name, startDate: start, endDate: end || null, why, quarter: effectiveQuarter || null, location, infoUrl, tag: EXTERNAL_TYPE_TAGS[type] };
+      let id: string;
+      if (existing) { await updateExternalConference(existing.id, payload); id = existing.id; }
+      else { id = await addExternalConference(payload); }
       for (const p of picked) {
         try {
           if (p.kind === "existing") await linkAttendeeToEvent(id, p.id);
-          else await addAttendee(id, { name: p.name, email: p.email || null });
+          else { const np = await createInternalPerson({ name: p.name, email: p.email || null }); await linkAttendeeToEvent(id, np.id); }
         } catch { /* skip one bad attendee */ }
       }
       onCreated();
@@ -152,7 +165,7 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
 
   const field = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
   return (
-    <Modal title="Add external event" onClose={onClose} maxWidth="max-w-lg">
+    <Modal title={existing ? "Edit external event" : "Add external event"} onClose={onClose} maxWidth="max-w-lg">
       <div className="space-y-3 max-h-[65vh] overflow-y-auto pr-1 -mr-1">
         <div>
           <span className="text-[13px] text-gray-500">Type<span className="text-red-500">*</span></span>
@@ -232,11 +245,11 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
           {query.trim() && (
             <ul className="mt-1 border border-gray-200 rounded-lg divide-y divide-gray-100 overflow-hidden">
               {matches.length === 0 ? (
-                <li className="px-3 py-2 text-[13px] text-gray-400">No match — use "Add someone not on the list" below.</li>
+                <li className="px-3 py-2 text-[13px] text-gray-400">No internal match — use "Add someone not on the list" below.</li>
               ) : matches.map((p) => (
                 <li key={p.id}>
                   <button onClick={() => tagExisting(p)} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">
-                    {p.name ?? "Unnamed"}{p.org ? <span className="text-gray-400"> · {p.org}</span> : null}{p.email ? <span className="text-gray-400"> · {p.email}</span> : null}
+                    {p.name ?? "Unnamed"}{p.email ? <span className="text-gray-400"> · {p.email}</span> : null}
                   </button>
                 </li>
               ))}
@@ -245,8 +258,8 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
           {/* Add-new fallback (optional). */}
           {addingNew ? (
             <div className="flex gap-2 mt-2">
-              <input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addNew(); } }} placeholder="Name" className={`${field} flex-1`} />
-              <input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addNew(); } }} placeholder="Email (optional)" className={`${field} flex-1`} />
+              <input autoFocus value={newName} onChange={(e) => onNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addNew(); } }} placeholder="Name" className={`${field} flex-1`} />
+              <input value={newEmail} onChange={(e) => { setNewEmailTouched(true); setNewEmail(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addNew(); } }} placeholder="name@instalily.ai" className={`${field} flex-1`} />
               <button onClick={addNew} disabled={!newName.trim()} className="inline-flex items-center gap-1 px-2.5 rounded-lg border border-gray-300 text-sm hover:bg-gray-50 disabled:opacity-40 shrink-0"><Plus className="w-4 h-4" /></button>
             </div>
           ) : (
@@ -259,7 +272,7 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
       <div className="flex justify-end gap-2 mt-5">
         <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
         <Button size="sm" onClick={() => void save()} disabled={busy || !name.trim() || !start || badRange}>
-          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Add conference
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null} {existing ? "Save changes" : "Add conference"}
         </Button>
       </div>
     </Modal>

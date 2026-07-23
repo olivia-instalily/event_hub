@@ -2080,6 +2080,23 @@ export async function addExternalConference(input: ExternalConferenceInput): Pro
   return id;
 }
 
+/** Edit an external-conference instance in place, then re-sync its calendar copies. Same field set
+ *  as addExternalConference; attendee links are managed separately (link/add). */
+export async function updateExternalConference(id: string, input: ExternalConferenceInput): Promise<void> {
+  const name = input.name.trim();
+  if (!name) throw new Error('Name is required.');
+  if (!input.startDate) throw new Error('Start date is required.');
+  if (input.endDate && input.endDate < input.startDate) throw new Error('End date must be on or after the start date.');
+  const { error } = await supabase.from('event').update({
+    name, event_date: input.startDate, end_date: input.endDate || null,
+    location: input.location?.trim() || null, why: input.why?.trim() || null,
+    quarter: input.quarter?.trim() || null, info_url: input.infoUrl?.trim() || null,
+    tag: input.tag, tags: [input.tag],
+  }).eq('id', id);
+  if (error) throw error;
+  autoSyncGcal(id);
+}
+
 // ── Series / campaign helpers ──────────────────────────────────────────────
 export interface SeriesCardEvent { id: string; title: string; date: string | null; location: string | null; coverImageUrl: string | null; }
 export interface SeriesListItem { id: string; name: string; drive: Drive; memberCount: number; events: SeriesCardEvent[]; }

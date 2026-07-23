@@ -38,13 +38,6 @@ const NOT_CAPTURED = "Not captured";
 
 // Solo "Just us" events get tagged by audience: internal events draw from the
 // The dated external event whose date is nearest to today — the calendar "jump" target.
-function closestExternal(list: EventListItem[]): EventListItem | null {
-  const today = Date.now();
-  const dated = list.filter((e) => e.date);
-  if (!dated.length) return null;
-  return dated.reduce((best, e) => Math.abs(new Date(e.date! + "T12:00:00").getTime() - today) < Math.abs(new Date(best.date! + "T12:00:00").getTime() - today) ? e : best);
-}
-
 // Internal taxonomy category, external from the Hosted one.
 const INTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Internal")?.tags ?? [];
 const EXTERNAL_TAGS = TAG_CATEGORIES.find((c) => c.name === "Hosted")?.tags ?? [];
@@ -1874,7 +1867,8 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
 export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, openCreate = false, initialFiles = null, looksPast = false, onFilesConsumed, onNewEventFiles }: EventsPageProps) {
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [externalEvents, setExternalEvents] = useState<EventListItem[]>([]); // external conferences (we're attending)
-  const [detail, setDetail] = useState<EventListItem | null>(null); // open external event → read-only card
+  const [detail, setDetail] = useState<EventListItem | null>(null); // open external event → detail card
+  const [editingExternal, setEditingExternal] = useState<EventListItem | null>(null); // external event being edited
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1887,7 +1881,6 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // External conferences show ALONGSIDE operated events by default. Clicking the External button flips
   // to "only external" (exclusive) and jumps the calendar to the closest external event.
   const [externalOnly, setExternalOnly] = useState(false);
-  const [calJump, setCalJump] = useState<{ date: string; nonce: number } | null>(null); // calendar jump target
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
@@ -2123,17 +2116,12 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               </button>
             );
           })}
-          {/* External conferences show alongside by default. Click → only external + jump the calendar
-              to the closest one. Purple fill signals the active "external only" state. */}
+          {/* External conferences show alongside by default. Click → filter the list to only external
+              events (in place — stays on the current view). Purple fill signals the active state. */}
           <button
-            onClick={() => {
-              setTemplatesView(false);
-              const entering = !externalOnly;
-              setExternalOnly(entering);
-              if (entering) { const c = closestExternal(externalEvents); if (c?.date) { setViewMode('calendar'); setCalJump({ date: c.date, nonce: (calJump?.nonce ?? 0) + 1 }); } }
-            }}
+            onClick={() => { setTemplatesView(false); setExternalOnly((v) => !v); }}
             aria-pressed={!templatesView && externalOnly}
-            title="Show only external events and jump to the closest one"
+            title="Show only external events"
             className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border transition-all ${
               !templatesView && externalOnly ? 'bg-purple-600 border-purple-600 text-white shadow-sm' : 'bg-white border-border text-gray-700 hover:bg-gray-50'
             }`}
@@ -2477,7 +2465,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
       {/* Calendar View — month grid, events on their dates */}
       {!loading && !error && viewMode === 'calendar' && (
-        <CalendarView events={filteredEvents} jump={calJump ?? undefined} onOpen={(id) => { const x = externalEvents.find((e) => e.id === id); if (x) setDetail(x); else setSelectedEventId(id); }} />
+        <CalendarView events={filteredEvents} onOpen={(id) => { const x = externalEvents.find((e) => e.id === id); if (x) setDetail(x); else setSelectedEventId(id); }} />
       )}
 
       {pastChooser && (
@@ -2524,6 +2512,14 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
         />
       )}
 
+      {editingExternal && (
+        <ExternalConferenceForm
+          existing={editingExternal}
+          onClose={() => setEditingExternal(null)}
+          onCreated={async () => { setEditingExternal(null); await load(); }}
+        />
+      )}
+
       {deleteTarget && (
         <ConfirmModal
           title="Delete event?"
@@ -2535,7 +2531,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
         />
       )}
 
-      {detail && <ExternalDetail item={detail} onClose={() => setDetail(null)} />}
+      {detail && <ExternalDetail item={detail} onClose={() => setDetail(null)} onEdit={() => { setEditingExternal(detail); setDetail(null); }} />}
     </div>
   );
 }
