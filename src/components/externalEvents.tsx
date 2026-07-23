@@ -1,7 +1,21 @@
 import { useEffect, useState } from "react";
 import { CalendarDays, MapPin, ExternalLink, Users, X } from "lucide-react";
 import { Modal } from "./Modal";
-import { listAttendeesForEvent, type EventListItem, type PersonView } from "../lib/db";
+import { listAttendeesForEvent, type EventListItem, type PersonView, type EventStatus } from "../lib/db";
+
+const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+
+// The status an event effectively HAS right now — date wins over the stored flag: once an event's
+// (end) date is before today it is Past, no matter what status was saved. Externals (no stored
+// status) derive future/in-process/past from their dates. Used for all bucketing + status chips so
+// a past-dated event can never sit in "Upcoming".
+export function effectiveStatus(e: EventListItem): EventStatus {
+  const end = e.endDate ?? e.date;
+  if (end && end < todayIso()) return "past";
+  if (e.isExternal) return e.date && e.date > todayIso() ? "future" : "in-process";
+  if (e.macroStage === "Wrapped") return "past";
+  return e.status;
+}
 
 // Shared event-category model used by both the Events page and the Calendar page, so the two stay
 // aligned. External conferences are their own category (we're attending, not running).
@@ -17,8 +31,8 @@ export const ALL_CATS: CatKey[] = CAT_META.map((c) => c.key);
 
 export function categoryOf(e: EventListItem): CatKey {
   if (e.isExternal) return "external";
-  if (e.macroStage === "Wrapped" || e.status === "past") return "past";
-  return e.status === "in-process" ? "in-process" : "future";
+  const s = effectiveStatus(e); // date-aware: a past-dated event is Past regardless of stored status
+  return s === "past" ? "past" : s === "in-process" ? "in-process" : "future";
 }
 
 // Colored-dot category filter (multi-select — toggle each category in/out). Default: all on.

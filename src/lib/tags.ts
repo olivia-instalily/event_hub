@@ -9,6 +9,7 @@ export const TAG_CATEGORIES: TagCategory[] = [
   { name: 'Hosted', tags: ['Client summit', 'Brand & community event', 'Co-hosted partner event', 'Campus'] },
   { name: 'Sponsorship', tags: ['Sponsorship'] },
   { name: 'Internal', tags: ['Internal team social', 'Company milestone'] },
+  { name: 'External', tags: ['Ext. Industry', 'Ext. PE'] },
 ];
 export const EVENT_TAGS = TAG_CATEGORIES.flatMap((c) => c.tags);
 export type EventTag = string;
@@ -40,8 +41,10 @@ const PRESET: Record<string, number> = {
   'Client summit': 2, 'Brand & community event': 2, 'Co-hosted partner event': 2, Campus: 2,
   // Sponsorship → amber
   Sponsorship: 7,
-  // Internal → purple
-  'Internal team social': 1, 'Company milestone': 1,
+  // Internal → rose
+  'Internal team social': 6, 'Company milestone': 6,
+  // External → purple
+  'Ext. Industry': 1, 'Ext. PE': 1,
 };
 
 function hueFor(tag: string | null | undefined): Hue {
@@ -73,7 +76,8 @@ const BADGE_POOL: BadgeVariant[] = ['orange', 'purple', 'green', 'blue', 'cyan',
 const BADGE_PRESET: Record<string, BadgeVariant> = {
   'Client summit': 'green', 'Brand & community event': 'green', 'Co-hosted partner event': 'green', Campus: 'green',
   Sponsorship: 'yellow',
-  'Internal team social': 'purple', 'Company milestone': 'purple',
+  'Internal team social': 'red', 'Company milestone': 'red',
+  'Ext. Industry': 'purple', 'Ext. PE': 'purple',
 };
 export function tagBadgeVariant(tag: string | null | undefined): BadgeVariant {
   if (!tag) return 'gray';
@@ -81,4 +85,16 @@ export function tagBadgeVariant(tag: string | null | undefined): BadgeVariant {
   let h = 0;
   for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
   return BADGE_POOL[h % BADGE_POOL.length];
+}
+
+// External-event types shown as pills in the create/attending flow, each mapped to its taxonomy tag.
+export type ExternalType = 'Industry' | 'PE';
+export const EXTERNAL_TYPE_TAGS: Record<ExternalType, string> = {
+  Industry: 'Ext. Industry',
+  PE: 'Ext. PE',
+};
+export const EXTERNAL_SUBTYPE_TAGS: string[] = Object.values(EXTERNAL_TYPE_TAGS);
+// The external subtype tag on an event's tag list, or null (legacy/untyped external).
+export function externalTagOf(tags: string[]): string | null {
+  return tags.find((t) => EXTERNAL_SUBTYPE_TAGS.includes(t)) ?? null;
 }

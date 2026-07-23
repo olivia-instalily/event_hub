@@ -55,6 +55,7 @@ import { useProfile } from "../lib/profile";
 import { regenerateFromMaterials as runRegenerate } from "../lib/regenerate";
 import { ConfirmModal } from "./Modal";
 import { GCalSync } from "./GCalSync";
+import { GcalLinkControl } from "./GcalLinkControl";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
 import { LinearLauncher } from "./LinearLauncher";
@@ -4419,22 +4420,12 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                       }}
                       placeholder="Date TBD"
                     />
-                    {plan.gcalEventId && plan.gcalHtmlLink && (
-                      <a href={plan.gcalHtmlLink} target="_blank" rel="noreferrer" title="View in Google Calendar" className="inline-flex text-emerald-600 hover:text-emerald-700">
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    )}
+                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} onChange={() => setReload((x) => x + 1)} />
                   </span>
                 ) : (
                   // Luma owns the date → read-only; green icon links to the GCal event when synced.
                   <>
-                    {plan.gcalEventId && plan.gcalHtmlLink ? (
-                      <a href={plan.gcalHtmlLink} target="_blank" rel="noreferrer" title="View in Google Calendar" className="inline-flex">
-                        <Calendar className="w-5 h-5 text-emerald-600 hover:text-emerald-700" />
-                      </a>
-                    ) : (
-                      <Calendar className={`w-5 h-5 ${plan.gcalEventId ? "text-emerald-600" : ""}`} />
-                    )}
+                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} onChange={() => setReload((x) => x + 1)} />
                     <span>{plan.date ?? "Date TBD"}</span>
                   </>
                 )}

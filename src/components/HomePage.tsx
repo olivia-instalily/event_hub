@@ -6,6 +6,7 @@ import { TagStack } from "./TagStack";
 import { ConfirmModal } from "./Modal";
 import { NewEventDropZone } from "./NewEventDropZone";
 import { useEventDrop } from "./useEventDrop";
+import { effectiveStatus } from "./externalEvents";
 
 const NOT_CAPTURED = "Not captured";
 // Phase color dots — same palette/order as the phase tracker (by phase order).
@@ -57,7 +58,7 @@ export function HomePage({ onOpenEvent, onCreateEvent, onNewEventFiles }: { onOp
         .filter((e) => e.owners.some((o) => o.id === current.id))
         .sort((a, b) => {
           const ad = a.date ?? "", bd = b.date ?? "";
-          const aPast = a.status === "past", bPast = b.status === "past";
+          const aPast = effectiveStatus(a) === "past", bPast = effectiveStatus(b) === "past"; // date-aware
           if (aPast !== bPast) return aPast ? 1 : -1; // upcoming before past
           if (!ad && !bd) return 0;
           if (!ad) return 1;

@@ -3,7 +3,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { createPortal } from "react-dom";
 import { EventDetailPage } from "./EventDetailPage";
 import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
-import { ExternalDetail } from "./externalEvents";
+import { ExternalDetail, effectiveStatus } from "./externalEvents";
 import { looksLikeBackfill } from "../lib/backfill";
 import { defaultPhases } from "../lib/eventPhases";
 import { DateEdit } from "./DateEdit";
@@ -19,6 +19,7 @@ import { useEventDrop } from "./useEventDrop";
 import { useProfile } from "../lib/profile";
 import { ConfirmModal } from "./Modal";
 import { BackfillModal } from "./BackfillModal";
+import { ExternalConferenceForm } from "./ExternalConferenceForm";
 import { TAG_CATEGORIES, tagColor, tagBadgeVariant } from "../lib/tags";
 import { emptyScoping, saveScoping, loadScoping } from "../lib/scoping";
 import { matchFormat } from "../lib/formats";
@@ -532,7 +533,7 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setPreview({ e, top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 288) });
   };
-  const dotColor = (e: EventListItem) => e.isExternal ? "bg-purple-500" : e.macroStage === "Wrapped" || e.status === "past" ? "bg-gray-400" : e.status === "in-process" ? "bg-amber-500" : "bg-blue-500";
+  const dotColor = (e: EventListItem) => { if (e.isExternal) return "bg-purple-500"; const s = effectiveStatus(e); return s === "past" ? "bg-gray-400" : s === "in-process" ? "bg-amber-500" : "bg-blue-500"; };
 
   const first = new Date(cursor.y, cursor.m, 1);
   const startDow = first.getDay();
@@ -713,7 +714,7 @@ function TagFilter({ value, onChange, className = "" }: { value: string; onChang
   );
 }
 
-export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview, onBackfill, initialTemplate = false }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void; onBackfill: (text?: string, files?: File[]) => void; initialTemplate?: boolean }) {
+export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesConsumed, onClose, onCreated, onCacheReview, onBackfill, onAttending, initialTemplate = false }: { events: EventListItem[]; initialFiles?: File[] | null; resumeIngest?: Ingest | null; onFilesConsumed?: () => void; onClose: () => void; onCreated: (eventId: string) => void; onCacheReview?: (ingest: Ingest) => void; onBackfill: (text?: string, files?: File[]) => void; onAttending: () => void; initialTemplate?: boolean }) {
   // Files dropped on the page open the modal already processing — the first paint is the
   // "reading…" state. A resumed review (re-opened after generating) lands straight back on
   // the review screen with the cached extraction, no reprocessing.
@@ -782,7 +783,7 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
   const [pastHint, setPastHint] = useState<string | null>(null); // brief text, when a drop reads as a PAST event
   // Files dropped on the first (choose) screen, held until the user picks one of the three.
   const [pendingDrop, setPendingDrop] = useState<File[] | null>(null);
-  const [choice, setChoice] = useState<'planning' | 'backfill' | null>(null);
+  const [choice, setChoice] = useState<'planning' | 'attending' | 'backfill' | null>(null);
   const dragDepth = useRef(0);
   const chooseFileRef = useRef<HTMLInputElement>(null);
   const chooseFolderRef = useRef<HTMLInputElement>(null);
@@ -812,6 +813,11 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
     if (choice === 'planning') {
       if (pendingDrop) { setPlanKind('solo'); const fs = pendingDrop; setPendingDrop(null); void handleBriefDrop(fs); }
       else setMode('planFork');
+    } else if (choice === 'attending') {
+      // External event we attend — its own minimal flow (opposite of planning). Hand off to the
+      // external-event modal at the app root; the type (Industry/PE) is chosen inside it.
+      setPendingDrop(null);
+      onAttending();
     } else if (choice === 'backfill') {
       // Backfill is its OWN flow (opposite direction from create) — hand off to the backfill modal,
       // passing along any dropped brief's text. Never run a past event through the create flow.
@@ -1308,9 +1314,9 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
                 <p className="text-lg font-medium">We&apos;re planning</p>
                 <p className="text-sm text-gray-500 mt-1">InstaLILY is running this event — alone or alongside a co-host.</p>
               </button>
-              <button disabled className="border border-gray-200 rounded-xl p-6 text-left opacity-60 cursor-not-allowed">
+              <button onClick={() => setChoice('attending')} className={`border rounded-xl p-6 text-left transition-colors ${choice === 'attending' ? 'border-border bg-gray-100' : 'border-gray-300 hover:bg-gray-50'}`}>
                 <p className="text-lg font-medium">I&apos;m attending</p>
-                <p className="text-sm text-gray-500 mt-1">A third party owns it; we attend, exhibit, or sponsor. Coming soon.</p>
+                <p className="text-sm text-gray-500 mt-1">A third party runs it; we attend an external event — e.g. an industry conference or a PE event.</p>
               </button>
               <button onClick={() => setChoice('backfill')} className={`border rounded-xl p-6 text-left transition-colors ${choice === 'backfill' ? 'border-border bg-gray-100' : 'border-gray-300 hover:bg-gray-50'}`}>
                 <p className="text-lg font-medium">Backfill a past event</p>
@@ -1890,6 +1896,7 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   const [searchQuery, setSearchQuery] = useState('');
   const [createOpen, setCreateOpen] = useState(openCreate);
   const [backfillOpen, setBackfillOpen] = useState(false);
+  const [attendingOpen, setAttendingOpen] = useState(false); // "I'm attending" → external-event modal
   const [backfillText, setBackfillText] = useState<string | undefined>(undefined); // handed from a past-event drop
   const [backfillFiles, setBackfillFiles] = useState<File[] | null>(null); // the dropped file(s) → tagged on the record
   // A global drop that sniffed as a past event → ask (backfill vs in-process) before routing.
@@ -2004,25 +2011,17 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // Distinct formats across events (each event may carry several joined formats).
   const formatOptions = Array.from(new Set(events.flatMap(e => parseFormats(e.format ?? "")))).filter(Boolean).sort((a, b) => a.localeCompare(b));
 
-  const todayIso = new Date().toISOString().slice(0, 10);
-  // Upcoming vs Past. External events have no status — section them by their date.
-  const sectionOf = (e: EventListItem): 'upcoming' | 'past' =>
-    e.isExternal ? ((e.date && e.date < todayIso) ? 'past' : 'upcoming') : (e.status === 'past' ? 'past' : 'upcoming');
+  // Upcoming vs Past — from the date-aware effective status, so a past-dated event never sits in
+  // Upcoming even if its stored status still says future/in-process.
+  const sectionOf = (e: EventListItem): 'upcoming' | 'past' => effectiveStatus(e) === 'past' ? 'past' : 'upcoming';
 
-  // External events have no stored status — derive it from their dates so the status tags apply.
-  const extStatus = (e: EventListItem): EventStatus => {
-    const end = e.endDate ?? e.date;
-    if (end && end < todayIso) return 'past';
-    if (e.date && e.date > todayIso) return 'future';
-    return 'in-process';
-  };
-  // Templates = exclusive view. Default: operated events + external (both), by status. "External only"
-  // (button clicked) = just external, by status.
+  // Templates = exclusive view. Default: operated events + external (both), by effective status.
+  // "External only" (button clicked) = just external.
   const base = templatesView ? events.filter(e => e.isTemplate)
-    : externalOnly ? externalEvents.filter(e => selectedStatuses.has(extStatus(e)))
+    : externalOnly ? externalEvents.filter(e => selectedStatuses.has(effectiveStatus(e)))
     : [
-        ...events.filter(e => !e.isTemplate && selectedStatuses.has(e.status)),
-        ...externalEvents.filter(e => selectedStatuses.has(extStatus(e))),
+        ...events.filter(e => !e.isTemplate && selectedStatuses.has(effectiveStatus(e))),
+        ...externalEvents.filter(e => selectedStatuses.has(effectiveStatus(e))),
       ];
   const filteredEvents = base.filter(event => {
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
@@ -2512,8 +2511,16 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
           onFilesConsumed={onFilesConsumed}
           onClose={() => { setCreateOpen(false); setResumeIngest(null); }}
           onBackfill={(text, files) => { setCreateOpen(false); setResumeIngest(null); setBackfillText(text); setBackfillFiles(files ?? null); setBackfillOpen(true); }}
+          onAttending={() => { setCreateOpen(false); setResumeIngest(null); setAttendingOpen(true); }}
           onCacheReview={(ing) => { pendingReview.current = ing; }}
           onCreated={async (id) => { if (pendingReview.current) { setReviewCache({ ingest: pendingReview.current, eventId: id }); pendingReview.current = null; } await load(); setCreateOpen(false); setResumeIngest(null); setSelectedEventId(id); }}
+        />
+      )}
+
+      {attendingOpen && (
+        <ExternalConferenceForm
+          onClose={() => setAttendingOpen(false)}
+          onCreated={async () => { setAttendingOpen(false); await load(); }}
         />
       )}
 

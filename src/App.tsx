@@ -5,6 +5,7 @@ import { looksLikeBackfill } from './lib/backfill';
 import { parseDeepLink, setPendingScopingBudget, locationSearch } from './lib/deepLink';
 import { EventsPage, CreateEventModal, classifyDropFile } from './components/EventsPage';
 import { BackfillModal } from './components/BackfillModal';
+import { ExternalConferenceForm } from './components/ExternalConferenceForm';
 import { listEvents, type EventListItem } from './lib/db';
 import { HomePage } from './components/HomePage';
 import { PeoplePage } from './components/PeoplePage';
@@ -81,6 +82,7 @@ export default function Component() {
   // file (or hitting a "Create Event" button) opens the modal over the current page — the background
   // never switches to Events mid-drop. events feeds the modal's dedup + template matching.
   const [createOpen, setCreateOpen] = useState(false);
+  const [attendingOpen, setAttendingOpen] = useState(false); // "I'm attending" → external-event modal
   const [createFiles, setCreateFiles] = useState<File[] | null>(null);
   const [createAsTemplate, setCreateAsTemplate] = useState(false); // drop chooser "Template only" → force template mode
   const [pastChooserFiles, setPastChooserFiles] = useState<File[] | null>(null);
@@ -309,7 +311,15 @@ export default function Component() {
           onFilesConsumed={() => setCreateFiles(null)}
           onClose={() => { setCreateOpen(false); setCreateFiles(null); setCreateAsTemplate(false); }}
           onBackfill={(text, files) => { setCreateOpen(false); setCreateFiles(null); setCreateAsTemplate(false); setBackfill({ text, files: files ?? null }); }}
+          onAttending={() => { setCreateOpen(false); setCreateFiles(null); setCreateAsTemplate(false); setAttendingOpen(true); }}
           onCreated={(id) => { setCreateOpen(false); setCreateFiles(null); setCreateAsTemplate(false); openEvent(id, 'events'); }}
+        />
+      )}
+
+      {attendingOpen && (
+        <ExternalConferenceForm
+          onClose={() => setAttendingOpen(false)}
+          onCreated={() => { setAttendingOpen(false); }}
         />
       )}
 

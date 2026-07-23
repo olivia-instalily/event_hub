@@ -4,6 +4,7 @@ import { listEvents, listExternalConferences, type EventListItem } from "../lib/
 import { CalendarView } from "./EventsPage";
 import { ExternalConferenceForm } from "./ExternalConferenceForm";
 import { ExternalDetail, CAT_META, categoryOf, type CatKey } from "./externalEvents";
+import { EXTERNAL_SUBTYPE_TAGS, EXTERNAL_TYPE_TAGS, externalTagOf, type ExternalType } from "../lib/tags";
 
 // Clean, calendar-only view of everything on our radar: events we're running + external conferences
 // we're attending. Future/In-Process/Past act as a color key AND jump to that category's first event
@@ -16,6 +17,8 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
   const [addOpen, setAddOpen] = useState(false);
   const [detail, setDetail] = useState<EventListItem | null>(null);
   const [showExternal, setShowExternal] = useState(true); // the one real filter: show/hide external
+  const [subtypes, setSubtypes] = useState<Set<string>>(new Set(EXTERNAL_SUBTYPE_TAGS)); // Industry/PE
+  const toggleSub = (tag: string) => setSubtypes((prev) => { const n = new Set(prev); n.has(tag) ? n.delete(tag) : n.add(tag); return n; });
   const [jump, setJump] = useState<{ date: string; nonce: number } | null>(null);
 
   const load = () => {
@@ -28,7 +31,11 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
   useEffect(() => { load(); }, []);
 
   const merged = [...events, ...external];
-  const shown = showExternal ? merged : events; // Future/In-Process/Past never filter — only External
+  // Future/In-Process/Past never filter — only External + its Industry/PE subtypes. Legacy externals
+  // with no Ext.* tag always show whenever External is on.
+  const shown = showExternal
+    ? merged.filter((e) => { if (!e.isExternal) return true; const t = externalTagOf(e.tags); return t ? subtypes.has(t) : true; })
+    : events;
   const onOpen = (id: string) => { const x = external.find((e) => e.id === id); if (x) setDetail(x); else onOpenEvent(id); };
 
   // Jump the calendar to a category's first event: soonest upcoming for future/in-process, most
@@ -73,6 +80,21 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
         >
           <span className="w-2 h-2 rounded-full bg-purple-500" /> External
         </button>
+        {showExternal && (["Industry", "PE"] as ExternalType[]).map((t) => {
+          const tag = EXTERNAL_TYPE_TAGS[t];
+          const on = subtypes.has(tag);
+          return (
+            <button
+              key={t}
+              onClick={() => toggleSub(tag)}
+              aria-pressed={on}
+              title={`Toggle ${t} external events`}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors ${on ? "border-purple-400 bg-purple-50 text-purple-800" : "border-border bg-white text-gray-400 hover:bg-gray-50"}`}
+            >
+              <span className={`w-2 h-2 rounded-full ${on ? "bg-purple-500" : "bg-purple-200"}`} /> {t}
+            </button>
+          );
+        })}
         <button onClick={() => setAddOpen(true)} title="Add external event" aria-label="Add external event" className="inline-flex items-center gap-1 rounded-full border border-border bg-white px-2 py-1 text-gray-600 hover:bg-gray-50 transition-colors">
           <span className="w-2 h-2 rounded-full bg-purple-500" /><Plus className="w-3 h-3" />
         </button>

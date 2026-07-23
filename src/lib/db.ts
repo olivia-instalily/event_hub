@@ -2056,6 +2056,7 @@ export async function listExternalConferences(): Promise<EventListItem[]> {
 export interface ExternalConferenceInput {
   name: string; startDate: string; endDate?: string | null;
   why?: string | null; quarter?: string | null; location?: string | null; infoUrl?: string | null;
+  tag: string; // taxonomy tag, e.g. "Ext. Industry" | "Ext. PE"
 }
 /** Create a lightweight external-conference instance — a MINIMAL event row (is_external + lightweight),
  *  NOT via createPlanningEvent, so no budget/deliverables/phases/post-mortem are seeded. Attendees are
@@ -2071,7 +2072,7 @@ export async function addExternalConference(input: ExternalConferenceInput): Pro
     is_external: true, lightweight: true, is_template: false, macro_stage: null,
     location: input.location?.trim() || null, why: input.why?.trim() || null,
     quarter: input.quarter?.trim() || null, info_url: input.infoUrl?.trim() || null,
-    tags: [],
+    tag: input.tag, tags: [input.tag],
   });
   if (error) throw error;
   // External conferences always have a date (required above) — auto-sync.

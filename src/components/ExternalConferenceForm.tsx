@@ -5,6 +5,7 @@ import { Button } from "@instalily/ui/button";
 import { parseTypedDate } from "./DateEdit";
 import { LocationInput } from "./LocationEdit";
 import { addExternalConference, addAttendee, linkAttendeeToEvent, listAllAttendees, type PersonView } from "../lib/db";
+import { EXTERNAL_TYPE_TAGS, type ExternalType } from "../lib/tags";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const isoOf = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -97,6 +98,7 @@ type Picked = { kind: "existing"; id: string; label: string } | { kind: "new"; n
 // events-page mechanism: tag an existing person (ideal) or add a new name/email.
 export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState("");
+  const [type, setType] = useState<ExternalType | null>(null);
   const [why, setWhy] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -132,11 +134,12 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
 
   const save = async () => {
     if (!name.trim()) { setErr("Name is required."); return; }
+    if (!type) { setErr("Pick a type — Industry or PE."); return; }
     if (!start) { setErr("Start date is required."); return; }
     if (badRange) { setErr("End date must be on or after the start date."); return; }
     setBusy(true); setErr(null);
     try {
-      const id = await addExternalConference({ name, startDate: start, endDate: end || null, why, quarter: effectiveQuarter || null, location, infoUrl });
+      const id = await addExternalConference({ name, startDate: start, endDate: end || null, why, quarter: effectiveQuarter || null, location, infoUrl, tag: EXTERNAL_TYPE_TAGS[type] });
       for (const p of picked) {
         try {
           if (p.kind === "existing") await linkAttendeeToEvent(id, p.id);
@@ -151,6 +154,21 @@ export function ExternalConferenceForm({ onClose, onCreated }: { onClose: () => 
   return (
     <Modal title="Add external event" onClose={onClose} maxWidth="max-w-lg">
       <div className="space-y-3 max-h-[65vh] overflow-y-auto pr-1 -mr-1">
+        <div>
+          <span className="text-[13px] text-gray-500">Type<span className="text-red-500">*</span></span>
+          <div className="mt-1 flex gap-2">
+            {(["Industry", "PE"] as ExternalType[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setType(t)}
+                className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${type === t ? "border-purple-500 bg-purple-50 text-purple-800" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="block"><span className="text-[13px] text-gray-500">Name<span className="text-red-500">*</span></span>
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Conference name" className={field} /></label>
 

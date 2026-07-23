@@ -56,10 +56,13 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 
 const TZ = Deno.env.get("GCAL_TIMEZONE") || "America/New_York";
 const PRIMARY = "primary";
-const COORD = () =>
-  Deno.env.get("GCAL_COORDINATION_CALENDAR_ID") ??
+// InstaLILY Events Coordination is INVITED as a guest on each event (not written as a second copy
+// onto its own calendar) — its group-calendar address auto-accepts, so the event lands there via
+// the invite. calendar@instalily.ai owns the single event on its own (primary) calendar.
+const EVENTS_GUEST = () =>
+  Deno.env.get("GCAL_EVENTS_GUEST_EMAIL") ??
   "c_fad28a2710da5efc5126158eae561ee3107d4afc395bbc595f051f0117a1d0fd@group.calendar.google.com";
-const CALENDARS = () => [PRIMARY, COORD()];
+const CALENDARS = () => [PRIMARY];
 const EVENT_COLOR_ID = "9";
 
 // ── OAuth ────────────────────────────────────────────────────────────────────
@@ -105,6 +108,9 @@ function buildBody(ev: any, appLink: string | null): Record<string, unknown> {
     location: ev.location ?? undefined,
     description: descParts.join("\n\n") || undefined,
     colorId: EVENT_COLOR_ID,
+    // Invite InstaLILY Events Coordination as a guest → the event shows on that calendar too,
+    // without creating a duplicate copy. calendar@instalily.ai remains the owner.
+    attendees: [{ email: EVENTS_GUEST() }],
   };
   if (ev.start_time) {
     const end = ev.end_time || ev.start_time;
@@ -122,7 +128,7 @@ function buildBody(ev: any, appLink: string | null): Record<string, unknown> {
 const GCAL_BASE = "https://www.googleapis.com/calendar/v3";
 
 async function gcalInsert(token: string, calId: string, body: Record<string, unknown>): Promise<any> {
-  const r = await fetch(`${GCAL_BASE}/calendars/${encodeURIComponent(calId)}/events`, {
+  const r = await fetch(`${GCAL_BASE}/calendars/${encodeURIComponent(calId)}/events?sendUpdates=none`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -131,7 +137,7 @@ async function gcalInsert(token: string, calId: string, body: Record<string, unk
 }
 
 async function gcalPatch(token: string, calId: string, gid: string, body: Record<string, unknown>): Promise<any> {
-  const r = await fetch(`${GCAL_BASE}/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(gid)}`, {
+  const r = await fetch(`${GCAL_BASE}/calendars/${encodeURIComponent(calId)}/events/${encodeURIComponent(gid)}?sendUpdates=none`, {
     method: "PATCH",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -274,7 +280,7 @@ Deno.serve(async (req) => {
     const ids: Record<string, string> = (ev as any).gcal_event_ids ?? {};
     // Fix 2: capture calendar ids once so coordId is provably the same key used in
     // gcal_match_pending, upsert loops, and write-back (no repeated env reads).
-    const cals = CALENDARS(); // cals[0] = primary, cals[1] = coordination
+    const cals = CALENDARS(); // [primary] — Events Coordination rides along as a guest (buildBody)
 
     // ── action: delete (before eligibility guard so any event can be un-synced) ──
     if (action === "delete") {
@@ -301,20 +307,13 @@ Deno.serve(async (req) => {
 
     // ── action: auto (first sync) — look for candidates before creating ───────
     if (action === "auto" && Object.keys(ids).length === 0) {
-      const [candP, candC] = await Promise.all([
-        findCandidate(token, cals[0], ev),
-        findCandidate(token, cals[1], ev),
-      ]);
-
-      if (candP !== null || candC !== null) {
-        const pending: Record<string, Candidate | null> = {
-          [cals[0]]: candP,
-          [cals[1]]: candC,
-        };
+      const candP = await findCandidate(token, PRIMARY, ev);
+      if (candP !== null) {
+        const pending: Record<string, Candidate | null> = { [PRIMARY]: candP };
         await sb.from("event").update({ gcal_match_pending: pending }).eq("id", eventId);
         return json({ ok: true, status: "needs_confirmation", candidates: pending });
       }
-      // No candidates found — fall through to create on both calendars below
+      // No candidate found — fall through to create below
     }
 
     // ── action: link — adopt pending candidates, create where none ────────────
