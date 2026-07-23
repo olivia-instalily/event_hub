@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Calendar, CalendarPlus, Loader2, Link2Off } from "lucide-react";
-import { syncEventToGoogleCalendar, deleteEventFromGoogleCalendar } from "../lib/db";
+import { syncEventToGoogleCalendar, deleteEventFromGoogleCalendar, resolveGcalMatch } from "../lib/db";
 
 // Google Calendar link control for the event title card. Auto-sync already pushes dated events to
 // the shared calendar; this shows the state and lets you manage the link:
@@ -9,11 +9,12 @@ import { syncEventToGoogleCalendar, deleteEventFromGoogleCalendar } from "../lib
 //   • unsynced → an "add to calendar" icon that (re)links.
 // Hidden when the event has no date (Google Calendar needs one). `onChange` should refetch the plan
 // so the icon reflects the new state.
-export function GcalLinkControl({ eventId, synced, htmlLink, hasDate, onChange }: {
+export function GcalLinkControl({ eventId, synced, htmlLink, hasDate, matchPending = null, onChange }: {
   eventId: string;
   synced: boolean;
   htmlLink: string | null;
   hasDate: boolean;
+  matchPending?: Record<string, { summary: string; reason?: string } | null> | null;
   onChange: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -34,6 +35,28 @@ export function GcalLinkControl({ eventId, synced, htmlLink, hasDate, onChange }
     catch (e: any) { setErr(e?.message ?? String(e)); }
     finally { setBusy(false); }
   };
+
+  const pendingReason = matchPending
+    ? Object.values(matchPending).find((c) => c && c.reason)?.reason ?? "a possible existing match was found"
+    : null;
+  const resolve = async (decision: "link" | "create") => {
+    setBusy(true); setErr(null);
+    try { await resolveGcalMatch(eventId, decision); onChange(); }
+    catch (e: any) { setErr(e?.message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+
+  if (!synced && matchPending) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[13px] text-gray-600">
+        <span title="Needs review before syncing" className="inline-flex"><Calendar className="w-5 h-5 text-red-500" /></span>
+        <span className="text-red-600">{pendingReason}.</span>
+        <button onClick={() => resolve("link")} disabled={busy} className="text-emerald-600 hover:text-emerald-700 font-medium disabled:opacity-50">{busy ? "…" : "Link"}</button>
+        <button onClick={() => resolve("create")} disabled={busy} className="text-gray-600 hover:text-gray-800 disabled:opacity-50">Create new</button>
+        {err && <span className="text-[12px] text-red-600">{err}</span>}
+      </span>
+    );
+  }
 
   if (confirming) {
     return (
