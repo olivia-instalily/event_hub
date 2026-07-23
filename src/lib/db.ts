@@ -1894,7 +1894,7 @@ export async function createLumaEvent(
 export async function syncEventToGoogleCalendar(
   eventId: string,
   action?: 'auto' | 'link' | 'create' | 'delete',
-): Promise<{ ok?: boolean; status?: string; gcalEventId?: string; calendarId?: string; htmlLink?: string | null; candidates?: unknown[]; gcalEventIds?: Record<string, string>; errors?: unknown[] }> {
+): Promise<{ ok?: boolean; status?: 'synced' | 'needs_confirmation' | 'partial'; gcalEventId?: string; calendarId?: string; htmlLink?: string | null; candidates?: Record<string, { gcalEventId?: string; summary: string; start: string; htmlLink: string; reason?: string } | null>; gcalEventIds?: Record<string, string>; errors?: unknown[] }> {
   const body: Record<string, unknown> = { eventId };
   if (action !== undefined) body.action = action;
   const appOrigin = typeof location !== 'undefined' ? location.origin : undefined;
@@ -2624,7 +2624,7 @@ export interface EventPlanning {
   gcalEventId: string | null;
   gcalHtmlLink: string | null;
   gcalEventIds: Record<string, string>;
-  gcalMatchPending: Record<string, { gcalEventId: string; summary: string; start: string; htmlLink: string } | null> | null;
+  gcalMatchPending: Record<string, { gcalEventId: string; summary: string; start: string; htmlLink: string; reason?: string } | null> | null;
   linearProjectId: string | null;
   linearProjectUrl: string | null;
   coverImageUrl: string | null;
