@@ -576,10 +576,12 @@ export async function listProfiles(): Promise<Profile[]> {
   if (error) throw error;
   return (data ?? []).map((p: any) => ({ id: p.id, name: p.name, email: p.email ?? null, color: p.color ?? null, createdAt: p.created_at, isAdmin: p.is_admin ?? false }));
 }
-export async function createProfile(name: string, email: string | null, color: string): Promise<Profile> {
+export async function createProfile(name: string, email: string | null, color: string, department: CrewRole = 'none'): Promise<Profile> {
   const id = newId('prof');
   const { error } = await supabase.from('profile').insert({ id, name, email, color });
   if (error) throw error;
+  // Same human on the internal person list — link by email + set their department (create if new).
+  try { await ensureInternalPerson(name, email, department, { align: true }); } catch { /* non-fatal */ }
   return { id, name, email, color, createdAt: new Date().toISOString(), isAdmin: false };
 }
 export async function updateProfile(id: string, fields: { name?: string; email?: string | null }): Promise<void> {
@@ -1077,6 +1079,50 @@ export async function createInternalPerson(fields: { name: string; email?: strin
     labelIds: internalId ? [internalId] : [], isInternal: true, crewRole, eventsCount: 0, eventDates: [], eventCities: [],
     applicationStatus: null, greenhouseLastSynced: null,
   };
+}
+
+// A profile and an internal person with the same email are the SAME human. Ensure the person exists on
+// the internal list: match by email → mark internal (+ optionally set their department); else create.
+// `align` sets the department from the profile (used at profile creation); backfill leaves it alone.
+// Escape LIKE/ILIKE wildcards so an email is matched literally (case-insensitively), not as a pattern.
+const emailLike = (e: string) => e.replace(/([\\%_])/g, '\\$1');
+export async function ensureInternalPerson(name: string, email: string | null, crewRole: CrewRole = 'none', opts: { align?: boolean } = {}): Promise<void> {
+  const e = email?.trim() || null;
+  if (e) {
+    const { data } = await supabase.from('attendee').select('id, is_internal, crew_role').ilike('email', emailLike(e)).limit(1);
+    const existing = (data ?? [])[0] as any;
+    if (existing) {
+      const patch: Record<string, unknown> = {};
+      if (!existing.is_internal) patch.is_internal = true;
+      if (opts.align && crewRole && crewRole !== 'none' && existing.crew_role !== crewRole) patch.crew_role = crewRole;
+      if (Object.keys(patch).length) await supabase.from('attendee').update(patch).eq('id', existing.id);
+      await labelInternalIfInstalily(existing.id, e);
+      return;
+    }
+  }
+  await createInternalPerson({ name, email: e, crewRole });
+}
+
+// One-time reconciliation: every EventHub profile should also be on the internal person list (linked by
+// email). Creates the missing ones ('none' department) and marks email-matched attendees internal.
+export async function backfillProfilesToPeople(): Promise<{ created: number; linked: number }> {
+  const profiles = await listProfiles();
+  let created = 0, linked = 0;
+  for (const p of profiles) {
+    const e = p.email?.trim() || null;
+    if (e) {
+      const { data } = await supabase.from('attendee').select('id, is_internal').ilike('email', emailLike(e)).limit(1);
+      const existing = (data ?? [])[0] as any;
+      if (existing) {
+        if (!existing.is_internal) { await supabase.from('attendee').update({ is_internal: true }).eq('id', existing.id); await labelInternalIfInstalily(existing.id, e); }
+        linked++;
+        continue;
+      }
+    }
+    await createInternalPerson({ name: p.name, email: e, crewRole: 'none' });
+    created++;
+  }
+  return { created, linked };
 }
 
 /** Link an EXISTING person (attendee) to an event — the same attendee_event linkage addAttendee uses,

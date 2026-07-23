@@ -84,7 +84,7 @@ function SeriesRow({ s, onOpen }: { s: SeriesListItem; onOpen: (id: string) => v
   const shown = s.events.slice(0, MAX_FAN);
   const extra = s.events.length - shown.length;
   const slots = shown.length + (extra > 0 ? 1 : 0);
-  const restX = 34; // overlap offset at rest
+  const restX = 64; // overlap offset at rest — wider so more of each card shows and hover expands less
   const width = hover ? (slots - 1) * (CARD_W + 12) + CARD_W : (slots - 1) * restX + CARD_W;
 
   return (
@@ -98,7 +98,10 @@ function SeriesRow({ s, onOpen }: { s: SeriesListItem; onOpen: (id: string) => v
         <span className="font-medium">{s.name}</span>
         <span className="text-[13px] text-gray-500 capitalize">{s.drive} · {s.memberCount} event{s.memberCount === 1 ? "" : "s"}</span>
       </div>
-      <div className="relative h-[152px] overflow-hidden transition-[width] duration-300" style={{ width, maxWidth: "100%" }}>
+      {/* Scroll viewport: when the fan is wider than the row (many events, or spread on hover), scroll
+          horizontally to see them all instead of clipping at the edge. */}
+      <div className="overflow-x-auto overflow-y-hidden -mx-1 px-1">
+      <div className="relative h-[152px] transition-[width] duration-300" style={{ width }}>
         {shown.map((e, i) => {
           const x = hover ? i * (CARD_W + 12) : i * restX;
           return (
@@ -114,6 +117,7 @@ function SeriesRow({ s, onOpen }: { s: SeriesListItem; onOpen: (id: string) => v
             +{extra} more
           </div>
         )}
+      </div>
       </div>
     </div>
   );

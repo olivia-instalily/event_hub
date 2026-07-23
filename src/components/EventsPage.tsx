@@ -1878,8 +1878,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // operated events only. Templates and External are separate exclusive views (their own buttons).
   const [selectedStatuses, setSelectedStatuses] = useState<Set<EventStatus>>(() => new Set(['future', 'in-process', 'past'] as EventStatus[]));
   const [templatesView, setTemplatesView] = useState(false);
-  // External conferences show ALONGSIDE operated events by default. Clicking the External button flips
-  // to "only external" (exclusive) and jumps the calendar to the closest external event.
+  // External is its OWN exclusive view: hidden from the default list, shown only when the External
+  // button is on. Toggling it on jumps the calendar to the closest external event.
   const [externalOnly, setExternalOnly] = useState(false);
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const [ownerFilter, setOwnerFilter] = useState<string>('all');
@@ -2008,14 +2008,12 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
   // Upcoming even if its stored status still says future/in-process.
   const sectionOf = (e: EventListItem): 'upcoming' | 'past' => effectiveStatus(e) === 'past' ? 'past' : 'upcoming';
 
-  // Templates = exclusive view. Default: operated events + external (both), by effective status.
-  // "External only" (button clicked) = just external.
+  // Three exclusive views: Templates, External, and the default (internal/operated events only).
+  // External is its OWN thing — external conferences never mix into the default list; they show only
+  // when the External button is on. Default = operated (non-template, non-external) events.
   const base = templatesView ? events.filter(e => e.isTemplate)
     : externalOnly ? externalEvents.filter(e => selectedStatuses.has(effectiveStatus(e)))
-    : [
-        ...events.filter(e => !e.isTemplate && selectedStatuses.has(effectiveStatus(e))),
-        ...externalEvents.filter(e => selectedStatuses.has(effectiveStatus(e))),
-      ];
+    : events.filter(e => !e.isTemplate && selectedStatuses.has(effectiveStatus(e)));
   const filteredEvents = base.filter(event => {
     if (locationFilter !== 'all' && event.location !== locationFilter) return false;
     if (ownerFilter !== 'all' && !event.owners.some(o => o.name === ownerFilter)) return false;
@@ -2116,8 +2114,8 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
               </button>
             );
           })}
-          {/* External conferences show alongside by default. Click → filter the list to only external
-              events (in place — stays on the current view). Purple fill signals the active state. */}
+          {/* External is exclusive: the default list is internal/operated events only. Click → show
+              ONLY external events (in place — stays on the current view). Purple fill = active. */}
           <button
             onClick={() => { setTemplatesView(false); setExternalOnly((v) => !v); }}
             aria-pressed={!templatesView && externalOnly}

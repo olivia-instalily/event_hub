@@ -3,6 +3,7 @@ import { ChevronDown, Plus, Check, Trash2, X, Pencil, HelpCircle, LogOut, Shield
 import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
 import { useAuth } from "../lib/auth";
 import { createProfile, updateProfile, deleteProfile, type Profile } from "../lib/db";
+import { CREW_ROLES, ROLE_LABEL, type CrewRole } from "../lib/campaign";
 
 function Avatar({ p }: { p: Profile | null }) {
   const { cls, style } = avatarColor(p?.color ?? null, p?.name ?? null);
@@ -38,6 +39,7 @@ export function ProfileSwitcher({ onOpenTutorial, onOpenAdmin }: { onOpenTutoria
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [dept, setDept] = useState<CrewRole>("none"); // department, linked to the person list by email
   const [editId, setEditId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
 
@@ -45,10 +47,10 @@ export function ProfileSwitcher({ onOpenTutorial, onOpenAdmin }: { onOpenTutoria
     const n = name.trim();
     if (!n) return;
     const color = PROFILE_COLORS[profiles.length % PROFILE_COLORS.length];
-    const p = await createProfile(n, email.trim() || null, color);
+    const p = await createProfile(n, email.trim() || null, color, dept);
     await refresh();
     setCurrent(p.id);
-    setName(""); setEmail(""); setAdding(false);
+    setName(""); setEmail(""); setDept("none"); setAdding(false);
   };
   const saveEdit = async (id: string) => {
     const n = editName.trim();
@@ -133,10 +135,15 @@ export function ProfileSwitcher({ onOpenTutorial, onOpenAdmin }: { onOpenTutoria
               {adding ? (
                 <div className="p-1 space-y-1">
                   <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                  <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Email (optional)" className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                  <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Email (links you to the person list)" className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+                  <label className="block text-[12px] text-gray-500">Department
+                    <select value={dept} onChange={(e) => setDept(e.target.value as CrewRole)} className="mt-0.5 w-full px-2 py-1 border border-gray-300 rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-300">
+                      {CREW_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+                    </select>
+                  </label>
                   <div className="flex gap-2">
                     <button onClick={add} disabled={!name.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add</button>
-                    <button onClick={() => { setAdding(false); setName(""); setEmail(""); }} className="px-2 py-1 text-sm text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><X className="w-3.5 h-3.5" /> Cancel</button>
+                    <button onClick={() => { setAdding(false); setName(""); setEmail(""); setDept("none"); }} className="px-2 py-1 text-sm text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><X className="w-3.5 h-3.5" /> Cancel</button>
                   </div>
                 </div>
               ) : (

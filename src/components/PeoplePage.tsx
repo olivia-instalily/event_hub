@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, Search, Users, LayoutGrid, List, X, ExternalLink, Download, User, Mic, Plus } from "lucide-react";
+import { ChevronLeft, Search, Users, LayoutGrid, List, X, ExternalLink, Download, User, Mic, Plus, Trash2 } from "lucide-react";
 import {
   listAllAttendees,
   listAttendeesForEvent,
@@ -532,6 +532,8 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
   const [labelFilter, setLabelFilter] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
   const [addInternalOpen, setAddInternalOpen] = useState(false);
+  const [confirmDeleteInternal, setConfirmDeleteInternal] = useState<PersonView | null>(null); // direct delete from the internal list
+  const deleteInternal = (p: PersonView) => { setPeople((prev) => prev.filter((x) => x.id !== p.id)); setConfirmDeleteInternal(null); deleteAttendee(p.id).catch(() => setReloadKey((k) => k + 1)); };
   const [internalOnly, setInternalOnly] = useState(false); // Internal tab (global view)
   const [newLabelOpen, setNewLabelOpen] = useState(false);
 
@@ -881,6 +883,9 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
                   <MultiEventBadge count={p.eventsCount} colorClass={countColor(p)} />
                   {eventFilter && statusBadge(p.registrationStatus, p.checkedIn)}
                   {isAdmin && <GreenhouseBadge status={p.applicationStatus} />}
+                  {p.isInternal && internalOnly && (
+                    <button onClick={(e) => { e.stopPropagation(); setConfirmDeleteInternal(p); }} title="Delete from the internal list" aria-label="Delete from the internal list" className="text-gray-300 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                  )}
                 </div>
               </div>
 
@@ -948,6 +953,17 @@ export function PeoplePage({ eventFilter, onBack }: PeoplePageProps) {
       )}
       {addInternalOpen && (
         <AddInternalPersonModal onClose={() => setAddInternalOpen(false)} onAdded={onPersonAdded} />
+      )}
+
+      {confirmDeleteInternal && (
+        <ConfirmModal
+          title="Remove from team"
+          message={`Permanently delete ${displayName(confirmDeleteInternal)} from the internal list? This removes them and all their event links. This can't be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => deleteInternal(confirmDeleteInternal)}
+          onClose={() => setConfirmDeleteInternal(null)}
+        />
       )}
       {newLabelOpen && (
         <PromptModal title="New label" label="Label name" placeholder="e.g. VIPs" submitLabel="Create" onClose={() => setNewLabelOpen(false)} onSubmit={(v) => void createNewLabel(v)} />

@@ -191,26 +191,40 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
           </section>
         )}
 
-        {/* Waves + pending events editor */}
+        {/* Waves + events editor */}
         {view === "plan" && <>
-        {/* Sticky wave nav — always visible; click a wave to jump to its section. */}
-        {campaign.waves.length > 1 && (
-          <div className="sticky top-0 z-30 -mx-1 mb-2 flex flex-wrap gap-1.5 border-b border-border bg-white px-1 py-2 shadow-sm">
+        {/* Top bar — wave nav chips + Add wave. Always visible in the plan view (even with 0 waves),
+            so waves are created here and each chip jumps to its section. */}
+        <div className="sticky top-0 z-30 -mx-1 mb-2 flex flex-wrap items-center gap-1.5 border-b border-border bg-white px-1 py-2 shadow-sm">
+          {campaign.waves.map((w, wi) => {
+            const wc = waveColor(wi);
+            const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+            return (
+              <button key={w.id} onClick={() => document.getElementById(`wave-${w.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-white px-2.5 py-1 text-[12px] hover:bg-gray-50 transition-colors">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${wc.dot}`} />
+                <span className="font-medium text-gray-800">{w.name || "Wave"}</span>
+                {w.start && <span className="text-gray-400">{fmt(w.start)}{w.end && w.end !== w.start ? `–${fmt(w.end)}` : ""}</span>}
+              </button>
+            );
+          })}
+          {adding ? (
+            <span className="inline-flex items-center gap-1">
+              <input autoFocus value={wName} onChange={(e) => setWName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWave(); else if (e.key === "Escape") { setAdding(false); setWName(""); } }} placeholder="Wave name" className="w-32 px-2.5 py-1 border border-gray-300 rounded-full text-[12px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
+              <button onClick={addWave} disabled={!wName.trim()} className="rounded-full bg-gray-900 text-white px-2.5 py-1 text-[12px] disabled:opacity-50">Add</button>
+              <button onClick={() => { setAdding(false); setWName(""); }} className="text-gray-400 hover:text-gray-700" aria-label="Cancel"><X className="w-3.5 h-3.5" /></button>
+            </span>
+          ) : (
+            <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 rounded-full border border-dashed border-gray-300 px-2.5 py-1 text-[12px] text-gray-500 hover:text-gray-900 hover:border-gray-400 transition-colors"><Plus className="w-3.5 h-3.5" /> Add wave</button>
+          )}
+        </div>
+
+        <div className="flex flex-col md:flex-row gap-6 items-start">
+          <div className="flex-1 min-w-0 space-y-6">
+            {campaign.waves.length === 0 && (
+              <p className="text-[13px] text-gray-400 py-8 text-center border border-dashed border-gray-200 rounded-xl">No waves yet — add one on the bar above, then drag events in from the Events bank.</p>
+            )}
             {campaign.waves.map((w, wi) => {
-              const wc = waveColor(wi);
-              const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
-              return (
-                <button key={w.id} onClick={() => document.getElementById(`wave-${w.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-white px-2.5 py-1 text-[12px] hover:bg-gray-50 transition-colors">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${wc.dot}`} />
-                  <span className="font-medium text-gray-800">{w.name || "Wave"}</span>
-                  {w.start && <span className="text-gray-400">{fmt(w.start)}{w.end && w.end !== w.start ? `–${fmt(w.end)}` : ""}</span>}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {campaign.waves.map((w, wi) => {
           const wc = waveColor(wi);
           // Events assigned to this wave whose date falls outside the wave's own date range (both set).
           const outOfRange = (w.start && w.end)
@@ -256,18 +270,11 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
               <div className="flex-1 min-w-0">
                 <DropZone id={w.id} empty={w.eventIds.length === 0}>
                   {w.eventIds.length === 0
-                    ? <p className="text-[13px] text-gray-400 py-1.5">No events yet — drop a brief, drag one here, or use “Add event”.</p>
+                    ? <p className="text-[13px] text-gray-400 py-1.5">No events yet — drag one in from the Events bank, or drop a brief here.</p>
                     : w.eventIds.map((id) => eventsById[id] && (
                         <EventChip key={id} event={eventsById[id]} anchor={campaign.anchorEventIds.includes(id)} tentative={campaign.tentativeEventIds.includes(id)} inWave waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onToggleTentative={toggleTentative} onUnassign={unassign} onAssign={assignEvent} />
                       ))}
                 </DropZone>
-                <div className="mt-2">
-                  {pickerFor === w.id ? (
-                    <EventPicker candidates={candidates} onPick={(id) => void addToSeries(id, w.id)} onCancel={() => setPickerFor(null)} />
-                  ) : (
-                    <button onClick={() => setPickerFor(w.id)} className="inline-flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-900"><Plus className="w-3.5 h-3.5" /> Add event</button>
-                  )}
-                </div>
               </div>
               {/* Logistics / notes for this wave's days — on the right. Added on the visualization. */}
               {waveLogs.length > 0 && (
@@ -291,34 +298,29 @@ export function SeriesPlan({ seriesId, campaign, events, save, onOpenEvent, relo
           </section>
           );
         })}
-
-        {adding ? (
-          <div className="flex items-center gap-2">
-            <input autoFocus value={wName} onChange={(e) => setWName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWave(); }} placeholder="Wave name (e.g. Wave 1)" className="px-3 py-2 border border-border rounded-lg text-sm" />
-            <button onClick={addWave} disabled={!wName.trim()} className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm disabled:opacity-50">Add</button>
-            <button onClick={() => setAdding(false)} className="text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
           </div>
-        ) : (
-          <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"><Plus className="w-4 h-4" /> Add wave</button>
-        )}
 
-        <section>
-          <h3 className="text-[15px] font-medium text-gray-700 mb-2">Pending events <span className="text-gray-400 font-normal">· not yet in a wave</span></h3>
-          <DropZone id="pending" empty={pending.length === 0}>
-            {pending.length === 0
-              ? <p className="text-[13px] text-gray-400 px-1 py-1.5">All member events are assigned.{events.length === 0 ? " Add one below." : " Drag one here to unassign it."}</p>
-              : pending.map((e) => (
-                  <EventChip key={e.id} event={e} anchor={campaign.anchorEventIds.includes(e.id)} tentative={campaign.tentativeEventIds.includes(e.id)} inWave={false} waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onToggleTentative={toggleTentative} onUnassign={unassign} onAssign={assignEvent} onRemove={(id) => void removeFromSeries(id)} />
-                ))}
-          </DropZone>
-          <div className="mt-3">
-            {pickerFor === "pending" ? (
-              <EventPicker candidates={candidates} onPick={(id) => void addToSeries(id)} onCancel={() => setPickerFor(null)} />
-            ) : (
-              <button onClick={() => setPickerFor("pending")} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"><Plus className="w-4 h-4" /> Add event to series</button>
-            )}
-          </div>
-        </section>
+          {/* Events bank — series events not yet in a wave. Drag one onto a wave (like the People
+              tab's person bank). "Add event to series" pulls an existing event in here. */}
+          <aside className="w-full md:w-72 shrink-0 rounded-xl border border-border p-4 md:sticky md:top-16">
+            <p className="text-[13px] font-medium text-gray-700">Events bank</p>
+            <p className="text-[12px] text-gray-400 mb-3">Series events not yet in a wave. Drag one onto a wave.</p>
+            <DropZone id="pending" empty={pending.length === 0}>
+              {pending.length === 0
+                ? <p className="text-[13px] text-gray-400 px-1 py-1.5">{events.length === 0 ? "No events yet — add one below." : "All events are in a wave. Drag one here to pull it out."}</p>
+                : pending.map((e) => (
+                    <EventChip key={e.id} event={e} anchor={campaign.anchorEventIds.includes(e.id)} tentative={campaign.tentativeEventIds.includes(e.id)} inWave={false} waves={campaign.waves} onOpen={onOpenEvent} onToggleAnchor={toggleAnchor} onToggleTentative={toggleTentative} onUnassign={unassign} onAssign={assignEvent} onRemove={(id) => void removeFromSeries(id)} />
+                  ))}
+            </DropZone>
+            <div className="mt-3">
+              {pickerFor === "pending" ? (
+                <EventPicker candidates={candidates} onPick={(id) => void addToSeries(id)} onCancel={() => setPickerFor(null)} />
+              ) : (
+                <button onClick={() => setPickerFor("pending")} className="inline-flex items-center gap-1 text-[13px] text-gray-500 hover:text-gray-900"><Plus className="w-3.5 h-3.5" /> Add event to series</button>
+              )}
+            </div>
+          </aside>
+        </div>
         </>}
       </div>
 

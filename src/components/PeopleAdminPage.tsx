@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Shield, ShieldCheck, Pencil, Trash2, Search, Check, X, Lock } from "lucide-react";
 import { useProfile, initials, PROFILE_COLORS } from "../lib/profile";
-import { listProfiles, listEvents, updateProfile, deleteProfile, setProfileAdmin, type Profile } from "../lib/db";
+import { listProfiles, listEvents, updateProfile, deleteProfile, setProfileAdmin, backfillProfilesToPeople, type Profile } from "../lib/db";
 import { ConfirmModal } from "./Modal";
 
 // Admin-only view of everyone with a profile on the platform (SSO auto-creates a profile on first
@@ -31,6 +31,15 @@ export function PeopleAdminPage() {
   const [editName, setEditName] = useState("");
   const [confirmDel, setConfirmDel] = useState<Profile | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  // One-time reconciliation: make sure every profile is also on the internal person list (by email).
+  const syncToPeople = async () => {
+    setSyncing(true); setSyncMsg(null);
+    try { const r = await backfillProfilesToPeople(); setSyncMsg(`Done — ${r.created} added to the person list, ${r.linked} already linked.`); }
+    catch (e: any) { setSyncMsg(`Sync failed: ${e?.message ?? String(e)}`); }
+    finally { setSyncing(false); }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -91,9 +100,15 @@ export function PeopleAdminPage() {
       </div>
       <p className="text-sm text-gray-500 mb-6">Everyone with a profile — created automatically when they first sign in. Rename, grant admin, or remove an account.</p>
 
-      <div className="relative mb-4 max-w-sm">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or email…" className="w-full rounded-lg border border-border pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="relative max-w-sm flex-1 min-w-[16rem]">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or email…" className="w-full rounded-lg border border-border pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+        </div>
+        <button onClick={() => void syncToPeople()} disabled={syncing} className="shrink-0 rounded-lg border border-border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50" title="Ensure every profile is on the internal person list (linked by email)">
+          {syncing ? "Syncing…" : "Sync profiles → person list"}
+        </button>
+        {syncMsg && <span className="text-[13px] text-gray-500">{syncMsg}</span>}
       </div>
 
       {err && <p className="text-sm text-red-600 mb-3">{err}</p>}
