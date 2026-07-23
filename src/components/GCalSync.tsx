@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CalendarPlus, Check, Loader2, ExternalLink, Activity } from "lucide-react";
 import { Button } from "@instalily/ui/button";
-import { syncEventToGoogleCalendar, syncEventToLinear } from "../lib/db";
+import { syncEventToGoogleCalendar, syncEventToLinear, resolveGcalMatch } from "../lib/db";
 
 // Shared control for hooking an event up to our external tools. Two uses:
 //
@@ -26,6 +26,7 @@ export function GCalSync({
   linearSynced = false,
   linearProjectUrl = null,
   onLinearSynced,
+  matchPending = null,
 }: {
   eventId: string;
   synced: boolean;            // already on the calendar (gcalEventId present)
@@ -36,6 +37,7 @@ export function GCalSync({
   linearSynced?: boolean;     // already mirrored to Linear (linear_project_id present)
   linearProjectUrl?: string | null; // deep link to the Linear project, if known
   onLinearSynced?: () => void;
+  matchPending?: Record<string, { summary: string; reason?: string } | null> | null;
 }) {
   const [done, setDone] = useState(synced);
   const [link, setLink] = useState<string | null>(htmlLink);
@@ -43,6 +45,8 @@ export function GCalSync({
   const [err, setErr] = useState<string | null>(null);
   // True only when this component performed the sync (drives the confirmation message).
   const [justSynced, setJustSynced] = useState(false);
+  const [pending, setPending] = useState<boolean>(!!matchPending);
+  const pendingReason = matchPending ? (Object.values(matchPending).find((c) => c && c.reason)?.reason ?? "a possible existing match was found") : "a possible existing match was found";
 
   // Linear line state (action variant only).
   const [linDone, setLinDone] = useState(linearSynced);
@@ -53,19 +57,21 @@ export function GCalSync({
   const [linJustSynced, setLinJustSynced] = useState(false); // synced in THIS session → show a brief confirmation
 
   const add = async () => {
-    setBusy(true);
-    setErr(null);
+    setBusy(true); setErr(null);
     try {
       const res = await syncEventToGoogleCalendar(eventId);
-      setLink(res.htmlLink ?? null);
-      setDone(true);
-      setJustSynced(true);
-      onSynced?.();
-    } catch (e: any) {
-      setErr(e?.message ?? String(e));
-    } finally {
-      setBusy(false);
-    }
+      if (res.status === "needs_confirmation") { setPending(true); onSynced?.(); return; }
+      setLink(res.htmlLink ?? null); setDone(true); setJustSynced(true); onSynced?.();
+    } catch (e: any) { setErr(e?.message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+  const resolve = async (decision: "link" | "create") => {
+    setBusy(true); setErr(null);
+    try {
+      await resolveGcalMatch(eventId, decision);
+      if (decision === "create" || decision === "link") { setPending(false); setDone(true); setJustSynced(true); onSynced?.(); }
+    } catch (e: any) { setErr(e?.message ?? String(e)); }
+    finally { setBusy(false); }
   };
 
   const addLinear = async () => {
@@ -101,6 +107,19 @@ export function GCalSync({
         </span>
       );
     }
+    if (pending && !done) {
+      return (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-[13px]">
+            <CalendarPlus className="w-4 h-4 text-red-500" />
+            <span className="text-red-600">{pendingReason}.</span>
+            <button onClick={() => resolve("link")} disabled={busy} className="text-emerald-600 hover:text-emerald-700 font-medium disabled:opacity-50">Link</button>
+            <button onClick={() => resolve("create")} disabled={busy} className="text-gray-600 hover:text-gray-800 disabled:opacity-50">Create new</button>
+          </span>
+          {err && <span className="text-[13px] text-red-600">{err}</span>}
+        </div>
+      );
+    }
     return (
       <div className="flex items-center gap-2">
         <Button size="sm" variant="outline" onClick={add} disabled={busy}>
@@ -133,6 +152,22 @@ export function GCalSync({
                   View <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               )}
+            </div>
+          ) : pending ? (
+            <div className="flex items-center gap-3">
+              <CalendarPlus className="w-5 h-5 text-red-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[15px] font-medium text-red-700">Review possible match</p>
+                <p className="text-[13px] text-red-600">{pendingReason}.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => resolve("link")} disabled={busy}>
+                  Link
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => resolve("create")} disabled={busy}>
+                  Create new
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-3">
