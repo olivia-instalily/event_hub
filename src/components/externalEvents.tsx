@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, MapPin, ExternalLink, Users, X, Pencil } from "lucide-react";
+import { CalendarDays, MapPin, ExternalLink, Users, X, Pencil, Trash2 } from "lucide-react";
 import { Modal } from "./Modal";
 import { listAttendeesForEvent, type EventListItem, type PersonView, type EventStatus } from "../lib/db";
 
@@ -57,8 +57,8 @@ export function CategoryDots({ selected, onToggle, className = "" }: { selected:
   );
 }
 
-// Detail card for an external conference (we're attending it). View-only body + an Edit affordance.
-export function ExternalDetail({ item, onClose, onEdit }: { item: EventListItem; onClose: () => void; onEdit?: () => void }) {
+// Detail card for an external conference (we're attending it). View-only body + Edit / Delete affordances.
+export function ExternalDetail({ item, onClose, onEdit, onDelete }: { item: EventListItem; onClose: () => void; onEdit?: () => void; onDelete?: () => void }) {
   const [people, setPeople] = useState<PersonView[] | null>(null);
   useEffect(() => { listAttendeesForEvent(item.id).then(setPeople).catch(() => setPeople([])); }, [item.id]);
 
@@ -92,9 +92,12 @@ export function ExternalDetail({ item, onClose, onEdit }: { item: EventListItem;
           )}
         </div>
       </div>
-      <div className="flex justify-end gap-2 mt-5">
-        {onEdit && <button onClick={onEdit} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><Pencil className="w-4 h-4" /> Edit</button>}
-        <button onClick={onClose} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><X className="w-4 h-4" /> Close</button>
+      <div className="flex items-center gap-2 mt-5">
+        {onDelete && <button onClick={onDelete} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-red-300 text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Delete</button>}
+        <div className="ml-auto flex gap-2">
+          {onEdit && <button onClick={onEdit} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><Pencil className="w-4 h-4" /> Edit</button>}
+          <button onClick={onClose} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><X className="w-4 h-4" /> Close</button>
+        </div>
       </div>
     </Modal>
   );

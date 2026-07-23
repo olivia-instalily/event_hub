@@ -1,10 +1,34 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, Calendar, Plus } from "lucide-react";
-import { listEvents, listExternalConferences, type EventListItem } from "../lib/db";
+import { CalendarDays, Calendar, Plus, Pencil, Trash2, MapPin, X } from "lucide-react";
+import { listEvents, listExternalConferences, deleteEvent, type EventListItem } from "../lib/db";
 import { CalendarView } from "./EventsPage";
 import { ExternalConferenceForm } from "./ExternalConferenceForm";
 import { ExternalDetail, CAT_META, categoryOf, type CatKey } from "./externalEvents";
+import { Modal, ConfirmModal } from "./Modal";
 import { EXTERNAL_SUBTYPE_TAGS, EXTERNAL_TYPE_TAGS, externalTagOf, type ExternalType } from "../lib/tags";
+
+// Compact detail popup for an INTERNAL event clicked in the calendar — real edits happen on the
+// event page (Edit), plus a Delete affordance. External events use ExternalDetail instead.
+function InternalEventPeek({ item, onClose, onEdit, onDelete }: { item: EventListItem; onClose: () => void; onEdit: () => void; onDelete: () => void }) {
+  const fmt = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const range = item.date ? (item.endDate && item.endDate !== item.date ? `${fmt(item.date)} – ${fmt(item.endDate)}` : fmt(item.date)) : "No date";
+  return (
+    <Modal title={item.title} onClose={onClose} maxWidth="max-w-md">
+      <div className="space-y-3 text-sm text-gray-700">
+        {item.tags?.length > 0 && <div className="flex flex-wrap gap-1.5">{item.tags.map((t) => <span key={t} className="text-[12px] rounded-full bg-gray-100 px-2 py-0.5 text-gray-600">{t}</span>)}</div>}
+        <div className="flex items-center gap-2"><CalendarDays className="w-4 h-4 text-gray-400 shrink-0" /> {range}</div>
+        {item.location && <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-gray-400 shrink-0" /> {item.location}</div>}
+      </div>
+      <div className="flex items-center gap-2 mt-5">
+        <button onClick={onDelete} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-red-300 text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Delete</button>
+        <div className="ml-auto flex gap-2">
+          <button onClick={onEdit} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-700"><Pencil className="w-4 h-4" /> Edit event</button>
+          <button onClick={onClose} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><X className="w-4 h-4" /> Close</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 // Clean, calendar-only view of everything on our radar: events we're running + external conferences
 // we're attending. Future/In-Process/Past act as a color key AND jump to that category's first event
@@ -16,6 +40,9 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [detail, setDetail] = useState<EventListItem | null>(null);
+  const [editingExternal, setEditingExternal] = useState<EventListItem | null>(null); // external → inline edit form
+  const [peek, setPeek] = useState<EventListItem | null>(null);                       // internal → detail popup
+  const [deleteTarget, setDeleteTarget] = useState<EventListItem | null>(null);
   const [showExternal, setShowExternal] = useState(true); // the one real filter: show/hide external
   const [subtypes, setSubtypes] = useState<Set<string>>(new Set(EXTERNAL_SUBTYPE_TAGS)); // Industry/PE
   const toggleSub = (tag: string) => setSubtypes((prev) => { const n = new Set(prev); n.has(tag) ? n.delete(tag) : n.add(tag); return n; });
@@ -36,7 +63,14 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
   const shown = showExternal
     ? merged.filter((e) => { if (!e.isExternal) return true; const t = externalTagOf(e.tags); return t ? subtypes.has(t) : true; })
     : events;
-  const onOpen = (id: string) => { const x = external.find((e) => e.id === id); if (x) setDetail(x); else onOpenEvent(id); };
+  // Click an event → external opens its detail; internal opens a peek popup (Edit → event page, Delete).
+  const onOpen = (id: string) => {
+    const x = external.find((e) => e.id === id);
+    if (x) { setDetail(x); return; }
+    const ev = events.find((e) => e.id === id);
+    if (ev) setPeek(ev);
+  };
+  const doDelete = async () => { const t = deleteTarget; if (!t) return; setDeleteTarget(null); try { await deleteEvent(t.id); } catch { /* ignore */ } load(); };
 
   // Jump the calendar to a category's first event: soonest upcoming for future/in-process, most
   // recent for past. Dated events only.
@@ -116,7 +150,33 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
       )}
 
       {addOpen && <ExternalConferenceForm onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); load(); }} />}
-      {detail && <ExternalDetail item={detail} onClose={() => setDetail(null)} />}
+      {editingExternal && <ExternalConferenceForm existing={editingExternal} onClose={() => setEditingExternal(null)} onCreated={() => { setEditingExternal(null); load(); }} />}
+      {detail && (
+        <ExternalDetail
+          item={detail}
+          onClose={() => setDetail(null)}
+          onEdit={() => { setEditingExternal(detail); setDetail(null); }}
+          onDelete={() => { setDeleteTarget(detail); setDetail(null); }}
+        />
+      )}
+      {peek && (
+        <InternalEventPeek
+          item={peek}
+          onClose={() => setPeek(null)}
+          onEdit={() => { const id = peek.id; setPeek(null); onOpenEvent(id); }}
+          onDelete={() => { setDeleteTarget(peek); setPeek(null); }}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmModal
+          title="Delete event?"
+          message={`Permanently delete “${deleteTarget.title}” and everything attached to it. This can’t be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => void doDelete()}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   );
 }
