@@ -3878,6 +3878,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, o
           synced={!!plan.gcalEventId}
           htmlLink={plan.gcalHtmlLink}
           gcalAvailable={!!plan.date}
+          matchPending={plan.gcalMatchPending}
           variant="action"
           onSynced={onApplied}
           linearSynced={!!plan.linearProjectId}
@@ -4420,12 +4421,12 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                       }}
                       placeholder="Date TBD"
                     />
-                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} onChange={() => setReload((x) => x + 1)} />
+                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                   </span>
                 ) : (
                   // Luma owns the date → read-only; green icon links to the GCal event when synced.
                   <>
-                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} onChange={() => setReload((x) => x + 1)} />
+                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                     <span>{plan.date ?? "Date TBD"}</span>
                   </>
                 )}

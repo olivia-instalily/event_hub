@@ -176,7 +176,7 @@ function EssentialsStep({ plan, eventId, date, setDate, onDone }: {
           <span className="text-[15px] text-gray-400 mt-1 block">Sets your deliverables’ due dates.</span>
           {date && (
             <div className="mt-2">
-              <GCalSync eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} variant="inline" />
+              <GCalSync eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} matchPending={plan.gcalMatchPending} variant="inline" />
             </div>
           )}
         </label>
