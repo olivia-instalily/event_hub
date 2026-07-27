@@ -62,6 +62,7 @@ export interface EventListItem {
   lumaName: string | null;
   gcalEventId: string | null;   // set ⇒ synced to Google Calendar
   gcalHtmlLink: string | null;  // deep link to the Google Calendar event
+  slackChannel: string | null;  // linked Slack channel id ⇒ :eventhub: pins route here
   coverImageUrl: string | null; // active/displayed cover
   lumaCoverUrl: string | null;
   customCoverUrl: string | null;
@@ -213,6 +214,7 @@ function toListItem(row: any): EventListItem {
     lumaName: row.luma_name ?? null,
     gcalEventId: row.gcal_event_id ?? null,
     gcalHtmlLink: row.gcal_html_link ?? null,
+    slackChannel: row.slack_channel ?? null,
     coverImageUrl: row.cover_image_url ?? null,
     lumaCoverUrl: row.luma_cover_url ?? null,
     customCoverUrl: row.custom_cover_url ?? null,
@@ -2009,6 +2011,22 @@ export async function listSlackChannels(): Promise<{ id: string; name: string }[
   }
 }
 
+/** Link an event to a Slack channel — either an existing one or a freshly-created private channel. */
+export async function linkSlackChannel(
+  eventId: string,
+  arg: { channelId: string } | { create: { name: string } },
+): Promise<{ id: string; name: string; skipped?: string[] }> {
+  const { data, error } = await supabase.functions.invoke('slack-link-channel', { body: { eventId, ...arg } });
+  if (error || (data as any)?.error) throw new Error((data as any)?.error ?? error?.message ?? 'link failed');
+  return data as { id: string; name: string; skipped?: string[] };
+}
+
+/** Clear an event's Slack channel link. */
+export async function unlinkSlackChannel(eventId: string): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('slack-link-channel', { body: { eventId, channelId: null } });
+  if (error || (data as any)?.error) throw new Error((data as any)?.error ?? error?.message ?? 'unlink failed');
+}
+
 // ── Tutorials (admin-editable) ───────────────────────────────────────────────
 // The whole tutorial structure lives as one JSON blob in app_setting.value (text). null = never
 // saved yet → the page falls back to its built-in default seed. `icon` is a lucide name (string),
@@ -2045,7 +2063,7 @@ export async function slackSend(channel: string, text: string): Promise<{ channe
 }
 
 const EVENT_LIST_SELECT =
-  'id, name, tag, tags, format, focus_override, location, office, event_date, end_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, is_external, quarter, why, info_url, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )';
+  'id, name, tag, tags, format, focus_override, location, office, event_date, end_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, is_external, quarter, why, info_url, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, slack_channel, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )';
 
 export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
