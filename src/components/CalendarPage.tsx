@@ -16,7 +16,12 @@ function InternalEventPeek({ item, onClose, onEdit, onDelete }: { item: EventLis
     <Modal title={item.title} onClose={onClose} maxWidth="max-w-md">
       <div className="space-y-3 text-sm text-gray-700">
         {item.tags?.length > 0 && <div className="flex flex-wrap gap-1.5">{item.tags.map((t) => <span key={t} className="text-[12px] rounded-full bg-gray-100 px-2 py-0.5 text-gray-600">{t}</span>)}</div>}
-        <div className="flex items-center gap-2"><CalendarDays className="w-4 h-4 text-gray-400 shrink-0" /> {range}</div>
+        <div className="flex items-center gap-2">
+          {item.gcalEventId && item.gcalHtmlLink
+            ? <a href={item.gcalHtmlLink} target="_blank" rel="noreferrer" title="View in Google Calendar" className="inline-flex shrink-0"><CalendarDays className="w-4 h-4 text-emerald-600 hover:text-emerald-700" /></a>
+            : <CalendarDays className="w-4 h-4 text-gray-400 shrink-0" />}
+          {range}
+        </div>
         {item.location && <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-gray-400 shrink-0" /> {item.location}</div>}
       </div>
       <div className="flex items-center gap-2 mt-5">
@@ -114,7 +119,7 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
         >
           <span className="w-2 h-2 rounded-full bg-purple-500" /> External
         </button>
-        {showExternal && (["Industry", "PE"] as ExternalType[]).map((t) => {
+        {showExternal && (["Industry", "PE", "Other"] as ExternalType[]).map((t) => {
           const tag = EXTERNAL_TYPE_TAGS[t];
           const on = subtypes.has(tag);
           return (

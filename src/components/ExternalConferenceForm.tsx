@@ -144,7 +144,7 @@ export function ExternalConferenceForm({ existing, onClose, onCreated }: { exist
 
   const save = async () => {
     if (!name.trim()) { setErr("Name is required."); return; }
-    if (!type) { setErr("Pick a type — Industry or PE."); return; }
+    if (!type) { setErr("Pick a type — Industry, PE, or Other."); return; }
     if (!start) { setErr("Start date is required."); return; }
     if (badRange) { setErr("End date must be on or after the start date."); return; }
     setBusy(true); setErr(null);
@@ -170,7 +170,7 @@ export function ExternalConferenceForm({ existing, onClose, onCreated }: { exist
         <div>
           <span className="text-[13px] text-gray-500">Type<span className="text-red-500">*</span></span>
           <div className="mt-1 flex gap-2">
-            {(["Industry", "PE"] as ExternalType[]).map((t) => (
+            {(["Industry", "PE", "Other"] as ExternalType[]).map((t) => (
               <button
                 key={t}
                 type="button"

@@ -9,7 +9,7 @@ export const TAG_CATEGORIES: TagCategory[] = [
   { name: 'Hosted', tags: ['Client summit', 'Brand & community event', 'Co-hosted partner event', 'Campus'] },
   { name: 'Sponsorship', tags: ['Sponsorship'] },
   { name: 'Internal', tags: ['Internal team social', 'Company milestone'] },
-  { name: 'External', tags: ['Ext. Industry', 'Ext. PE'] },
+  { name: 'External', tags: ['Ext. Industry', 'Ext. PE', 'Ext. Other'] },
 ];
 export const EVENT_TAGS = TAG_CATEGORIES.flatMap((c) => c.tags);
 export type EventTag = string;
@@ -44,7 +44,7 @@ const PRESET: Record<string, number> = {
   // Internal → rose
   'Internal team social': 6, 'Company milestone': 6,
   // External → purple
-  'Ext. Industry': 1, 'Ext. PE': 1,
+  'Ext. Industry': 1, 'Ext. PE': 1, 'Ext. Other': 1,
 };
 
 function hueFor(tag: string | null | undefined): Hue {
@@ -77,7 +77,7 @@ const BADGE_PRESET: Record<string, BadgeVariant> = {
   'Client summit': 'green', 'Brand & community event': 'green', 'Co-hosted partner event': 'green', Campus: 'green',
   Sponsorship: 'yellow',
   'Internal team social': 'red', 'Company milestone': 'red',
-  'Ext. Industry': 'purple', 'Ext. PE': 'purple',
+  'Ext. Industry': 'purple', 'Ext. PE': 'purple', 'Ext. Other': 'purple',
 };
 export function tagBadgeVariant(tag: string | null | undefined): BadgeVariant {
   if (!tag) return 'gray';
@@ -88,10 +88,11 @@ export function tagBadgeVariant(tag: string | null | undefined): BadgeVariant {
 }
 
 // External-event types shown as pills in the create/attending flow, each mapped to its taxonomy tag.
-export type ExternalType = 'Industry' | 'PE';
+export type ExternalType = 'Industry' | 'PE' | 'Other';
 export const EXTERNAL_TYPE_TAGS: Record<ExternalType, string> = {
   Industry: 'Ext. Industry',
   PE: 'Ext. PE',
+  Other: 'Ext. Other',
 };
 export const EXTERNAL_SUBTYPE_TAGS: string[] = Object.values(EXTERNAL_TYPE_TAGS);
 // The external subtype tag on an event's tag list, or null (legacy/untyped external).
