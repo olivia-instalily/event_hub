@@ -5,6 +5,7 @@ import { EventDetailPage } from "./EventDetailPage";
 import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
 import { ExternalDetail, effectiveStatus } from "./externalEvents";
 import { looksLikeBackfill } from "../lib/backfill";
+import { layoutMonth } from "../lib/calendarLayout";
 import { defaultPhases } from "../lib/eventPhases";
 import { DateEdit } from "./DateEdit";
 import { TagStack } from "./TagStack";
@@ -512,11 +513,14 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
   }, [jump?.nonce]);
   const todayIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
-  const byDay = useMemo(() => {
-    const map = new Map<string, EventListItem[]>();
-    for (const e of events) { if (!e.date) continue; const arr = map.get(e.date); if (arr) arr.push(e); else map.set(e.date, [e]); }
-    return map;
-  }, [events]);
+  const weeks = useMemo(() => layoutMonth(events, cursor.y, cursor.m), [events, cursor.y, cursor.m]);
+
+  // Whole-bar background + text color by category (mirrors dotColor's rule).
+  const barColor = (e: EventListItem) => {
+    if (e.isExternal) return "bg-purple-500 text-white";
+    const s = effectiveStatus(e);
+    return s === "past" ? "bg-gray-400 text-white" : s === "in-process" ? "bg-amber-500 text-white" : "bg-blue-500 text-white";
+  };
   // Templates have no date by design — they're reusable Event Types, not calendar instances — so they
   // must never surface in the "No date" list. Only real undated events belong there.
   const undated = events.filter((e) => !e.date && !e.isTemplate);
@@ -526,18 +530,17 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setPreview({ e, top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 288) });
   };
-  const dotColor = (e: EventListItem) => { if (e.isExternal) return "bg-purple-500"; const s = effectiveStatus(e); return s === "past" ? "bg-gray-400" : s === "in-process" ? "bg-amber-500" : "bg-blue-500"; };
-
   const first = new Date(cursor.y, cursor.m, 1);
   const startDow = first.getDay();
   const daysInMonth = new Date(cursor.y, cursor.m + 1, 0).getDate();
-  const cells: (string | null)[] = [];
-  for (let i = 0; i < startDow; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(`${cursor.y}-${pad(cursor.m + 1)}-${pad(d)}`);
-  while (cells.length % 7) cells.push(null);
 
   const shift = (delta: number) => setCursor((c) => { const d = new Date(c.y, c.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
   const monthLabel = first.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  // Layout tuning (starting points — refined live).
+  const NUM_H = 20;   // px reserved at top of each week row for date numbers
+  const LANE_H = 20;  // px per lane
+  const BAR_H = 16;   // resting bar height (slim, line-like)
 
   return (
     <div>
@@ -549,27 +552,47 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
           <button onClick={() => shift(1)} className="p-1.5 rounded-lg border border-border hover:bg-gray-50" aria-label="Next month"><ChevronRight className="w-4 h-4" /></button>
         </div>
       </div>
-      <div className="grid grid-cols-7 gap-px bg-border rounded-xl overflow-hidden border border-border">
-        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-          <div key={d} className="bg-gray-50 text-[11px] text-gray-500 text-center py-1.5">{d}</div>
-        ))}
-        {cells.map((iso, i) => (
-          <div key={i} className={`bg-white min-h-[104px] p-1.5 ${iso === todayIso ? "ring-2 ring-inset ring-gray-900/15" : ""}`}>
-            {iso && <div className={`text-[12px] mb-1 ${iso === todayIso ? "font-semibold text-gray-900" : "text-gray-400"}`}>{Number(iso.slice(8))}</div>}
-            {iso && (byDay.get(iso) ?? []).map((e) => (
-              <button
-                key={e.id}
-                onClick={() => onOpen(e.id)}
-                onMouseEnter={(ev) => onChipEnter(ev, e)}
-                onMouseLeave={() => setPreview(null)}
-                className={`flex items-center gap-1 w-full text-left text-[12px] rounded px-1 py-0.5 mb-0.5 transition-colors ${e.isExternal ? "bg-purple-50 text-purple-900 hover:bg-purple-100" : "bg-gray-100 text-gray-800 hover:bg-gray-200"}`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor(e)}`} />
-                <span className="truncate">{e.startTime ? `${e.startTime} ` : ""}{e.title}</span>
-              </button>
-            ))}
-          </div>
-        ))}
+      <div className="rounded-xl overflow-hidden border border-border">
+        <div className="grid grid-cols-7 bg-border gap-px">
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+            <div key={d} className="bg-gray-50 text-[11px] text-gray-500 text-center py-1.5">{d}</div>
+          ))}
+        </div>
+        {weeks.map((week) => {
+          const rowH = NUM_H + Math.max(week.laneCount, 1) * LANE_H + 6;
+          return (
+            <div key={week.weekIndex} className="relative bg-border" style={{ minHeight: rowH }}>
+              {/* background day cells */}
+              <div className="grid grid-cols-7 gap-px absolute inset-0">
+                {Array.from({ length: 7 }, (_, col) => {
+                  const day = week.weekIndex * 7 + col - startDow + 1;
+                  const inMonth = day >= 1 && day <= daysInMonth;
+                  const iso = inMonth ? `${cursor.y}-${pad(cursor.m + 1)}-${pad(day)}` : null;
+                  return (
+                    <div key={col} className={`bg-white ${iso === todayIso ? "ring-2 ring-inset ring-gray-900/15" : ""}`}>
+                      {inMonth && <div className={`text-[12px] p-1.5 ${iso === todayIso ? "font-semibold text-gray-900" : "text-gray-400"}`}>{day}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* bar overlay */}
+              <div className="absolute inset-x-0 grid grid-cols-7" style={{ top: NUM_H }}>
+                {week.segments.map((seg) => (
+                  <button
+                    key={seg.event.id + "-" + seg.weekIndex}
+                    onClick={() => onOpen(seg.event.id)}
+                    onMouseEnter={(ev) => onChipEnter(ev, seg.event)}
+                    onMouseLeave={() => setPreview(null)}
+                    style={{ gridColumn: `${seg.startCol + 1} / span ${seg.span}`, marginTop: seg.lane * LANE_H, height: BAR_H }}
+                    className={`flex items-center text-left text-[11px] px-1.5 mx-0.5 truncate transition-all ${barColor(seg.event)} ${seg.isStart ? "rounded-l" : ""} ${seg.isEnd ? "rounded-r" : ""}`}
+                  >
+                    <span className="truncate">{seg.isStart && seg.event.startTime ? `${seg.event.startTime} ` : ""}{seg.event.title}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
       {(undated.length > 0 || footerRight) && (
         <div className="mt-3 flex items-start justify-between gap-4">
