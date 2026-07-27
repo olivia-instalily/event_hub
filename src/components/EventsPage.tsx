@@ -518,25 +518,14 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
   // Templates have no date by design — they're reusable Event Types, not calendar instances — so they
   // must never surface in the "No date" list. Only real undated events belong there.
   const undated = events.filter((e) => !e.date && !e.isTemplate);
-  // Hover: expand a span's band + reveal a metadata line; plus a fixed cover preview off to the side.
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Hover preview (with cover) — fixed-positioned so it escapes the grid's overflow clipping.
   const [preview, setPreview] = useState<{ e: EventListItem; top: number; left: number } | null>(null);
   const onChipEnter = (ev: React.MouseEvent, e: EventListItem) => {
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setPreview({ e, top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 288) });
   };
-
-  // Measure cell width once via a single ResizeObserver → narrow-mode threshold (cheaper than N
-  // per-node measureText calls; the tradeoff is short labels in narrow spans go to marker mode).
-  const gridRef = useRef<HTMLDivElement | null>(null);
-  const [cellWidth, setCellWidth] = useState(0);
-  useEffect(() => {
-    const el = gridRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setCellWidth(entry.contentRect.width / 7));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  // Status dot: blue upcoming / amber in-process / gray past / purple external.
+  const dotColor = (e: EventListItem) => { if (e.isExternal) return "bg-purple-500"; const s = effectiveStatus(e); return s === "past" ? "bg-gray-400" : s === "in-process" ? "bg-amber-500" : "bg-blue-500"; };
 
   const first = new Date(cursor.y, cursor.m, 1);
   const startDow = first.getDay();
@@ -544,17 +533,9 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
   const shift = (delta: number) => setCursor((c) => { const d = new Date(c.y, c.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
   const monthLabel = first.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
-  // ── Rail-and-dot grammar (single hue; the grammar carries meaning, not color) ──
-  const RAIL = "#4f46e5";
-  const WASH = "rgba(79,70,229,0.13)";
-  const CELL_H = 80, LANE_TOP0 = 25, LANE_PITCH = 17, BAND_H = 14, HOVER_H = 30, DOT = 7;
-  const NARROW_PX = 88, MIN_GAP = 10;
+  const NUM_H = 22;  // date-number space at the top of each week row
+  const LANE_H = 20; // vertical pitch per chip lane
   const pct = (n: number) => `${(n / 7) * 100}%`;
-  const metaStr = (e: EventListItem) => {
-    const d = e.endDate && e.endDate !== e.date ? `${e.date} – ${e.endDate}` : e.date;
-    const t = e.startTime && e.endTime ? `${e.startTime}–${e.endTime}` : e.startTime;
-    return [d, t, e.location].filter(Boolean).join(" · ");
-  };
 
   return (
     <div>
@@ -566,98 +547,51 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
           <button onClick={() => shift(1)} className="p-1.5 rounded-lg border border-border hover:bg-gray-50" aria-label="Next month"><ChevronRight className="w-4 h-4" /></button>
         </div>
       </div>
-      <div ref={gridRef} className="rounded-xl overflow-hidden border border-border">
+      <div className="rounded-xl overflow-hidden border border-border">
         <div className="grid grid-cols-7 bg-border gap-px">
           {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
             <div key={d} className="bg-gray-50 text-[11px] text-gray-500 text-center py-1.5">{d}</div>
           ))}
         </div>
-        {Array.from({ length: layout.weekCount }, (_, w) => (
-          <div key={w} className="relative bg-border" style={{ height: CELL_H }}>
-            {/* background day cells */}
-            <div className="grid grid-cols-7 gap-px absolute inset-0">
-              {Array.from({ length: 7 }, (_, col) => {
-                const day = w * 7 + col - startDow + 1;
-                const inMonth = day >= 1 && day <= daysInMonth;
-                const iso = inMonth ? `${cursor.y}-${pad(cursor.m + 1)}-${pad(day)}` : null;
-                return (
-                  <div key={col} className={`bg-white ${iso === todayIso ? "ring-2 ring-inset ring-gray-900/15" : ""}`}>
-                    {inMonth && <div className={`text-[12px] p-1.5 ${iso === todayIso ? "font-semibold text-gray-900" : "text-gray-400"}`}>{day}</div>}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* +N more affordance for days whose events spilled past the lane cap */}
-            {layout.overflow.filter((o) => o.rowIndex === w).map((o) => (
-              <div key={`of-${o.col}`} className="absolute text-[10px] text-gray-400 px-1.5 truncate pointer-events-none"
-                style={{ left: pct(o.col), width: pct(1), top: LANE_TOP0 + 3 * LANE_PITCH - 1 }}>
-                +{o.count} more
-              </div>
-            ))}
-
-            {/* Rail-and-dot overlay — pointer-events only on the spans, so day cells stay clickable */}
-            <div className="absolute inset-0 pointer-events-none">
-              {layout.fragments.filter((f) => f.rowIndex === w).map((f) => {
-                const isHover = hoveredId === f.eventId;
-                const narrow = cellWidth > 0 && f.colSpan * cellWidth < NARROW_PX;
-                const laneTop = LANE_TOP0 + f.lane * LANE_PITCH;
-                // Min-gap: if a same-lane span begins right where this one ends, pull this width in 10px.
-                const abuts = layout.fragments.some((g) => g.rowIndex === f.rowIndex && g.lane === f.lane && g.startCol === f.startCol + f.colSpan);
-                const rightInset = abuts ? MIN_GAP : 2;
-                const handlers = {
-                  onClick: () => onOpen(f.eventId),
-                  onMouseEnter: (ev: React.MouseEvent) => { setHoveredId(f.eventId); onChipEnter(ev, f.event); },
-                  onMouseLeave: () => { setHoveredId(null); setPreview(null); },
-                  title: f.event.title,
-                };
-
-                // Narrow mode: no band — a 9px cap-marker + wash, label spilling right in muted text.
-                if (narrow) {
+        {Array.from({ length: layout.weekCount }, (_, w) => {
+          const weekFrags = layout.fragments.filter((f) => f.rowIndex === w);
+          const laneCount = weekFrags.reduce((m, f) => Math.max(m, f.lane + 1), 0);
+          const rowH = NUM_H + Math.max(laneCount, 1) * LANE_H + 4;
+          return (
+            <div key={w} className="relative bg-border" style={{ minHeight: rowH }}>
+              {/* background day cells */}
+              <div className="grid grid-cols-7 gap-px absolute inset-0">
+                {Array.from({ length: 7 }, (_, col) => {
+                  const day = w * 7 + col - startDow + 1;
+                  const inMonth = day >= 1 && day <= daysInMonth;
+                  const iso = inMonth ? `${cursor.y}-${pad(cursor.m + 1)}-${pad(day)}` : null;
                   return (
-                    <button key={f.eventId + "-" + w} {...handlers}
-                      className="absolute flex items-center pointer-events-auto whitespace-nowrap"
-                      style={{ left: pct(f.startCol), top: laneTop, height: BAND_H, zIndex: isHover ? 40 : 1 }}>
-                      <span style={{ width: 9, height: 9, borderRadius: 2, background: WASH, borderLeft: `1.5px solid ${RAIL}`, borderTop: `1.5px solid ${RAIL}`, borderTopLeftRadius: 4 }} />
-                      <span className="ml-1 text-[11px]" style={{ color: "var(--text-muted, #6b7280)" }}>
-                        {f.event.startTime ? `${f.event.startTime} ` : ""}{f.event.title}
-                      </span>
-                    </button>
+                    <div key={col} className={`bg-white ${iso === todayIso ? "ring-2 ring-inset ring-gray-900/15" : ""}`}>
+                      {inMonth && <div className={`text-[12px] p-1.5 ${iso === todayIso ? "font-semibold text-gray-900" : "text-gray-400"}`}>{day}</div>}
+                    </div>
                   );
-                }
-
-                // Band mode: rail = top hairline + left cap on the first day, filled dot on the last.
-                return (
-                  <button key={f.eventId + "-" + w} {...handlers}
-                    className="absolute pointer-events-auto transition-[height] duration-150 overflow-visible"
-                    style={{
-                      left: pct(f.startCol),
-                      width: `calc(${pct(f.colSpan)} - ${rightInset}px)`,
-                      top: laneTop,
-                      height: isHover ? HOVER_H : BAND_H,
-                      zIndex: isHover ? 40 : 1,
-                      borderTop: `1.5px solid ${RAIL}`,
-                      borderLeft: f.isStart ? `1.5px solid ${RAIL}` : undefined,
-                      borderTopLeftRadius: f.isStart ? 6 : 0,
-                      background: isHover ? "#fff" : "transparent",
-                      boxShadow: isHover ? "0 2px 8px rgba(0,0,0,.10)" : undefined,
-                    }}>
-                    {/* pale wash — first day's block only */}
-                    {f.isStart && <span className="absolute inset-y-0 left-0 pointer-events-none" style={{ width: `${100 / f.colSpan}%`, background: WASH }} />}
-                    {/* title */}
-                    <span className="absolute left-1.5 top-0 h-[14px] flex items-center text-[11px] text-gray-800 truncate" style={{ right: 4 }}>
-                      {f.isStart ? f.event.title : ""}
-                    </span>
-                    {/* metadata line on hover */}
-                    {isHover && <span className="absolute left-1.5 right-1 top-[16px] text-[10px] text-gray-500 truncate">{metaStr(f.event)}</span>}
-                    {/* filled dot on the last day */}
-                    {f.isEnd && <span className="absolute pointer-events-none" style={{ right: -3, top: -3.5, width: DOT, height: DOT, borderRadius: "50%", background: RAIL }} />}
+                })}
+              </div>
+              {/* chips — each event spans across the days it covers, wrapping at week boundaries */}
+              <div className="absolute inset-x-0" style={{ top: NUM_H }}>
+                {weekFrags.map((f) => (
+                  <button
+                    key={f.eventId + "-" + w}
+                    onClick={() => onOpen(f.eventId)}
+                    onMouseEnter={(ev) => onChipEnter(ev, f.event)}
+                    onMouseLeave={() => setPreview(null)}
+                    title={f.event.title}
+                    style={{ position: "absolute", left: `calc(${pct(f.startCol)} + 2px)`, width: `calc(${pct(f.colSpan)} - 4px)`, top: f.lane * LANE_H }}
+                    className={`flex items-center gap-1 text-left text-[12px] rounded px-1 py-0.5 h-[18px] transition-colors ${f.event.isExternal ? "bg-purple-50 text-purple-900 hover:bg-purple-100" : "bg-gray-100 text-gray-800 hover:bg-gray-200"}`}
+                  >
+                    {f.isStart && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor(f.event)}`} />}
+                    <span className="truncate">{f.isStart && f.event.startTime ? `${f.event.startTime} ` : ""}{f.event.title}</span>
                   </button>
-                );
-              })}
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {(undated.length > 0 || footerRight) && (
         <div className="mt-3 flex items-start justify-between gap-4">

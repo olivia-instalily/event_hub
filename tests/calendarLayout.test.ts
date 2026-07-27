@@ -64,16 +64,13 @@ describe("layoutMonth — fragments", () => {
     expect(new Set(m.fragments.map((f) => f.lane))).toEqual(new Set([0, 1]));
   });
 
-  test("four overlapping → lanes 0-2 render, the 4th becomes +1 more on its days", () => {
+  test("four overlapping → four stacked lanes (no cap)", () => {
     const m = layoutMonth([
       ev("a", "2026-03-03", "2026-03-04"), ev("b", "2026-03-03", "2026-03-04"),
       ev("c", "2026-03-03", "2026-03-04"), ev("d", "2026-03-03", "2026-03-04"),
     ], Y, M);
-    expect(m.fragments).toHaveLength(3);                       // only lanes 0-2
-    expect(m.fragments.every((f) => f.lane <= 2)).toBe(true);
-    // Mar 3 = col 2, Mar 4 = col 3, both week 0 → one overflowing event covers both days.
-    expect(m.overflow.find((o) => o.rowIndex === 0 && o.col === 2)?.count).toBe(1);
-    expect(m.overflow.find((o) => o.rowIndex === 0 && o.col === 3)?.count).toBe(1);
+    expect(m.fragments).toHaveLength(4);
+    expect(new Set(m.fragments.map((f) => f.lane))).toEqual(new Set([0, 1, 2, 3]));
   });
 
   test("wrapping event keeps one lane even when its 2nd week is crowded (not per-row)", () => {
