@@ -69,7 +69,6 @@ import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
 import { BackfillModal } from "./BackfillModal";
 import { SpeakerField } from "./SpeakerField";
 import { filesFromDrop } from "../lib/drop";
-import { EventSetup } from "./EventSetup";
 import { SuggestedDeliverables } from "./SuggestedDeliverables";
 import { BudgetProjections } from "./BudgetProjections";
 import { ScopingForm } from "./ScopingForm";
@@ -3772,7 +3771,7 @@ function GCalMatchConfirmCard({ eventId, candidates, onResolved }: { eventId: st
   );
 }
 
-function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
+function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline: _onOpenTimeline, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenTimeline: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
   const facts = buildFacts(plan);
   // Phase-aware view: the timeline's date-derived "now" sets the default; clicking a node
   // previews another phase's view (Overview-internal state, not tab navigation).
@@ -4324,8 +4323,6 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   const headcount = plan.capacity != null ? `${plan.rsvp ?? 0} / ${plan.capacity} expected` : plan.rsvp != null ? `${plan.rsvp} expected` : "—";
   // One "wrapped" concept: a settled event (backfill / post-event tail) OR a macro_stage Wrapped one.
   const wrapped = plan.settleState === "settled" || plan.macroStage === "Wrapped";
-  // Past by date → the setup wizard (confirm essentials / review budget) is moot; go straight to the page.
-  const pastByDate = !!plan.date && plan.date < new Date().toISOString().slice(0, 10);
 
   // Re-run AI extraction on the attached materials and ADD anything missing (shared util; events
   // fill phases + deliverables). Non-destructive; refresh after so the view reflects new content.
@@ -4521,11 +4518,9 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
       </div>
 
       <div key={`${tab}-${version}`}>
-        {/* Skip the setup wizard for anything that's already run: setup-complete, wrapped, or past by
-            date. Those land on the actual page (Overview), not the from-scratch setup flow. */}
-        {tab === "overview" && ((plan.setupComplete || wrapped || pastByDate)
-          ? <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} setPlan={setPlan} />
-          : <EventSetup plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />)}
+        {tab === "overview" && (
+          <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenTimeline={() => setTab("deliverables")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} setPlan={setPlan} />
+        )}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
         {tab === "budget" && (plan.budget
