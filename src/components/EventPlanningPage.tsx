@@ -74,10 +74,8 @@ import { SpeakerField } from "./SpeakerField";
 import { filesFromDrop } from "../lib/drop";
 import { SuggestedDeliverables } from "./SuggestedDeliverables";
 import { BudgetProjections } from "./BudgetProjections";
-import { ScopingForm } from "./ScopingForm";
 import { PeoplePage } from "./PeoplePage";
-import { loadScoping, saveScoping, fundingFor, type ScopingForm as ScopingData } from "../lib/scoping";
-import { takePendingScopingBudget } from "../lib/deepLink";
+import { fundingFor } from "../lib/scoping";
 import { eventFocus, FOCUS_LABEL, type EventFocus } from "../lib/eventFocus";
 import { templateAdditions, hasAdditions, matchTemplates, type TemplateMatch } from "../lib/backfill";
 import { canonicalPhaseFor } from "../lib/phaseMerge";
@@ -3386,8 +3384,7 @@ function ReflectionSection({ plan, onApplied, incoming }: { plan: EventPlanning;
   );
 }
 
-// One connected stepper: scoping → budget assigned → tracking. Scoping data fills in under
-// step 1 once submitted; honest CTA/pending states before then.
+// Two-step budget stepper: budget target (set directly in the Budget tab) → spend tracking.
 function StepDot({ n, done, active }: { n: number; done?: boolean; active?: boolean }) {
   return (
     <span className={`relative z-[1] flex items-center justify-center w-6 h-6 rounded-full text-[15px] shrink-0 ${done ? "bg-green-600 text-white" : active ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500"}`}>
@@ -3395,73 +3392,45 @@ function StepDot({ n, done, active }: { n: number; done?: boolean; active?: bool
     </span>
   );
 }
-function BudgetCard({ plan, scoping, roughTotal, onOpenScoping, onOpenBudget }: { plan: EventPlanning; scoping: ScopingData; roughTotal: number; onOpenScoping: () => void; onOpenBudget: () => void }) {
-  const funding = fundingFor(plan.tags);
-  const [approval, setApproval] = useState<BudgetApproval | null>(null);
-  useEffect(() => { void getBudgetApproval(plan.id).then(setApproval); }, [plan.id]);
-  const submitted = approval != null;
-  const assigned = approval?.status === "assigned" ? plan.eventBudgetTarget : null;
+function BudgetCard({ plan, onOpenBudget }: { plan: EventPlanning; onOpenBudget: () => void }) {
+  const assigned = plan.eventBudgetTarget;
   const hasAssigned = assigned != null;
   const lines = plan.budget?.lines ?? [];
   const committed = lines.filter((l) => l.status !== "estimate").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
   const target = assigned ?? plan.budget?.targetAmount ?? null;
   const pct = target ? Math.min(100, Math.round((committed / target) * 100)) : 0;
   const over = target != null && committed > target;
-  const dueDate = plan.date ? (() => { const d = new Date(plan.date + "T00:00:00"); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); })() : null;
-  const overdue = !submitted && dueDate != null && new Date().toISOString().slice(0, 10) > dueDate;
-  const Row = ({ k, v }: { k: string; v: React.ReactNode }) => <div className="flex justify-between gap-2"><dt className="text-gray-500">{k}</dt><dd className="text-gray-800">{v}</dd></div>;
 
   return (
     <div className="bg-white rounded-2xl border border-border p-5">
       <h3 className="font-medium mb-4">Budget</h3>
       <ol className="relative space-y-5 before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-px before:bg-gray-200">
-        {/* 1 · Scoping */}
+        {/* 1 · Budget target */}
         <li className="relative flex gap-3">
-          <StepDot n={1} done={submitted} active={!submitted} />
+          <StepDot n={1} done={hasAssigned} active={!hasAssigned} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium">{submitted ? "Scoping submitted" : "Submit scoping"}</p>
-              {!submitted && <Button size="sm" onClick={onOpenScoping}>{scoping.generated ? "Review & submit" : "Generate & submit"}</Button>}
-            </div>
-            {submitted ? (
-              <dl className="mt-1.5 text-sm space-y-1">
-                <Row k="Rough cost" v={money(roughTotal)} />
-                <Row k="Funding" v={`${funding.fundingLine} · ${funding.tier}`} />
-                {approval?.createdAt && <Row k="Submitted" v={approval.createdAt.slice(0, 10)} />}
-                <button onClick={onOpenScoping} className="text-sm text-gray-600 hover:text-gray-900 inline-flex items-center gap-1 pt-0.5">View full form <ChevronRight className="w-4 h-4" /></button>
-              </dl>
-            ) : (
-              <p className="text-[15px] text-gray-400 mt-0.5">Generate the brief & submit to request a budget{dueDate ? <> · <span className={overdue ? "text-red-600" : "text-gray-400"}>due {dueDate}</span></> : null}.</p>
-            )}
-          </div>
-        </li>
-        {/* 2 · Budget assigned */}
-        <li className="relative flex gap-3">
-          <StepDot n={2} done={hasAssigned} />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium inline-flex items-center gap-1.5">{hasAssigned && <Lock className="w-3.5 h-3.5 text-gray-400" />} Budget assigned</p>
-            {hasAssigned ? (
-              <p className="text-sm mt-0.5">{money(assigned)} <span className="text-gray-400">· set by {approval?.deciderRef ? `@${approval.deciderRef}` : "admin"}</span></p>
-            ) : (
-              <p className="text-[15px] text-gray-400 mt-0.5">{submitted ? "Awaiting budget assignment." : "Pending scoping submission."}</p>
-            )}
-            {approval?.status === "declined" && approval.declineReason && <p className="text-[15px] text-gray-500 mt-1 bg-gray-50 border border-gray-200 rounded px-2 py-1 inline-flex items-start gap-1"><MessageSquare className="w-3 h-3 mt-0.5 shrink-0" /> &ldquo;{approval.declineReason}&rdquo;</p>}
-          </div>
-        </li>
-        {/* 3 · Tracking */}
-        <li className="relative flex gap-3">
-          <StepDot n={3} active={hasAssigned} />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium">Tracking</p>
+              <p className="text-sm font-medium inline-flex items-center gap-1.5">{hasAssigned && <Lock className="w-3.5 h-3.5 text-gray-400" />} Budget target</p>
               <button onClick={onOpenBudget} className="text-[15px] text-gray-600 border border-gray-300 rounded-md px-1.5 py-0.5 hover:bg-gray-50">Budget tab</button>
             </div>
+            {hasAssigned ? (
+              <p className="text-sm mt-0.5">{money(assigned)}</p>
+            ) : (
+              <p className="text-[15px] text-gray-400 mt-0.5">Set a budget target in the Budget tab.</p>
+            )}
+          </div>
+        </li>
+        {/* 2 · Tracking */}
+        <li className="relative flex gap-3">
+          <StepDot n={2} active={hasAssigned} />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">Tracking</p>
             {target != null ? (
               <>
                 <div className="mt-1.5 h-2 bg-gray-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${over ? "bg-red-500" : "bg-gradient-to-r from-gray-400 to-gray-900"}`} style={{ width: `${pct}%` }} /></div>
                 <p className={`text-[15px] mt-1 ${over ? "text-red-600" : "text-gray-500"}`}>{money(committed)} of {money(target)} {over ? `· ${money(committed - target)} over` : `· ${money(target - committed)} left`}</p>
               </>
-            ) : <p className="text-[15px] text-gray-400 mt-0.5">Track spend once a budget is assigned — add vendor info to keep it accurate.</p>}
+            ) : <p className="text-[15px] text-gray-400 mt-0.5">Track spend once a budget is set — add vendor info to keep it accurate.</p>}
           </div>
         </li>
       </ol>
@@ -3805,21 +3774,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   const [resyncing, setResyncing] = useState(false);
   const [resyncMsg, setResyncMsg] = useState<string | null>(null);
 
-  // Scoping (client-side). The full form opens as a modal from the budget flow / glance card.
-  const [scoping, setScoping] = useState<ScopingData>(() => loadScoping(eventId));
-  const [scopingOpen, setScopingOpen] = useState(false);
-  // Budget approval state (DB-backed; approval workflow fields only — scoping inputs stay in localStorage).
-  const [approval, setApproval] = useState<BudgetApproval | null>(null);
-  useEffect(() => { void getBudgetApproval(eventId).then(setApproval); }, [eventId]);
-  // Open straight to the scoping/budget form when arrived here via a Slack deep link
-  // (?event=<id>&view=budget). Consumed in an effect, not a state initializer: React StrictMode
-  // double-invokes initializers, which would swallow this one-shot (it clears on read).
-  // Consuming clears it, so a later revisit to the same event won't re-open the form.
-  useEffect(() => { if (takePendingScopingBudget(eventId)) setScopingOpen(true); }, [eventId]);
-  const updateScoping = (s: ScopingData) => { setScoping(s); saveScoping(eventId, s); };
-  // Rough cost counts whatever's filled per line — a real amount, or the per-category target
-  // when a sheet was imported into the setup's "Review budget" step (which fills targets).
-  const roughTotal = (plan.budget?.lines ?? []).reduce((s, l) => s + (l.confirmedAmount ?? l.target ?? 0), 0);
 
   const resync = async () => {
     setResyncing(true); setResyncMsg(null);
@@ -3841,22 +3795,19 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // Synthesized one-liner used when there's no Claude digest yet (never a blank empty state).
   const synth: string[] = [plan.macroStage ?? "Planning"];
   if (facts.daysOut != null) synth.push(facts.daysOut > 0 ? `${facts.daysOut}d to event` : facts.daysOut === 0 ? "event today" : `${-facts.daysOut}d ago`);
-  if (approval?.status === "assigned" && plan.eventBudgetTarget != null) synth.push(`${money(plan.eventBudgetTarget)} budget`);
+  if (plan.eventBudgetTarget != null) synth.push(`${money(plan.eventBudgetTarget)} budget`);
   synth.push(`${facts.deliverables.done}/${facts.deliverables.total} deliverables`);
   if (plan.staffRoles.length) synth.push(`${plan.staffRoles.length} open role${plan.staffRoles.length === 1 ? "" : "s"}`);
   const synthDigest = synth.join(" · ");
 
   // Past by DATE (not phase-navigation temporal): a done event should read as a record to complete,
-  // not an active plan — so it gets the completeness panel and never nags for scoping.
+  // not an active plan — so it gets the completeness panel instead of the active-planning prompts.
   const pastByDate = !!plan.date && plan.date < new Date().toISOString().slice(0, 10);
-  // Scoping is the gate for planning: nag until it's submitted (skip past/locked events).
-  const scopingSubmitted = approval != null;
-  const showScopingNag = !scopingSubmitted && !locked && temporal !== "past" && !pastByDate;
 
   const expectedTurnout = plan.rsvp ?? plan.headcount ?? null;
   const showRate = plan.heuristics.find((h) => /show|rsvp|turn ?out|%/.test(h.toLowerCase())) ?? null;
   const committed = facts.budget?.committed ?? 0;
-  const tgt = (approval?.status === "assigned" ? plan.eventBudgetTarget : null) ?? facts.budget?.target ?? null;
+  const tgt = plan.eventBudgetTarget ?? facts.budget?.target ?? null;
 
   const gcalMatchCandidates = plan.gcalMatchPending
     ? Object.entries(plan.gcalMatchPending).filter((e): e is [string, { gcalEventId: string; summary: string; start: string; htmlLink: string }] => e[1] !== null)
@@ -3896,10 +3847,18 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       {(() => {
         const flags = visibleFlags(plan);
         if (flags.length === 0) return null;
+        // Clicking a flag scrolls to its field and briefly rings it (self-contained; header lives in the outer component).
+        const highlight = (id: string) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.classList.add("ring-2", "ring-amber-400", "ring-offset-2", "rounded-md");
+          setTimeout(() => el.classList.remove("ring-2", "ring-amber-400", "ring-offset-2", "rounded-md"), 1600);
+        };
         const META: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }> = {
-          date: { title: "Set the event date", blurb: "Unlocks scheduling and deliverable due-dates.", Icon: Calendar, go: () => window.scrollTo({ top: 0, behavior: "smooth" }) },
-          headcount: { title: "Add expected headcount", blurb: "Sizes budget and logistics.", Icon: Users, go: () => window.scrollTo({ top: 0, behavior: "smooth" }) },
-          owners: { title: "Add owners", blurb: "Give this event a co-owner.", Icon: UserPlus, go: () => window.scrollTo({ top: 0, behavior: "smooth" }) },
+          date: { title: "Set the event date", blurb: "Unlocks scheduling and deliverable due-dates.", Icon: Calendar, go: () => highlight("hlf-date") },
+          headcount: { title: "Add expected headcount", blurb: "Sizes budget and logistics.", Icon: Users, go: () => highlight("hlf-headcount") },
+          owners: { title: "Add owners", blurb: "Give this event a co-owner.", Icon: UserPlus, go: () => highlight("hlf-owners") },
           budget: { title: "Review budget", blurb: "Set targets from comparable past events.", Icon: DollarSign, go: onOpenBudget },
           timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
         };
@@ -3916,18 +3875,18 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
             {flags.map((key) => {
               const m = META[key];
               return (
-                <div key={key} className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-                  <div className="flex items-center gap-3">
+                <div key={key} className="flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 pr-2">
+                  {/* Whole icon+text area is the link to the field; hover signals it's clickable. */}
+                  <button onClick={m.go} className="group flex-1 min-w-0 flex items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition-colors">
                     <m.Icon className="w-5 h-5 text-amber-700 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[15px] font-medium text-amber-900">{m.title}</p>
-                      <p className="text-[13px] text-amber-700">{m.blurb}</p>
-                    </div>
-                    <Button size="sm" variant="outline" onClick={m.go}>Go</Button>
-                    <button onClick={() => settle(key)} title="Dismiss — don't show this again" className="w-7 h-7 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
-                      <Check className="w-4 h-4" />
-                    </button>
-                  </div>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">{m.title}</span>
+                      <span className="block text-[13px] text-amber-700">{m.blurb}</span>
+                    </span>
+                  </button>
+                  <button onClick={() => settle(key)} title="Dismiss — don't show this again" className="w-5 h-5 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
+                    <Check className="w-3 h-3" />
+                  </button>
                 </div>
               );
             })}
@@ -3935,20 +3894,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
         );
       })()}
 
-      {/* Scoping gate — its own action card, matching the Google Calendar / Linear card, shown until
-          the scoping form is submitted. (Lives outside the status-digest block.) */}
-      {showScopingNag && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-amber-700 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-[15px] font-medium text-amber-900">Submit the scoping form</p>
-              <p className="text-[13px] text-amber-700">Do this first to unlock budget and planning.</p>
-            </div>
-            <Button size="sm" variant="outline" onClick={() => setScopingOpen(true)}>Open</Button>
-          </div>
-        </div>
-      )}
 
       {/* Status digest — synthesized one-liner by default; Claude bullets after Resync. */}
       <div className="bg-white rounded-2xl border border-border p-4">
@@ -3986,7 +3931,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
             {/* Left column: Budget, then the Linear update box fills the space beneath it. */}
             <div className="space-y-6 min-w-0">
-              <BudgetCard plan={plan} scoping={scoping} roughTotal={roughTotal} onOpenScoping={() => setScopingOpen(true)} onOpenBudget={onOpenBudget} />
+              <BudgetCard plan={plan} onOpenBudget={onOpenBudget} />
               <LinearUpdateBox eventId={eventId} linearSynced={!!plan.linearProjectId} onApplied={onApplied} variant="card" />
             </div>
             <div className="flex flex-col gap-4 min-w-0">
@@ -4017,9 +3962,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
         </div>
       )}
 
-      {scopingOpen && (
-        <ScopingForm plan={plan} scoping={scoping} roughTotal={roughTotal} onChange={updateScoping} onClose={() => setScopingOpen(false)} />
-      )}
 
       {/* Resources — open-only reference links (Google Docs / Sheets / folders). */}
       <ResourcesSection links={plan.referenceLinks ?? []} eventId={eventId} setPlan={setPlan} />
@@ -4449,13 +4391,13 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             <div className="mb-4 flex items-center gap-4 flex-wrap">
               <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
               <SeriesAttach eventId={eventId} />
-              <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || loadScoping(eventId).strategicJustification || "" }} />
+              <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || "" }} />
               <DocLinkControl url={plan.docLink} onSave={(u) => { setPlan((p) => (p ? { ...p, docLink: u } : p)); void updateEvent(eventId, { docLink: u }); }} label="Folder" icon={<Folder className="w-4 h-4" />} placeholder="Paste Drive folder link…" />
               {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
               {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 text-gray-600">
-              <div className="flex items-center gap-2">
+              <div id="hlf-date" className="flex items-center gap-2">
                 {!plan.lumaEventId ? (
                   // Not tied to Luma → date is freely editable inline. If it's on Google Calendar,
                   // re-push the change so the calendar entry can't drift, and show a green link to it.
@@ -4484,7 +4426,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               <button onClick={() => goPeople('all')} className="flex items-center gap-2 hover:text-gray-900 text-left">
                 <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
               </button>
-              <label className="flex items-center gap-1.5 text-sm text-gray-500">
+              <label id="hlf-headcount" className="flex items-center gap-1.5 text-sm text-gray-500">
                 <span className="text-xs text-gray-400 whitespace-nowrap">expected</span>
                 <input
                   type="number"
@@ -4501,7 +4443,9 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 />
               </label>
               <SpeakerField eventId={eventId} />
-              <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
+              <span id="hlf-owners" className="inline-flex items-center rounded-md">
+                <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
+              </span>
             </div>
             <MacroStepper eventId={eventId} initial={plan.macroStage} eventDate={plan.date} />
           </div>
