@@ -1535,7 +1535,6 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
             <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-100">
               <button onClick={() => (draft ? setDraft(null) : setMode(planKind === 'solo' ? 'audience' : 'planFork'))} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
               <Button
-                variant="secondary"
                 onClick={createPlanned}
                 disabled={creating || (!meta.name.trim() && !description.trim())}
                 title={draft ? 'Creates the event and opens its planning dashboard' : 'Skips the draft and creates the event — flesh it out on the dashboard'}
