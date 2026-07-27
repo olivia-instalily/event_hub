@@ -25,6 +25,7 @@ import { handler as slackApproval }          from './functions/slack-approval.js
 import { handler as slackChannels }          from './functions/slack-channels.js';
 import { handler as slackEvents }            from './functions/slack-events.js';
 import { handler as slackInteractions }      from './functions/slack-interactions.js';
+import { handler as slackLinkChannel }       from './functions/slack-link-channel.js';
 import { handler as slackSend }              from './functions/slack-send.js';
 import { handler as storageUpload }          from './functions/storage-upload.js';
 import { handler as storageSign }            from './functions/storage-sign.js';
@@ -68,6 +69,7 @@ app.post('/luma-sync',                lumaSync);
 app.post('/planning-summary',         planningSummary);
 app.post('/slack-approval',            slackApproval);
 app.post('/slack-channels',           slackChannels);
+app.post('/slack-link-channel',       slackLinkChannel);
 app.post('/slack-send',               slackSend);
 app.post('/storage-upload',           storageUpload);
 app.post('/storage-sign',             storageSign);
