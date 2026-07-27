@@ -73,7 +73,12 @@ export function ExternalDetail({ item, onClose, onEdit, onDelete }: { item: Even
         </span>
         {item.why && <p className="text-sm text-gray-700">{item.why}</p>}
         <div className="text-sm text-gray-700 space-y-1.5">
-          <div className="flex items-center gap-2"><CalendarDays className="w-4 h-4 text-gray-400 shrink-0" /> {range}</div>
+          <div className="flex items-center gap-2">
+            {item.gcalEventId && item.gcalHtmlLink
+              ? <a href={item.gcalHtmlLink} target="_blank" rel="noreferrer" title="View in Google Calendar" className="inline-flex shrink-0"><CalendarDays className="w-4 h-4 text-emerald-600 hover:text-emerald-700" /></a>
+              : <CalendarDays className="w-4 h-4 text-gray-400 shrink-0" />}
+            {range}
+          </div>
           {item.location && <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-gray-400 shrink-0" /> {item.location}</div>}
           {item.infoUrl && <div className="flex items-center gap-2"><ExternalLink className="w-4 h-4 text-gray-400 shrink-0" /> <a href={item.infoUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline decoration-dotted underline-offset-2 hover:text-blue-800 truncate">{item.infoUrl}</a></div>}
         </div>
