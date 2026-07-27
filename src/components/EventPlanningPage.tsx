@@ -3852,8 +3852,11 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           const el = document.getElementById(id);
           if (!el) return;
           el.scrollIntoView({ behavior: "smooth", block: "center" });
-          el.classList.add("ring-2", "ring-amber-400", "ring-offset-2", "rounded-md");
-          setTimeout(() => el.classList.remove("ring-2", "ring-amber-400", "ring-offset-2", "rounded-md"), 1600);
+          const cls = ["ring-2", "ring-amber-300", "ring-offset-2", "rounded-md"];
+          el.classList.add(...cls);
+          // Stays until the user clicks somewhere; defer so the click that opened it doesn't clear it.
+          const clear = () => el.classList.remove(...cls);
+          setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
         };
         const META: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }> = {
           date: { title: "Set the event date", blurb: "Unlocks scheduling and deliverable due-dates.", Icon: Calendar, go: () => highlight("hlf-date") },
