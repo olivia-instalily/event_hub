@@ -13,8 +13,6 @@ const money = (n: number | null | undefined, currency = "USD") =>
 const numOrNull = (s: string) => (s.trim() === "" ? null : Number(s));
 
 export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: string; onApplied: () => void }) {
-  if (!plan.budget) return null;
-
   const [dropFile, setDropFile] = useState<File | null>(null);
   const [importNote, setImportNote] = useState<string | null>(null);
   const currency = plan.budget?.currency ?? "USD";
@@ -42,6 +40,8 @@ export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPla
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
+
+  if (!plan.budget) return null;
 
   const saveTarget = async (category: string, raw: string) => {
     const k = categoryKey(category);
@@ -96,7 +96,7 @@ export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPla
 
       <BudgetDropArea onFile={setDropFile} className="rounded-lg">
         <div className="flex items-start justify-between gap-3 mb-3">
-          <p className="text-sm text-gray-500">Projected from comparable past events. Drop a breakdown to fill these in — matching categories drop into their field; everything stays editable.</p>
+          <p className="text-sm text-gray-500">Drop a breakdown to fill these in — matching categories drop into their field; everything stays editable.</p>
           {plan.budget && <BudgetDropZone label="or drop a breakdown" onFile={setDropFile} className="shrink-0" />}
         </div>
         {importNote && <p className="text-[15px] text-gray-500 mb-3 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5 text-green-600" /> {importNote}</p>}
