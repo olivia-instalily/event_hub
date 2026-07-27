@@ -526,6 +526,7 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
   const undated = events.filter((e) => !e.date && !e.isTemplate);
   // Hover preview (with cover) — fixed-positioned so it escapes the grid's overflow clipping.
   const [preview, setPreview] = useState<{ e: EventListItem; top: number; left: number } | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null); // focus-plus-context: expand this bar, minimize the rest
   const onChipEnter = (ev: React.MouseEvent, e: EventListItem) => {
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     setPreview({ e, top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 288) });
@@ -581,10 +582,16 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
                   <button
                     key={seg.event.id + "-" + seg.weekIndex}
                     onClick={() => onOpen(seg.event.id)}
-                    onMouseEnter={(ev) => onChipEnter(ev, seg.event)}
-                    onMouseLeave={() => setPreview(null)}
-                    style={{ gridColumn: `${seg.startCol + 1} / span ${seg.span}`, marginTop: seg.lane * LANE_H, height: BAR_H }}
-                    className={`flex items-center text-left text-[11px] px-1.5 mx-0.5 truncate transition-all ${barColor(seg.event)} ${seg.isStart ? "rounded-l" : ""} ${seg.isEnd ? "rounded-r" : ""}`}
+                    onMouseEnter={(ev) => { setHoveredId(seg.event.id); onChipEnter(ev, seg.event); }}
+                    onMouseLeave={() => { setHoveredId(null); setPreview(null); }}
+                    style={{
+                      gridColumn: `${seg.startCol + 1} / span ${seg.span}`,
+                      marginTop: seg.lane * LANE_H,
+                      height: hoveredId === seg.event.id ? LANE_H : BAR_H,
+                      opacity: hoveredId && hoveredId !== seg.event.id ? 0.35 : 1,
+                      zIndex: hoveredId === seg.event.id ? 10 : 1,
+                    }}
+                    className={`relative flex items-center text-left text-[11px] px-1.5 mx-0.5 truncate transition-all duration-150 ${barColor(seg.event)} ${seg.isStart ? "rounded-l" : ""} ${seg.isEnd ? "rounded-r" : ""} ${hoveredId === seg.event.id ? "shadow-md" : ""}`}
                   >
                     <span className="truncate">{seg.isStart && seg.event.startTime ? `${seg.event.startTime} ` : ""}{seg.event.title}</span>
                   </button>
