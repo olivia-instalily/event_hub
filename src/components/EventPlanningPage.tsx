@@ -6,6 +6,7 @@ import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
   Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
+  UserPlus, DollarSign, ClipboardList,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
@@ -36,7 +37,9 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
+  saveSetupState,
 } from "../lib/db";
+import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { Button } from "@instalily/ui/button";
@@ -3771,7 +3774,7 @@ function GCalMatchConfirmCard({ eventId, candidates, onResolved }: { eventId: st
   );
 }
 
-function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline: _onOpenTimeline, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenTimeline: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
+function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenTimeline: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
   const facts = buildFacts(plan);
   // Phase-aware view: the timeline's date-derived "now" sets the default; clicking a node
   // previews another phase's view (Overview-internal state, not tab navigation).
@@ -3888,6 +3891,46 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline: _onO
           onLinearSynced={onApplied}
         />
       )}
+
+      {/* Setup flags — amber nudge cards for each incomplete onboarding step. */}
+      {(() => {
+        const flags = visibleFlags(plan);
+        if (flags.length === 0) return null;
+        const META: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }> = {
+          date: { title: "Set the event date", blurb: "Unlocks scheduling and deliverable due-dates.", Icon: Calendar, go: () => window.scrollTo({ top: 0, behavior: "smooth" }) },
+          headcount: { title: "Add expected headcount", blurb: "Sizes budget and logistics.", Icon: Users, go: () => window.scrollTo({ top: 0, behavior: "smooth" }) },
+          owners: { title: "Add owners", blurb: "Give this event a co-owner.", Icon: UserPlus, go: () => window.scrollTo({ top: 0, behavior: "smooth" }) },
+          budget: { title: "Review budget", blurb: "Set targets from comparable past events.", Icon: DollarSign, go: onOpenBudget },
+          timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
+        };
+        const settle = (key: SetupFlagKey) => {
+          const next = [...plan.setupProgress, key];
+          setPlan((p) => (p ? { ...p, setupProgress: next } : p));
+          void saveSetupState(eventId, next, plan.setupComplete);
+        };
+        return (
+          <div className="space-y-2">
+            {flags.map((key) => {
+              const m = META[key];
+              return (
+                <div key={key} className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <m.Icon className="w-5 h-5 text-amber-700 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[15px] font-medium text-amber-900">{m.title}</p>
+                      <p className="text-[13px] text-amber-700">{m.blurb}</p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={m.go}>Go</Button>
+                    <button onClick={() => settle(key)} title="Dismiss — don't show this again" className="w-7 h-7 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
+                      <Check className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Scoping gate — its own action card, matching the Google Calendar / Linear card, shown until
           the scoping form is submitted. (Lives outside the status-digest block.) */}
