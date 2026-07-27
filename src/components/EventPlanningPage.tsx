@@ -70,6 +70,7 @@ import { BackfillModal } from "./BackfillModal";
 import { SpeakerField } from "./SpeakerField";
 import { filesFromDrop } from "../lib/drop";
 import { EventSetup } from "./EventSetup";
+import { SuggestedDeliverables } from "./SuggestedDeliverables";
 import { ScopingForm } from "./ScopingForm";
 import { PeoplePage } from "./PeoplePage";
 import { loadScoping, saveScoping, fundingFor, type ScopingForm as ScopingData } from "../lib/scoping";
@@ -4531,6 +4532,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && (
           <div className="space-y-6">
+            <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
             <PhaseEditor eventId={eventId} phases={plan.phases} deliverables={plan.deliverables} setPlan={setPlan} />
             <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
