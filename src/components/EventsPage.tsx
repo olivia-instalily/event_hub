@@ -9,6 +9,7 @@ import { layoutMonth } from "../lib/calendarLayout";
 import { defaultPhases } from "../lib/eventPhases";
 import { DateEdit } from "./DateEdit";
 import { TagStack } from "./TagStack";
+import { SlackChannelControl } from "./SlackChannelControl";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { LocationInput } from "./LocationEdit";
 import { canonicalCity } from "../lib/cities";
@@ -2353,6 +2354,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
 
               {/* Luma attach / link —  pinned to the card's bottom edge */}
               <div className="mt-auto pt-4 border-t border-gray-100" onClick={(e) => e.stopPropagation()}>
+                {!event.isExternal && (
+                  <div className="mb-2">
+                    <SlackChannelControl eventId={event.id} title={event.title} slackChannel={event.slackChannel} onChange={() => load()} />
+                  </div>
+                )}
                 {event.lumaEventId ? (
                   <a
                     href={event.lumaUrl ?? undefined}
