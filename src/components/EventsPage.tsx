@@ -1526,13 +1526,18 @@ export function CreateEventModal({ events, initialFiles, resumeIngest, onFilesCo
             {createError && <p className="text-red-600 text-sm mt-4">{createError}</p>}
             <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-100">
               <button onClick={() => (draft ? setDraft(null) : setMode(planKind === 'solo' ? 'audience' : 'planFork'))} className="text-sm text-gray-600 hover:text-gray-900">← Back</button>
-              <Button
-                onClick={createPlanned}
-                disabled={creating || (!meta.name.trim() && !description.trim())}
-                title={draft ? 'Creates the event and opens its planning dashboard' : 'Skips the draft and creates the event — flesh it out on the dashboard'}
-              >
-                {creating ? 'Creating…' : draft ? 'Create event' : 'Skip & create event'}
-              </Button>
+              <div className="flex items-center gap-3">
+                {!creating && !meta.name.trim() && !description.trim() && (
+                  <span className="text-[13px] text-gray-400">Add a title or a short description above first</span>
+                )}
+                <Button
+                  onClick={createPlanned}
+                  disabled={creating || (!meta.name.trim() && !description.trim())}
+                  title={draft ? 'Creates the event and opens its planning dashboard' : 'Skips the draft and creates the event — flesh it out on the dashboard'}
+                >
+                  {creating ? 'Creating…' : draft ? 'Create event' : 'Skip & create event'}
+                </Button>
+              </div>
             </div>
           </div>
         ) : mode === 'review' && ingest ? (
