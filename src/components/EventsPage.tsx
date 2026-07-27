@@ -547,7 +547,7 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
   // ── Rail-and-dot grammar (single hue; the grammar carries meaning, not color) ──
   const RAIL = "#4f46e5";
   const WASH = "rgba(79,70,229,0.13)";
-  const CELL_H = 80, LANE_TOP0 = 25, LANE_PITCH = 17, BAND_H = 14, HOVER_H = 44, DOT = 7;
+  const CELL_H = 80, LANE_TOP0 = 25, LANE_PITCH = 17, BAND_H = 14, HOVER_H = 30, DOT = 7;
   const NARROW_PX = 88, MIN_GAP = 10;
   const pct = (n: number) => `${(n / 7) * 100}%`;
   const metaStr = (e: EventListItem) => {
@@ -640,7 +640,7 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
                       borderLeft: f.isStart ? `1.5px solid ${RAIL}` : undefined,
                       borderTopLeftRadius: f.isStart ? 6 : 0,
                       background: isHover ? "#fff" : "transparent",
-                      boxShadow: isHover ? "0 4px 14px rgba(0,0,0,.12)" : undefined,
+                      boxShadow: isHover ? "0 2px 8px rgba(0,0,0,.10)" : undefined,
                     }}>
                     {/* pale wash — first day's block only */}
                     {f.isStart && <span className="absolute inset-y-0 left-0 pointer-events-none" style={{ width: `${100 / f.colSpan}%`, background: WASH }} />}
