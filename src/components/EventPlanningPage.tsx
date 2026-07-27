@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
-  saveSetupState,
+  saveSetupState, setHeadcount,
 } from "../lib/db";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { TagStack } from "./TagStack";
@@ -3904,9 +3904,12 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
         };
         const settle = (key: SetupFlagKey) => {
-          const next = [...plan.setupProgress, key];
-          setPlan((p) => (p ? { ...p, setupProgress: next } : p));
-          void saveSetupState(eventId, next, plan.setupComplete);
+          setPlan((p) => {
+            if (!p) return p;
+            const next = [...p.setupProgress, key];
+            void saveSetupState(eventId, next, p.setupComplete);
+            return { ...p, setupProgress: next };
+          });
         };
         return (
           <div className="space-y-2">
@@ -4481,6 +4484,22 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               <button onClick={() => goPeople('all')} className="flex items-center gap-2 hover:text-gray-900 text-left">
                 <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
               </button>
+              <label className="flex items-center gap-1.5 text-sm text-gray-500">
+                <span className="text-xs text-gray-400 whitespace-nowrap">expected</span>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="—"
+                  value={plan.headcount ?? ""}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const n = raw.trim() === "" ? null : Number(raw);
+                    setPlan((p) => (p ? { ...p, headcount: n } : p));
+                    void setHeadcount(eventId, n);
+                  }}
+                  className="w-16 bg-transparent border-b border-dashed border-gray-300 focus:border-gray-500 focus:outline-none text-sm text-gray-700 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+              </label>
               <SpeakerField eventId={eventId} />
               <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
             </div>
