@@ -71,6 +71,7 @@ import { SpeakerField } from "./SpeakerField";
 import { filesFromDrop } from "../lib/drop";
 import { EventSetup } from "./EventSetup";
 import { SuggestedDeliverables } from "./SuggestedDeliverables";
+import { BudgetProjections } from "./BudgetProjections";
 import { ScopingForm } from "./ScopingForm";
 import { PeoplePage } from "./PeoplePage";
 import { loadScoping, saveScoping, fundingFor, type ScopingForm as ScopingData } from "../lib/scoping";
@@ -4528,7 +4529,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
         {tab === "budget" && (plan.budget
-          ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} engagements={plan.engagements} />
+          ? <div className="space-y-6">
+              <BudgetProjections plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
+              <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} engagements={plan.engagements} />
+            </div>
           : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && (
           <div className="space-y-6">
