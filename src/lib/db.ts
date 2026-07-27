@@ -688,10 +688,12 @@ export async function updateEvent(
     location?: string | null;
     startTime?: string | null;
     endTime?: string | null;
+    docLink?: string | null;
   },
 ): Promise<void> {
   const patch: Record<string, unknown> = {};
   if ('name' in fields) patch.name = fields.name;
+  if ('docLink' in fields) patch.doc_link = fields.docLink;
   if ('description' in fields) patch.description = fields.description;
   if ('coverPosition' in fields) patch.cover_position = fields.coverPosition;
   if ('format' in fields) patch.format = fields.format;
@@ -2603,6 +2605,7 @@ export interface EventPlanning {
   outreach: OutreachTemplate[];
   sourceMaterials: SourceMaterial[];
   referenceLinks: ReferenceLink[];
+  docLink: string | null;   // single prominent Drive/Doc link in the header (distinct from referenceLinks)
   isTemplate: boolean;
   capacity: number | null;
   rsvp: number | null;
@@ -2716,7 +2719,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, gcal_event_ids, gcal_match_pending, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, doc_link, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, gcal_event_ids, gcal_match_pending, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -2809,6 +2812,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     outreach: Array.isArray((row as any).outreach) ? (row as any).outreach as OutreachTemplate[] : [],
     sourceMaterials,
     referenceLinks: Array.isArray((row as any).reference_links) ? (row as any).reference_links : [],
+    docLink: (row as any).doc_link ?? null,
     isTemplate: (row as any).is_template ?? false,
     startTime: (row as any).start_time ?? null,
     endTime: (row as any).end_time ?? null,

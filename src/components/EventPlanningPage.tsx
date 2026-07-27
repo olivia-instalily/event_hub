@@ -45,6 +45,7 @@ import { Tabs, TabsList, TabsTrigger } from "@instalily/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import { LocationEdit } from "./LocationEdit";
 import { EditableTitle } from "./EditableTitle";
+import { DocLinkControl } from "./DocLinkControl";
 import { StatusControl } from "./StatusControl";
 import { FileDrop } from "./FileDrop";
 import { EventPageBuilder } from "./EventPageBuilder";
@@ -4404,6 +4405,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
               <SeriesAttach eventId={eventId} />
               <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || loadScoping(eventId).strategicJustification || "" }} />
+              <DocLinkControl url={plan.docLink} onSave={(u) => { setPlan((p) => (p ? { ...p, docLink: u } : p)); void updateEvent(eventId, { docLink: u }); }} label="Folder" icon={<Folder className="w-4 h-4" />} placeholder="Paste Drive folder link…" />
               {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
               {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
             </div>

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, Folder, ExternalLink, X } from "lucide-react";
+import { ChevronLeft, Folder } from "lucide-react";
 import { getSeriesCampaign, getSeriesEvents, saveCampaign, renameSeries, type SeriesEvent } from "../lib/db";
 import { type Campaign, emptyCampaign } from "../lib/campaign";
 import { CopyLinkButton } from "./CopyLinkButton";
+import { DocLinkControl } from "./DocLinkControl";
 import { SeriesPlan } from "./SeriesPlan";
 import { SeriesEvents } from "./SeriesEvents";
 import { SeriesPeople } from "./SeriesPeople";
@@ -33,8 +34,6 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
   const [tab, setTab] = useState<Tab>(TABS.some((t) => t.key === initialTab) ? (initialTab as Tab) : "plan");
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [folderEdit, setFolderEdit] = useState(false);
-  const [folderInput, setFolderInput] = useState("");
 
   const load = () => { setLoading(true); getSeriesCampaign(seriesId).then((s) => { setName(s.name); setCampaign(s.campaign); setEvents(s.events); }).catch(() => {}).finally(() => setLoading(false)); };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [seriesId]);
@@ -43,7 +42,6 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
   const save = (next: Campaign) => { setSaveError(null); setCampaign(next); saveCampaign(seriesId, next).then(() => setSaveError(null)).catch((e: unknown) => { setSaveError(e instanceof Error && e.message ? `Couldn't save — your last change was reverted (${e.message})` : "Couldn't save — your last change was reverted."); load(); }); };
 
   const reloadEvents = () => { getSeriesEvents(seriesId).then(setEvents).catch(() => {}); };
-  const saveFolder = () => { const u = folderInput.trim(); save({ ...campaign, folderUrl: u && u.startsWith("http") ? u : null }); setFolderEdit(false); };
 
   const props: TabProps = { seriesId, campaign, events, save, onOpenEvent, reload: load, reloadEvents };
 
@@ -67,20 +65,13 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
         <p className="text-sm text-gray-500 capitalize">{campaign.drive} drive · {events.length} event{events.length === 1 ? "" : "s"}</p>
         {/* Single paired Drive folder (open-only). */}
         <div className="shrink-0">
-          {folderEdit ? (
-            <span className="inline-flex items-center gap-1">
-              <input autoFocus value={folderInput} onChange={(e) => setFolderInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveFolder(); if (e.key === "Escape") setFolderEdit(false); }} placeholder="Paste Drive folder link…" className="w-64 px-2 py-1 border border-border rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
-              <button onClick={saveFolder} className="text-[13px] text-gray-600 hover:text-gray-900">Save</button>
-              <button onClick={() => setFolderEdit(false)} className="text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
-            </span>
-          ) : campaign.folderUrl ? (
-            <span className="inline-flex items-center gap-2">
-              <a href={campaign.folderUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900 border border-border rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors"><Folder className="w-4 h-4" /> Folder <ExternalLink className="w-3.5 h-3.5 text-gray-400" /></a>
-              <button onClick={() => { setFolderInput(campaign.folderUrl ?? ""); setFolderEdit(true); }} className="text-[12px] text-gray-400 hover:text-gray-700">edit</button>
-            </span>
-          ) : (
-            <button onClick={() => { setFolderInput(""); setFolderEdit(true); }} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 border border-dashed border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors"><Folder className="w-4 h-4" /> Add folder</button>
-          )}
+          <DocLinkControl
+            url={campaign.folderUrl}
+            onSave={(u) => save({ ...campaign, folderUrl: u })}
+            label="Folder"
+            icon={<Folder className="w-4 h-4" />}
+            placeholder="Paste Drive folder link…"
+          />
         </div>
       </div>
 
