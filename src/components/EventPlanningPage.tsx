@@ -1082,7 +1082,7 @@ function BudgetTracker({ budget, eventId, eventBudgetTarget = null, engagements 
   const total = lines.reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
   const varState: "none" | "under" | "near" | "over" =
     target == null ? "none" : total >= target * 1.1 ? "over" : total >= target * 0.9 ? "near" : "under";
-  const varText = { none: "text-gray-300", under: "text-green-700", near: "text-yellow-700", over: "text-red-700" }[varState];
+  const varText = { none: "text-gray-300", under: "text-green-600", near: "text-yellow-600", over: "text-red-500" }[varState];
   const overTarget = target != null && total > target;
 
   return (
@@ -3424,8 +3424,8 @@ function BudgetCard({ plan, onOpenBudget, onSetTarget }: { plan: EventPlanning; 
         </button>
       ) : (
         <div>
-          <div className="h-2 bg-gray-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${over ? "bg-red-500" : "bg-gradient-to-r from-gray-400 to-gray-900"}`} style={{ width: `${pct}%` }} /></div>
-          <p className={`text-[15px] mt-1.5 ${over ? "text-red-600" : "text-gray-500"}`}>{money(committed)} of {money(target)} {over ? `· ${money(committed - target)} over` : `· ${money(target - committed)} left`}</p>
+          <div className="h-2 bg-gray-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${over ? "bg-red-400/80" : "bg-gradient-to-r from-gray-400 to-gray-900"}`} style={{ width: `${pct}%` }} /></div>
+          <p className={`text-[15px] mt-1.5 ${over ? "text-red-500" : "text-gray-500"}`}>{money(committed)} of {money(target)} {over ? `· ${money(committed - target)} over` : `· ${money(target - committed)} left`}</p>
         </div>
       )}
     </div>
@@ -3810,6 +3810,16 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   const [captures, setCaptures] = useState<SlackCapture[]>([]);
   const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); };
   useEffect(() => { reloadCaptures(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [eventId]);
+  // Pins land in Slack while this page may already be open — there's no realtime channel, so refresh
+  // captures when the tab regains focus and on a slow poll, so a new proposal appears without a reload.
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden) reloadCaptures(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const iv = setInterval(refresh, 20000);
+    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); clearInterval(iv); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId]);
   const capByHome = (h: CaptureHome) => captures.filter((c) => c.home === h);
 
   // Confirming promotes a capture into the settled record for its home, then marks it confirmed so it
@@ -4077,7 +4087,7 @@ function WhereThingsStand({ bullets, fallback, onRefresh, refreshing, note }: {
   return (
     <div className="bg-white rounded-2xl border border-border p-5">
       <div className="flex items-start justify-between gap-3 mb-3">
-        <h3 className="flex items-center gap-1.5 font-medium"><Sparkles className="w-4 h-4 text-violet-500" /> Where things stand</h3>
+        <h3 className="flex items-center gap-1.5 font-medium"><Sparkles className="w-4 h-4 text-yellow-500" /> Where things stand</h3>
         <button onClick={onRefresh} disabled={refreshing} title="Regenerate from the latest activity" className="shrink-0 inline-flex items-center gap-1 text-[12px] text-gray-400 hover:text-gray-600 disabled:opacity-50">
           <RefreshCw className={`w-3 h-3 ${refreshing ? "animate-spin" : ""}`} /> {refreshing ? "refreshing…" : "refresh"}
         </button>
