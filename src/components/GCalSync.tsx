@@ -134,7 +134,9 @@ export function GCalSync({
   // ── Action variant — amber card listing only what's NOT done yet ───────────
   // A line stays only while its integration is pending. Once linked, it drops off entirely (a brief
   // confirmation lingers just for the sync you did this session). Card hides when nothing's left.
-  const gcalShow = gcalAvailable && (!done || justSynced);
+  // Auto-sync already adds dated events, so there's no manual "add to calendar" prompt here —
+  // the GCal line appears only for a this-session confirmation or a collision "needs review".
+  const gcalShow = gcalAvailable && (justSynced || pending);
   const linearShow = !linDone || linJustSynced;
   if (!gcalShow && !linearShow) return null;
 
@@ -153,7 +155,7 @@ export function GCalSync({
                 </a>
               )}
             </div>
-          ) : pending ? (
+          ) : (
             <div className="flex items-center gap-3">
               <CalendarPlus className="w-5 h-5 text-red-500 shrink-0" />
               <div className="flex-1 min-w-0">
@@ -168,18 +170,6 @@ export function GCalSync({
                   Create new
                 </Button>
               </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              <CalendarPlus className="w-5 h-5 text-amber-700 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-[15px] font-medium text-amber-900">Add this event to Google Calendar</p>
-                <p className="text-[13px] text-amber-700">Puts it on the shared company calendar (calendar@instalily.ai).</p>
-              </div>
-              <Button size="sm" onClick={add} disabled={busy}>
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarPlus className="w-4 h-4" />}
-                Add to calendar
-              </Button>
             </div>
           )}
           {err && <p className="text-[13px] text-red-600 mt-2">{err}</p>}
