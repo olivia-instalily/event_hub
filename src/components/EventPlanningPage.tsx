@@ -203,6 +203,15 @@ function CreateLumaModal({ eventId, draft, descriptions = [], onClose, onCreated
   );
 }
 
+// Luma brand mark — the filled 4-point sparkle.
+function LumaLogo({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path d="M12 0C12 6.6 6.6 12 0 12C6.6 12 12 17.4 12 24C12 17.4 17.4 12 24 12C17.4 12 12 6.6 12 0Z" fill="#0F0F0F" />
+    </svg>
+  );
+}
+
 function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: string; initialUrl: string | null; draft: LumaDraft; descriptions?: OutreachTemplate[] }) {
   const [url, setUrl] = useState(initialUrl);
   const [mode, setMode] = useState<"idle" | "menu" | "attach" | "create">("idle");
@@ -229,7 +238,7 @@ function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: str
   // reuses the "attach" input below; a new URL overwrites the link.
   if (url && mode !== "attach") return (
     <span className="relative inline-flex items-center gap-1">
-      <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"><Link2 className="w-4 h-4" /> Luma</a>
+      <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"><LumaLogo /> Luma</a>
       <button onClick={() => setMode(mode === "menu" ? "idle" : "menu")} title="Change or unlink" className="text-gray-300 hover:text-gray-700"><MoreVertical className="w-4 h-4" /></button>
       {mode === "menu" && (
         <>
@@ -261,7 +270,7 @@ function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: str
   );
   return (
     <>
-      <button onClick={() => setMode("menu")} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors"><Link2 className="w-4 h-4" /> Luma</button>
+      <button onClick={() => setMode("menu")} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors"><LumaLogo /> Luma</button>
       {mode === "create" && <CreateLumaModal eventId={eventId} draft={draft} descriptions={descriptions} onClose={() => setMode("idle")} onCreated={(u) => { setUrl(u); setMode("idle"); }} />}
     </>
   );
@@ -4451,14 +4460,18 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
               </span>
             </div>
-            {/* Attach-actions — things you DO to connect this event elsewhere, grouped and set apart from the facts */}
-            <div className="flex items-center gap-2 flex-wrap mb-5 pt-4 border-t border-gray-100">
-              <SeriesAttach eventId={eventId} />
-              <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || "" }} />
-              <DocLinkControl url={plan.docLink} onSave={(u) => { setPlan((p) => (p ? { ...p, docLink: u } : p)); void updateEvent(eventId, { docLink: u }); }} label="Folder" icon={<Folder className="w-4 h-4" />} placeholder="Paste Drive folder link…" />
-              <SlackChannelControl eventId={eventId} title={plan.title} slackChannel={plan.slackChannel} onChange={() => setReload((x) => x + 1)} />
-              {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
-              {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
+            {/* Attach-actions — set apart from the facts; folder+series up top, slack+luma below */}
+            <div className="mb-5 pt-4 border-t border-gray-100 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <DocLinkControl url={plan.docLink} onSave={(u) => { setPlan((p) => (p ? { ...p, docLink: u } : p)); void updateEvent(eventId, { docLink: u }); }} label="Folder" icon={<Folder className="w-4 h-4" />} placeholder="Paste Drive folder link…" />
+                <SeriesAttach eventId={eventId} />
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <SlackChannelControl eventId={eventId} title={plan.title} slackChannel={plan.slackChannel} onChange={() => setReload((x) => x + 1)} />
+                <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || "" }} />
+                {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
+                {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
+              </div>
             </div>
           </div>
           <CoverImage
