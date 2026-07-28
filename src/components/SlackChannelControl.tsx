@@ -89,9 +89,10 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
                   <button disabled={busy} onClick={() => run(() => linkSlackChannel(eventId, { channelId: c.id }))} className="w-full text-left px-2 py-1 rounded text-sm hover:bg-gray-100">#{c.name}</button>
                 </li>
               ))}
-              {filtered.length === 0 && <li className="px-2 py-1 text-[13px] text-gray-400">No channels the bot is in.</li>}
+              {filtered.length === 0 && <li className="px-2 py-1 text-[13px] text-gray-400">No matching channels.</li>}
             </ul>
           </div>
+          <p className="text-[11px] text-gray-400 leading-snug">Don't see a private channel? <code className="text-gray-500">/invite eventhub</code> to any channel in Slack to allow pairing it, then reopen this.</p>
           {err && <p className="text-[12px] text-red-600">{err}</p>}
         </div>
       )}
