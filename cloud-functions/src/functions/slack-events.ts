@@ -7,7 +7,7 @@ import { verifySlackSignature } from '../lib/slack.js';
 import { getServiceClient } from '../db.js';
 import { fetchContext, getPermalink, postEphemeral } from '../lib/slack-api.js';
 import { extractCaptures } from './slack-extract.js';
-import { resolveEvent, contextBounds, buildCaptures, composeEphemeral, type EventRow } from './slack-capture-lib.js';
+import { resolveEvent, contextBounds, buildCaptures, composeEphemeral, matchRemovals, type EventRow } from './slack-capture-lib.js';
 
 export interface SlackEventDecision {
   status: number;
@@ -48,13 +48,13 @@ export async function handler(req: Request, res: Response) {
   // Ack within Slack's 3s window before doing any work.
   res.status(decision.status).send(decision.body);
 
-  if (ev?.reaction === 'eventhub' && ev?.item?.type === 'message') {
-    const work = ev.type === 'reaction_added' ? onReactionAdded(ev)
-      : ev.type === 'reaction_removed' ? onReactionRemoved(ev)
-      : null;
-    if (work) work.catch((e) => console.error(JSON.stringify({ fn: 'slack-events', error: String((e as Error)?.message ?? e) })));
+  // Un-react is a NO-OP (removal is ambiguous; misfires are handled by dismiss on the event page).
+  if (ev?.type === 'reaction_added' && ev?.reaction === 'eventhub' && ev?.item?.type === 'message') {
+    onReactionAdded(ev).catch((e) => console.error(JSON.stringify({ fn: 'slack-events', error: String((e as Error)?.message ?? e) })));
   }
 }
+
+const APP_URL = 'https://eventhub-licvsmaspa-uc.a.run.app';
 
 // event shape: { type:'reaction_added', user, reaction, item:{ type:'message', channel, ts, thread_ts? }, event_ts }
 async function onReactionAdded(event: any) {
@@ -69,21 +69,20 @@ async function onReactionAdded(event: any) {
 
   const raw = await fetchContext(channel, ts, event.item.thread_ts);
   const windowMsgs = contextBounds(raw, ts);
-  const proposals = await extractCaptures(ts, windowMsgs);
-  if (proposals.length === 0) { await postEphemeral(channel, reactor, `Pinned to *${target.name}*, but I couldn't pull a clear update from the thread — open it in EventHub to add one.`); return; }
+  const { captures, removals, radiusNote } = await extractCaptures(ts, windowMsgs);
 
   const permalink = await getPermalink(channel, ts);
   const { data: budgetRows } = await sb.from('budget_line').select('id').eq('event_id', target.id).limit(1);
-  const caps = buildCaptures(target, channel, ts, reactor, permalink, proposals, { budget: (budgetRows?.length ?? 0) > 0 });
+  const caps = buildCaptures(target, channel, ts, reactor, permalink, captures, { budget: (budgetRows?.length ?? 0) > 0 });
+  if (caps.length) await sb.from('slack_capture').upsert(caps, { onConflict: 'id' });
 
-  await sb.from('slack_capture').upsert(caps, { onConflict: 'id' });
-  await postEphemeral(channel, reactor, composeEphemeral(target.name ?? 'the event', caps));
-}
+  // Removals: fuzzy-match dropped things against this event's existing captures → mark dismissed.
+  if (removals.length) {
+    const { data: existing } = await sb.from('slack_capture').select('id, summary').eq('event_id', target.id).eq('status', 'proposed');
+    const ids = matchRemovals((existing ?? []) as { id: string; summary: string }[], removals);
+    if (ids.length) await sb.from('slack_capture').update({ status: 'dismissed' }).in('id', ids);
+  }
 
-// Un-react = undo: delete every capture for this pin, restoring pre-pin state (idempotent).
-async function onReactionRemoved(event: any) {
-  const channel: string = event.item.channel;
-  const ts: string = event.item.ts;
-  const sb = getServiceClient();
-  await sb.from('slack_capture').delete().eq('slack_channel', channel).eq('slack_ts', ts);
+  const url = `${APP_URL}/?event=${encodeURIComponent(target.id)}`;
+  await postEphemeral(channel, reactor, composeEphemeral(target.name ?? 'the event', url, caps, removals, radiusNote));
 }

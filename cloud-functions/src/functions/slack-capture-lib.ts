@@ -1,20 +1,26 @@
-export type CaptureType = 'note' | 'status' | 'debrief' | 'people' | 'budget' | 'vendor' | 'other';
+// One extracted planning fact routed to a single "home" on the event page.
+export type Home = 'plan' | 'person' | 'open' | 'budget';
+export const HOME_LABEL: Record<Home, string> = { plan: 'Plan', person: 'Who', open: 'Still open', budget: 'Budget' };
+// Order homes read in the ephemeral.
+const HOME_ORDER: Home[] = ['plan', 'person', 'open', 'budget'];
+
 export interface SlackMsg { ts: string; text: string; user?: string; thread_ts?: string }
 export interface EventRow { id: string; name?: string; event_date?: string | null; slack_channel?: string | null }
-export interface Proposal { type: CaptureType; payload: any; confidence?: number; contextTs?: { first: string; last: string }; ambiguity?: { question: string } }
+export interface Proposal { home: Home; summary: string; detail?: string; sourceQuote?: string; usedContext?: { first: string; last: string }; ambiguity?: string }
+export interface Removal { label: string }
 export interface StoredCapture {
-  id: string; event_id: string; slack_channel: string; slack_ts: string; type: CaptureType;
-  payload: any; status: 'proposed'; confidence: number | null; source_ref: string | null;
-  context_ts: any; flags: Record<string, unknown>; reactor_user: string | null;
+  id: string; event_id: string; slack_channel: string; slack_ts: string; home: Home;
+  summary: string; detail: string | null; status: 'proposed'; source_ref: string | null;
+  source_quote: string | null; context_ts: any; flags: Record<string, unknown>; reactor_user: string | null;
 }
 
 export const CTX_BEFORE = 20, CTX_AFTER = 5, CTX_MAX = 30, CTX_MAX_SPAN_MS = 3 * 60 * 60 * 1000;
 
-export function captureId(eventId: string, channel: string, ts: string, type: CaptureType): string {
-  return `${eventId}:${channel}:${ts}:${type}`;
+export function captureId(eventId: string, channel: string, ts: string, home: Home): string {
+  return `${eventId}:${channel}:${ts}:${home}`;
 }
 
-// Event linked to this channel; when several share it, the most recent by event_date wins.
+// Event linked to this channel; most recent by event_date when several share it.
 export function resolveEvent(events: EventRow[], channelId: string): EventRow | null {
   const linked = events.filter((e) => e.slack_channel === channelId);
   if (linked.length === 0) return null;
@@ -22,22 +28,15 @@ export function resolveEvent(events: EventRow[], channelId: string): EventRow | 
   return [...linked].sort((a, b) => String(b.event_date ?? '').localeCompare(String(a.event_date ?? '')))[0];
 }
 
-// Trim a fetched window to the cap: within CTX_MAX_SPAN_MS of the pin, at most CTX_MAX messages,
-// always keeping the pin, biased backward. Slack ts is "<epoch-seconds>.<seq>".
-export function contextBounds(msgs: SlackMsg[], pinnedTs: string, now: number = Date.now()): SlackMsg[] {
-  void now;
+// Trim a fetched window to the cap: within CTX_MAX_SPAN_MS of the pin, ≤ CTX_MAX messages, pin kept.
+export function contextBounds(msgs: SlackMsg[], pinnedTs: string): SlackMsg[] {
   const pinSec = Number(pinnedTs);
-  const withinSpan = msgs.filter((m) => Math.abs(Number(m.ts) - pinSec) * 1000 <= CTX_MAX_SPAN_MS);
-  const sorted = [...withinSpan].sort((a, b) => Number(a.ts) - Number(b.ts));
+  const inSpan = msgs.filter((m) => Math.abs(Number(m.ts) - pinSec) * 1000 <= CTX_MAX_SPAN_MS);
+  const sorted = [...inSpan].sort((a, b) => Number(a.ts) - Number(b.ts));
   if (sorted.length <= CTX_MAX) return sorted;
   const pinIdx = sorted.findIndex((m) => m.ts === pinnedTs);
   const start = Math.max(0, Math.min(pinIdx - CTX_BEFORE, sorted.length - CTX_MAX));
   return sorted.slice(start, start + CTX_MAX);
-}
-
-export function detectConflict(p: Proposal, committed: { budget?: boolean }): { field: string } | null {
-  if (p.type === 'budget' && committed.budget) return { field: 'budget' };
-  return null;
 }
 
 export function buildCaptures(
@@ -45,31 +44,51 @@ export function buildCaptures(
   sourceRef: string | null, proposals: Proposal[], committed: { budget?: boolean },
 ): StoredCapture[] {
   return proposals.map((p) => {
-    const conflict = detectConflict(p, committed);
     const flags: Record<string, unknown> = {};
     if (p.ambiguity) flags.ambiguity = p.ambiguity;
-    if (conflict) flags.conflict = conflict;
+    // Budget that would overwrite an already-settled budget stays gated (surfaced, never auto-applied).
+    if (p.home === 'budget' && committed.budget) flags.conflict = { field: 'budget' };
     return {
-      id: captureId(event.id, channel, pinnedTs, p.type),
-      event_id: event.id, slack_channel: channel, slack_ts: pinnedTs, type: p.type,
-      payload: p.payload, status: 'proposed' as const, confidence: p.confidence ?? null,
-      source_ref: sourceRef, context_ts: p.contextTs ?? null, flags, reactor_user: reactor,
+      id: captureId(event.id, channel, pinnedTs, p.home),
+      event_id: event.id, slack_channel: channel, slack_ts: pinnedTs, home: p.home,
+      summary: p.summary, detail: p.detail ?? null, status: 'proposed' as const,
+      source_ref: sourceRef, source_quote: p.sourceQuote ?? null, context_ts: p.usedContext ?? null,
+      flags, reactor_user: reactor,
     };
   });
 }
 
-export function composeEphemeral(eventName: string, caps: StoredCapture[]): string {
-  const lines = [`Captured to *${eventName}* (proposed — edit or dismiss in EventHub):`];
-  for (const c of caps) {
-    lines.push(`• ${c.type}: ${summarize(c.payload)}`);
-    const f = c.flags as any;
-    if (f.ambiguity?.question) lines.push(`   ↳ ${f.ambiguity.question}`);
-    if (f.conflict?.field) lines.push(`   ↳ ${f.conflict.field} already set — landed as proposed, won't overwrite.`);
+// ≤6-line reactor-only summary, grouped by home so a misroute is spottable at a glance.
+export function composeEphemeral(eventName: string, eventUrl: string, caps: StoredCapture[], removals: Removal[], radiusNote?: string): string {
+  if (caps.length === 0 && removals.length === 0) {
+    return `✦ Nothing to capture from that one. Pin a message where something's decided or asked for.`;
   }
+  const lines = [`✦ Captured to *${eventName}* — proposed. Review in EventHub.`];
+  for (const home of HOME_ORDER) {
+    const group = caps.filter((c) => c.home === home);
+    if (!group.length) continue;
+    const flagged = group.some((c) => (c.flags as any).conflict || (c.flags as any).ambiguity);
+    const count = flagged ? 'flagged' : `+${group.length}`;
+    const labels = group.map((c) => c.summary).join('; ');
+    lines.push(`   ${HOME_LABEL[home].padEnd(11)}${count.padEnd(9)}${labels}`);
+  }
+  if (removals.length) lines.push(`   ↳ dropped: ${removals.map((r) => r.label).join(', ')}`);
+  if (radiusNote) lines.push(`   ${radiusNote}`);
+  const amb = caps.map((c) => (c.flags as any).ambiguity).filter(Boolean);
+  if (amb.length) lines.push(`   ⚠ wasn't sure: ${amb.join('; ')}`);
+  lines.push(`   <${eventUrl}|Open ${eventName} in EventHub →>`);
   return lines.join('\n');
 }
 
-function summarize(payload: any): string {
-  if (payload?.text) return String(payload.text).slice(0, 80);
-  return Object.entries(payload ?? {}).map(([k, v]) => `${k}=${v}`).join(', ').slice(0, 80);
+// Fuzzy-match dropped labels against existing capture summaries → the ids to dismiss. No match → skip.
+export function matchRemovals(existing: { id: string; summary: string }[], removals: Removal[]): string[] {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+  const out: string[] = [];
+  for (const r of removals) {
+    const rw = norm(r.label);
+    if (!rw.length) continue;
+    const hit = existing.find((e) => { const ew = new Set(norm(e.summary)); return rw.some((w) => ew.has(w)); });
+    if (hit) out.push(hit.id);
+  }
+  return out;
 }

@@ -1,40 +1,60 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { SlackMsg, Proposal } from './slack-capture-lib.js';
+import type { SlackMsg, Proposal, Removal, Home } from './slack-capture-lib.js';
 
-// Anthropic strict json_schema: every object needs additionalProperties:false and all keys in
-// `required`. So payload is a stringified JSON object (parsed back below) and ambiguity is a
-// nullable string — avoids an open-ended object the strict validator rejects.
+// Anthropic strict json_schema: every object needs additionalProperties:false and all keys required;
+// optionals are nullable / empty-string instead. detail/sourceQuote use "" for none; ambiguity + radiusNote null.
 const SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
-    proposals: {
+    captures: {
       type: 'array',
       items: {
         type: 'object', additionalProperties: false,
         properties: {
-          type: { enum: ['note', 'status', 'debrief', 'people', 'budget', 'vendor', 'other'] },
-          payload: { type: 'string', description: 'a JSON object (stringified) with the fields for this type, e.g. {"text":"..."} or {"category":"venue","amount":4000}' },
-          confidence: { type: 'number' },
-          contextTs: { type: 'object', additionalProperties: false, properties: { first: { type: 'string' }, last: { type: 'string' } }, required: ['first', 'last'] },
-          ambiguity: { type: ['string', 'null'], description: 'a one-line "which did you mean?" question if the value is genuinely ambiguous, else null' },
+          home: { enum: ['plan', 'person', 'open', 'budget'] },
+          summary: { type: 'string', description: 'short human label, e.g. "pre-pour wine", "Thurman (bar)"' },
+          detail: { type: 'string', description: 'a bit more context, or "" ' },
+          sourceQuote: { type: 'string', description: 'the exact phrase from the message, or ""' },
+          usedContext: { type: 'object', additionalProperties: false, properties: { first: { type: 'string' }, last: { type: 'string' } }, required: ['first', 'last'] },
+          ambiguity: { type: ['string', 'null'], description: 'a one-line "which did you mean?" if genuinely unclear, else null' },
         },
-        required: ['type', 'payload', 'confidence', 'contextTs', 'ambiguity'],
+        required: ['home', 'summary', 'detail', 'sourceQuote', 'usedContext', 'ambiguity'],
       },
     },
+    removals: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' } }, required: ['label'] },
+    },
+    radiusNote: { type: ['string', 'null'], description: 'e.g. "read 3 messages around your pin to get the cost" when context was needed, else null' },
   },
-  required: ['proposals'],
+  required: ['captures', 'removals', 'radiusNote'],
 };
 
-const SYSTEM = `You extract EventHub updates from a Slack conversation. One message is marked <PINNED>. \
-Only consider messages that are part of the SAME conversation/decision as the pinned one — treat unrelated chatter as noise. \
-If the window clearly spans two distinct topics, extract only the one containing the pin. \
-Return 0..n proposals. Each proposal: type ∈ note|status|debrief|people|budget|vendor|other, a payload with the fields for that type \
-(note {text}; status {target,name,status}; people {name,org?,lens?,why?}; budget {category,vendor?,amount?,note?}; vendor {category,vendor,link?,note?}; other {text}), \
-a confidence 0..1, contextTs {first,last} = the ts range of messages you actually used, and ambiguity {question} only if the value's meaning is genuinely unclear (e.g. a bare number that could be budget or venue cost). No preamble.`;
+const SYSTEM = `You extract event-planning facts from a Slack conversation for EventHub. One message is marked <PINNED>.
+Read the surrounding messages to interpret the pin, but only treat messages that are part of the SAME decision/topic as the pin as relevant — ignore unrelated chatter. If the window spans two unrelated decisions, extract only the one containing the pin; do not merge.
 
-export async function extractCaptures(pinnedTs: string, msgs: SlackMsg[]): Promise<Proposal[]> {
+Route each thing you find into exactly ONE home:
+- plan   — a DECIDED flow/format/choice ("jazz then a singer", "playlist not a DJ", "pre-pour wine").
+- person — a specific person with a role ("Doug performs", "Thurman on bar").
+- open   — anything TENTATIVE/conditional ("maybe a mural", "robot dog if cost works") OR a to-do/thing to chase ("get quotes", "cost for Karim").
+- budget — a stated cost figure or budget decision ("$1,200", "aiming ~$14k").
+
+Hard rules:
+- Tentative language (potentially / if / depending / might / need a quote for) → home "open", never plan/person/budget.
+- There is NO vendor home. A supplier is either a "plan" decision (we're using them) or an "open" item (getting a quote).
+- Prefer FEWER real captures over enumerating every mention. Skip small talk.
+- NEVER fabricate a value/name/cost/role that wasn't stated (don't turn "work the crowd" into "magician").
+- When a later message supersedes an earlier one, capture only the latest state.
+- Something dropped/cancelled ("mural fell through") → a removals[] entry (a short label of what was dropped), NOT a capture.
+- summary = a short human label (no field syntax). detail = a little more or "". sourceQuote = the phrase, or "". usedContext = the ts range you actually read. ambiguity = a one-line question only if genuinely unclear, else null.
+- radiusNote: a short "read N messages around your pin to …" only when you needed context beyond the pin; else null.
+No preamble.`;
+
+export interface Extraction { captures: Proposal[]; removals: Removal[]; radiusNote?: string }
+
+export async function extractCaptures(pinnedTs: string, msgs: SlackMsg[]): Promise<Extraction> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return [];
+  if (!apiKey) return { captures: [], removals: [] };
   const transcript = msgs.map((m) => `${m.ts === pinnedTs ? '<PINNED> ' : ''}[${m.ts}] ${m.user ?? '?'}: ${m.text}`).join('\n');
   const client = new Anthropic({ apiKey });
   const resp = await (client.messages.create as any)({
@@ -45,18 +65,21 @@ export async function extractCaptures(pinnedTs: string, msgs: SlackMsg[]): Promi
     output_config: { format: { type: 'json_schema', schema: SCHEMA } },
   });
   const textBlock = (resp.content as any[]).find((b: any) => b.type === 'text');
-  if (!textBlock) return [];
+  if (!textBlock) return { captures: [], removals: [] };
   try {
-    const raw = (JSON.parse(textBlock.text).proposals ?? []) as any[];
-    // Unpack the stringified payload; map the nullable ambiguity string to { question }.
-    return raw.map((p) => {
-      let payload: any;
-      try { payload = typeof p.payload === 'string' ? JSON.parse(p.payload) : p.payload; }
-      catch { payload = { text: String(p.payload ?? '') }; }
-      return {
-        type: p.type, payload, confidence: p.confidence, contextTs: p.contextTs,
-        ambiguity: typeof p.ambiguity === 'string' && p.ambiguity.trim() ? { question: p.ambiguity } : undefined,
-      } as Proposal;
-    });
-  } catch { console.error(JSON.stringify({ fn: 'slack-extract', error: 'invalid json', raw: textBlock.text })); return []; }
+    const j = JSON.parse(textBlock.text);
+    const captures: Proposal[] = (j.captures ?? []).map((c: any) => ({
+      home: c.home as Home,
+      summary: String(c.summary ?? '').trim(),
+      detail: c.detail ? String(c.detail) : undefined,
+      sourceQuote: c.sourceQuote ? String(c.sourceQuote) : undefined,
+      usedContext: c.usedContext ?? undefined,
+      ambiguity: typeof c.ambiguity === 'string' && c.ambiguity.trim() ? c.ambiguity : undefined,
+    })).filter((c: Proposal) => c.summary);
+    const removals: Removal[] = (j.removals ?? []).map((r: any) => ({ label: String(r.label ?? '').trim() })).filter((r: Removal) => r.label);
+    return { captures, removals, radiusNote: typeof j.radiusNote === 'string' && j.radiusNote.trim() ? j.radiusNote : undefined };
+  } catch {
+    console.error(JSON.stringify({ fn: 'slack-extract', error: 'invalid json', raw: textBlock.text }));
+    return { captures: [], removals: [] };
+  }
 }
