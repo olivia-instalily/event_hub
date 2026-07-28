@@ -39,8 +39,9 @@ import {
   getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, type SlackCapture, type CaptureHome,
+  listSlackCaptures, confirmSlackCapture, addBudgetLineForEvent, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
+import { parseMoney, parsePersonRole } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
@@ -3812,6 +3813,23 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   useEffect(() => { reloadCaptures(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [eventId]);
   const capByHome = (h: CaptureHome) => captures.filter((c) => c.home === h);
 
+  // Confirming promotes a capture into the settled record for its home, then marks it confirmed so it
+  // graduates out of the proposed list: budget → a budget line (a captured figure is a quote);
+  // person → a staff role + assignment. open/plan have no structured target yet, so confirm just
+  // accepts them (they clear from the list; wiring open→plan/deliverable is the next pass).
+  const promoteAndConfirm = async (c: SlackCapture) => {
+    if (c.home === "budget") {
+      await addBudgetLineForEvent(eventId, c.summary, parseMoney(c.detail) ?? parseMoney(c.summary));
+    } else if (c.home === "person") {
+      const { name, role } = parsePersonRole(c.summary);
+      if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
+      if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
+    }
+    await confirmSlackCapture(c.id);
+    reloadCaptures();
+    onApplied();
+  };
+
   // The active planning home gets the composed layout; the phase views keep the classic body.
   const planningActive = !locked && selectedView === "planning";
 
@@ -3954,7 +3972,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {/* Top slot goes to whatever's most useful now: anything open → Open·next-up leads and the
               summary sits under it; nothing open → the summary takes the slot and Open is not shown. */}
           {anythingOpen && (
-            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={openCaptures} onCaptureChange={reloadCaptures} />
+            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={openCaptures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} />
           )}
 
           <WhereThingsStand bullets={summaryBullets} fallback={synthDigest} onRefresh={resync} refreshing={resyncing} note={resyncMsg} />
@@ -3964,10 +3982,10 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           <div className="grid grid-cols-2 gap-6 items-start">
             <div className="space-y-3 min-w-0">
               <BudgetCard plan={plan} onOpenBudget={onOpenBudget} onSetTarget={() => { onOpenBudget(); reviewBudgetField(); }} />
-              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} />)}
+              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} />)}
             </div>
             <div className="space-y-3 min-w-0">
-              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} />)}
+              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} />)}
               <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} />
             </div>
           </div>
@@ -3995,12 +4013,13 @@ void [LinearUpdateBox, OverviewDeliverables, AutoUpdates, GlanceTile, CarriedLes
 //   Setup — key event fields still unset (date, headcount, owners, budget). 2-col.
 //   Needs confirmation — Slack-captured tentative decisions to resolve (confirm / edit / dismiss).
 // Yields the top slot entirely (renders nothing) when both groups are empty.
-function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange }: {
+function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture }: {
   setupFlags: SetupFlagKey[];
   setupMeta: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }>;
   onDismissSetup: (key: SetupFlagKey) => void;
   captures: SlackCapture[];
   onCaptureChange: () => void;
+  onConfirmCapture: (c: SlackCapture) => Promise<void>;
 }) {
   if (setupFlags.length === 0 && captures.length === 0) return null;
   return (
@@ -4039,7 +4058,7 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
         <div>
           <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">Needs confirmation</p>
           <div className="space-y-2">
-            {captures.map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} />)}
+            {captures.map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} />)}
           </div>
         </div>
       )}
@@ -4514,7 +4533,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
               <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
               <button id="hlf-headcount" onClick={() => goPeople('all')} className="flex items-center gap-1.5 hover:text-gray-900 text-left">
-                <Users className="w-4 h-4" /><span className={headcount === "—" ? "text-gray-400" : ""}>{headcount === "—" ? "expected" : headcount}</span>
+                <Users className="w-4 h-4" /><span className={headcount === "—" ? "text-gray-400" : ""}>{headcount === "—" ? "Expected" : headcount}</span>
               </button>
               <SpeakerField eventId={eventId} />
             </div>

@@ -5,7 +5,7 @@ import { confirmSlackCapture, dismissSlackCapture, editSlackCapture, type SlackC
 // A single proposed Slack capture, engageable in place: confirm / edit / dismiss, with a link back
 // to the source message. Rendered wherever a capture lands (Open·next-up, Budget, Staffing) so the
 // "from Slack, not yet accepted" treatment is identical everywhere. Violet = proposed-from-Slack.
-export function SlackCaptureCard({ capture, onChange }: { capture: SlackCapture; onChange: () => void }) {
+export function SlackCaptureCard({ capture, onChange, onConfirm }: { capture: SlackCapture; onChange: () => void; onConfirm?: (capture: SlackCapture) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [summary, setSummary] = useState(capture.summary);
   const [detail, setDetail] = useState(capture.detail ?? "");
@@ -61,7 +61,7 @@ export function SlackCaptureCard({ capture, onChange }: { capture: SlackCapture;
               </>
             ) : (
               <>
-                <button onClick={() => run(() => confirmSlackCapture(capture.id))} disabled={busy} className="inline-flex items-center gap-1 font-medium text-violet-700 hover:text-violet-800 disabled:opacity-50">
+                <button onClick={() => run(() => (onConfirm ? onConfirm(capture) : confirmSlackCapture(capture.id)))} disabled={busy} className="inline-flex items-center gap-1 font-medium text-violet-700 hover:text-violet-800 disabled:opacity-50">
                   <Check className="w-3 h-3" /> confirm
                 </button>
                 <button onClick={() => setEditing(true)} disabled={busy} className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700 disabled:opacity-50">

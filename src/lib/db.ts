@@ -2060,6 +2060,24 @@ export async function listSlackCaptures(eventId: string): Promise<SlackCapture[]
   }));
 }
 
+/** Promote a confirmed budget capture: ensure the event has a budget row, then add the figure as a
+ *  single line. A captured figure is a quote (not a paid actual), so status is 'quoted' when there's
+ *  an amount, else a bare 'estimate' placeholder line. */
+export async function addBudgetLineForEvent(eventId: string, label: string, amount: number | null): Promise<void> {
+  const { data } = await supabase.from('budget').select('id').eq('event_id', eventId).limit(1);
+  let budgetId = data?.[0]?.id as string | undefined;
+  if (!budgetId) {
+    budgetId = genId('bud');
+    const { error } = await supabase.from('budget').insert({ id: budgetId, event_id: eventId, currency: 'USD' });
+    if (error) throw new Error(error.message);
+  }
+  const { error } = await supabase.from('budget_line').insert({
+    id: genId('bl'), budget_id: budgetId, label, confirmed_amount: amount,
+    payment_status: amount != null ? 'quoted' : 'estimate',
+  });
+  if (error) throw new Error(error.message);
+}
+
 /** Accept a proposed capture (it graduates out of the proposed list into its home's settled state). */
 export async function confirmSlackCapture(id: string): Promise<void> {
   const { error } = await supabase.from('slack_capture').update({ status: 'confirmed' }).eq('id', id);
