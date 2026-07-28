@@ -50,6 +50,12 @@ export function LinearLauncher({ eventId, linearSynced = false, onApplied }: { e
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<Entry[]>([]); // persists across close/reopen (component stays mounted)
   const [pending, setPending] = useState<Pending | null>(null);
+  // Before the event has a Linear project, the launcher leads with a "Sync to Linear" area instead
+  // of the free-text command surface (commands need a linked project to be meaningful).
+  const [synced, setSynced] = useState(linearSynced);
+  const [syncing, setSyncing] = useState(false);
+  const [syncErr, setSyncErr] = useState<string | null>(null);
+  useEffect(() => { setSynced(linearSynced); }, [linearSynced]);
 
   const reduced = useRef(typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -167,6 +173,17 @@ export function LinearLauncher({ eventId, linearSynced = false, onApplied }: { e
   };
   const cancelPending = () => { setPending(null); push({ role: "result", text: "Cancelled — nothing changed." }); };
 
+  const syncNow = async () => {
+    setSyncing(true); setSyncErr(null);
+    try {
+      const res = await syncEventToLinear(eventId);
+      setSynced(true);
+      push({ role: "result", text: `Synced ${res.synced} ${res.synced === 1 ? "issue" : "issues"} to Linear` });
+      onApplied?.();
+    } catch (e: any) { setSyncErr(e?.message ?? String(e)); }
+    finally { setSyncing(false); }
+  };
+
   // ── Morph shell ──────────────────────────────────────────────────────────
   // ONE element that transitions size / shape / position: corner circle ⇆ centered window. top/left are
   // set in BOTH states (auto isn't animatable) so the bubble visibly travels to the center.
@@ -206,6 +223,18 @@ export function LinearLauncher({ eventId, linearSynced = false, onApplied }: { e
 
           {/* Command log — a compact strip that appears only once there's history; capped so the
               instruction field stays the main surface. Scrolls to the latest entry. */}
+          {!synced ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-6 gap-3">
+              <Activity className="w-8 h-8 text-purple-600" />
+              <p className="text-sm text-gray-700">This event isn’t linked to Linear yet.</p>
+              <p className="text-[13px] text-gray-400">Sync to create its Linear project and push deliverables as issues — then run commands here.</p>
+              <button onClick={syncNow} disabled={syncing} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 text-white text-sm hover:bg-purple-700 disabled:opacity-50">
+                {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />} Sync to Linear
+              </button>
+              {syncErr && <p className="text-[13px] text-red-600">{syncErr}</p>}
+            </div>
+          ) : (
+          <>
           {(log.length > 0 || pending) && (
             <div className="shrink-0 max-h-[45%] overflow-y-auto px-4 py-2.5 space-y-2 border-b border-border bg-gray-50/60">
               {log.map((e, i) => (
@@ -258,6 +287,8 @@ export function LinearLauncher({ eventId, linearSynced = false, onApplied }: { e
               {busy && !pending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
+          </>
+          )}
         </div>
       </div>
     </>
