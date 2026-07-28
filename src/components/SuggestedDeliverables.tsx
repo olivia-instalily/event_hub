@@ -54,13 +54,27 @@ export function SuggestedDeliverables({
     onApplied();
   };
 
+  const addAll = async () => {
+    const created = await Promise.all(
+      suggestions.map((s) => addDeliverable(eventId, { title: s.title, phase: s.phase, ownerRole: null, dueDate: guessDue(s.title) })),
+    );
+    setItems((p) => [...p, ...created]);
+    onApplied();
+  };
+
   if (suggestions.length === 0) return null;
 
   return (
     <div className="bg-white rounded-2xl border border-border p-5">
-      <h3 className="text-sm font-semibold text-gray-800 mb-3">
-        Suggested deliverables
-      </h3>
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <h3 className="text-sm font-semibold text-gray-800">Suggested deliverables</h3>
+        <button
+          onClick={addAll}
+          className="inline-flex items-center gap-1 px-2 py-1 text-[15px] bg-gray-900 text-white rounded hover:bg-black shrink-0"
+        >
+          <Plus className="w-3.5 h-3.5" /> Add all
+        </button>
+      </div>
 
       {!plan.date && (
         <button
