@@ -534,8 +534,9 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
   const shift = (delta: number) => setCursor((c) => { const d = new Date(c.y, c.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
   const monthLabel = first.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
-  const NUM_H = 22;  // date-number space at the top of each week row
-  const LANE_H = 20; // vertical pitch per chip lane
+  const NUM_H = 22;      // date-number space at the top of each week row
+  const LANE_H = 20;     // vertical pitch per chip lane
+  const MIN_ROW_H = 112; // keep day blocks square-ish; rows grow beyond this only when packed with lanes
   const pct = (n: number) => `${(n / 7) * 100}%`;
 
   return (
@@ -557,7 +558,7 @@ export function CalendarView({ events, onOpen, jump, footerRight }: { events: Ev
         {Array.from({ length: layout.weekCount }, (_, w) => {
           const weekFrags = layout.fragments.filter((f) => f.rowIndex === w);
           const laneCount = weekFrags.reduce((m, f) => Math.max(m, f.lane + 1), 0);
-          const rowH = NUM_H + Math.max(laneCount, 1) * LANE_H + 4;
+          const rowH = Math.max(MIN_ROW_H, NUM_H + Math.max(laneCount, 1) * LANE_H + 4);
           return (
             <div key={w} className="relative bg-border" style={{ minHeight: rowH }}>
               {/* background day cells */}

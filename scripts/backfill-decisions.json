@@ -1,0 +1,25 @@
+{
+  "evt-luma-DhpSnfOVHFSncEC": {
+    "action": "link",
+    "note": "SRS 2025 — link coord candidate, create on primary",
+    "links": { "c_fad28a2710da5efc5126158eae561ee3107d4afc395bbc595f051f0117a1d0fd@group.calendar.google.com": "3mt8edoiv7tf20212ne5r31odi" }
+  },
+  "evt-luma-CN7NXqcCtymTcO3": {
+    "action": "link",
+    "note": "PE Ops Rooftop HH — link coord candidate (no rename), create on primary",
+    "links": { "c_fad28a2710da5efc5126158eae561ee3107d4afc395bbc595f051f0117a1d0fd@group.calendar.google.com": "5a2nm1mvn3hatjtf0idnpdvk75" }
+  },
+  "evt-fd9b0316-69b7-4fe3-be95-83e0df2dc3af": {
+    "action": "link",
+    "note": "Toronto Hackathon Pt 2 — link both calendars",
+    "links": {
+      "primary": "5npm0107aqqk9idouj231hmmck",
+      "c_fad28a2710da5efc5126158eae561ee3107d4afc395bbc595f051f0117a1d0fd@group.calendar.google.com": "5npm0107aqqk9idouj231hmmck"
+    }
+  },
+  "evt-80584ff8-efe5-4561-b683-57cba5a6c224": {
+    "action": "link",
+    "note": "Bain BUILD — trust gcal, link primary candidate, create on coord",
+    "links": { "primary": "6392cosjj218gj1j02c8u9opu8" }
+  }
+}
