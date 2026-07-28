@@ -14,23 +14,28 @@ const cors = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
-async function listBotChannels(token: string): Promise<{ id: string; name: string }[]> {
-  const out: { id: string; name: string }[] = [];
+async function paginate(token: string, method: string, params: Record<string, string>, onPage: (channels: any[]) => void): Promise<void> {
   let cursor: string | undefined;
   do {
-    const url = new URL('https://slack.com/api/users.conversations');
-    url.searchParams.set('types', 'public_channel,private_channel');
-    url.searchParams.set('exclude_archived', 'true');
+    const url = new URL(`https://slack.com/api/${method}`);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set('limit', '200');
     if (cursor) url.searchParams.set('cursor', cursor);
     const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
     const data = await r.json();
     if (!data.ok) throw new Error(`Slack: ${data.error ?? 'unknown error'}`);
-    for (const c of data.channels ?? []) out.push({ id: c.id as string, name: c.name as string });
+    onPage(data.channels ?? []);
     cursor = data.response_metadata?.next_cursor || undefined;
   } while (cursor);
-  out.sort((a, b) => a.name.localeCompare(b.name));
-  return out;
+}
+
+async function listChannels(token: string): Promise<{ id: string; name: string; isMember: boolean }[]> {
+  const out = new Map<string, { id: string; name: string; isMember: boolean }>();
+  await paginate(token, 'conversations.list', { types: 'public_channel', exclude_archived: 'true' },
+    (chs) => { for (const c of chs) out.set(c.id, { id: c.id, name: c.name, isMember: !!c.is_member }); });
+  await paginate(token, 'users.conversations', { types: 'private_channel', exclude_archived: 'true' },
+    (chs) => { for (const c of chs) out.set(c.id, { id: c.id, name: c.name, isMember: true }); });
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 Deno.serve(async (req) => {
@@ -39,7 +44,7 @@ Deno.serve(async (req) => {
   try {
     const token = Deno.env.get('SLACK_BOT_TOKEN');
     if (!token) return json({ error: 'SLACK_BOT_TOKEN not configured on the server.' }, 500);
-    const channels = await listBotChannels(token);
+    const channels = await listChannels(token);
     return json({ ok: true, channels });
   } catch (e) {
     console.error(JSON.stringify({ fn: 'slack-channels', error: String((e as Error)?.message ?? e) }));

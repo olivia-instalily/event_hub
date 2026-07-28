@@ -45,6 +45,14 @@ export async function handler(req: Request, res: Response) {
         const inv = await slackPost('conversations.invite', { channel: id, users: users.join(',') });
         if (!inv.ok) console.error(JSON.stringify({ fn: 'slack-link-channel', op: 'invite', error: inv.error }));
       }
+    } else if (id) {
+      // Linking an EXISTING channel → make sure the bot is a member so it receives events.
+      // Public channels: the bot self-joins. Private channels it isn't in: can't self-join → ask for an invite.
+      const j = await slackPost('conversations.join', { channel: id });
+      if (!j.ok && j.error !== 'already_in_channel') {
+        res.status(400).json({ error: j.error === 'method_not_supported_for_channel_type' ? 'private_needs_invite' : (j.error ?? 'join failed') });
+        return;
+      }
     }
 
     // Set (or clear) the link with the service role.

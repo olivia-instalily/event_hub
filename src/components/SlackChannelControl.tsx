@@ -43,7 +43,11 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
       if (r && "skipped" in r && r.skipped?.length) alert(`Couldn't add to Slack (not found by email): ${r.skipped.join(", ")}`);
     } catch (e) {
       const m = (e as Error).message;
-      setErr(m === "name_taken" ? "That channel name is taken — try another." : m);
+      setErr(
+        m === "name_taken" ? "That channel name is taken — try another."
+        : m === "private_needs_invite" ? "That's a private channel — invite the bot to it in Slack first, then pick it."
+        : m,
+      );
     } finally { setBusy(false); }
   };
 
