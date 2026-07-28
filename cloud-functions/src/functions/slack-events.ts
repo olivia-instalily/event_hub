@@ -70,6 +70,8 @@ async function onReactionAdded(event: any) {
   const raw = await fetchContext(channel, ts, event.item.thread_ts);
   const windowMsgs = contextBounds(raw, ts);
   const { captures, removals, radiusNote } = await extractCaptures(ts, windowMsgs);
+  // Diagnostic: what the extraction actually produced (empty result here = the miss to investigate).
+  console.log(JSON.stringify({ fn: 'slack-events', op: 'extracted', event_id: target.id, window: windowMsgs.length, captures: captures.length, homes: captures.map((c) => c.home), removals: removals.length }));
 
   const permalink = await getPermalink(channel, ts);
   const { data: budgetRows } = await sb.from('budget_line').select('id').eq('event_id', target.id).limit(1);

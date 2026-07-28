@@ -3819,7 +3819,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // accepts them (they clear from the list; wiring open→plan/deliverable is the next pass).
   const promoteAndConfirm = async (c: SlackCapture) => {
     if (c.home === "budget") {
-      await addBudgetLineForEvent(eventId, c.summary, parseMoney(c.detail) ?? parseMoney(c.summary));
+      // The figure may sit in detail, summary, or (older captures) only the source quote.
+      await addBudgetLineForEvent(eventId, c.summary, parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote));
     } else if (c.home === "person") {
       const { name, role } = parsePersonRole(c.summary);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);

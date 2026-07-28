@@ -48,6 +48,7 @@ Hard rules:
 - When a later message supersedes an earlier one, capture only the latest state.
 - Something dropped/cancelled ("mural fell through") → a removals[] entry (a short label of what was dropped), NOT a capture.
 - summary = a short human label (no field syntax). detail = a little more or "". sourceQuote = the phrase, or "". usedContext = the ts range you actually read. ambiguity = a one-line question only if genuinely unclear, else null.
+- BUDGET captures MUST carry the actual figure in the summary or detail — e.g. summary "Robot dog rental", detail "$1,200 for the night". Never leave the dollar amount only in sourceQuote; if the figure isn't in summary/detail it can't be tracked.
 - radiusNote: a short "read N messages around your pin to …" only when you needed context beyond the pin; else null.
 No preamble.`;
 
