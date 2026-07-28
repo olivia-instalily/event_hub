@@ -297,7 +297,9 @@ function LumaResync({ eventId, onDone }: { eventId: string; onDone: () => void }
 // automatically based on the event date (not clickable).
 const MANUAL_STAGES = 2; // indices 0,1 are self-determined
 
-function MacroStepper({ eventId, initial, eventDate }: { eventId: string; initial: string | null; eventDate: string | null }) {
+// Kept (exported so it's not flagged unused) — the Concept…Wrap rail was removed from the header
+// "for now"; re-mount it when we want the phase timeline back.
+export function MacroStepper({ eventId, initial, eventDate }: { eventId: string; initial: string | null; eventDate: string | null }) {
   const [stage, setStage] = useState(initial);
 
   // Time-derived stage from the date: past → Wrap, day-of → Live, within a week →
@@ -4405,10 +4407,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             {/* Tier 1 — identity: title + status read as what the event IS */}
             <div className="mb-4 flex items-start gap-3 flex-wrap">
               <EditableTitle value={plan.title} onChange={(name) => { setPlan((p) => (p ? { ...p, title: name } : p)); void updateEvent(eventId, { name }); }} className="text-3xl" />
-              <div className="mt-1"><StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} /></div>
+              <div className="mt-1"><StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} showLabel={false} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} /></div>
             </div>
             {/* Tier 2 — core facts (what/when/where); empty fields stay as their own faint prompts */}
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3 text-gray-600">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3 text-sm text-gray-600">
               <div id="hlf-date" className="flex items-center gap-2">
                 {!plan.lumaEventId ? (
                   <span className="inline-flex items-center gap-1.5">
@@ -4436,7 +4438,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
               </button>
               <label id="hlf-headcount" className="flex items-center gap-1.5 text-sm text-gray-500">
-                <span className="text-xs text-gray-400 whitespace-nowrap">expected</span>
+                <span className="text-sm text-gray-400 whitespace-nowrap">expected</span>
                 <input
                   type="number"
                   min={0}
@@ -4468,11 +4470,6 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
               {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
             </div>
-            {/* Phase rail on its own line; Sync to Linear (a phase-level action) at the far end */}
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <MacroStepper eventId={eventId} initial={plan.macroStage} eventDate={plan.date} />
-              <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} onSynced={() => setReload((x) => x + 1)} />
-            </div>
           </div>
           <CoverImage
             eventId={eventId}
@@ -4484,6 +4481,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             onPosition={(coverPosition) => setPlan((p) => (p ? { ...p, coverPosition } : p))}
           />
         </div>
+        <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} className="absolute bottom-4 right-6" onSynced={() => setReload((x) => x + 1)} />
       </div>
 
       {wrapped && !reopened ? (

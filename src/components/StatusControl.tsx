@@ -11,11 +11,12 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
  * Shows what an event is marked as and lets it change. Moving to Past is blocked
  * while today is still before the event date (can't end an event early).
  */
-export function StatusControl({ eventId, status, eventDate, onChange }: {
+export function StatusControl({ eventId, status, eventDate, onChange, showLabel = true }: {
   eventId: string;
   status: EventStatus;
   eventDate: string | null;
   onChange?: (s: EventStatus) => void;
+  showLabel?: boolean;
 }) {
   const [cur, setCur] = useState<EventStatus>(status);
   const [open, setOpen] = useState(false);
@@ -32,7 +33,7 @@ export function StatusControl({ eventId, status, eventDate, onChange }: {
 
   return (
     <div className="relative inline-block">
-      <span className="text-[15px] text-gray-500 mr-2">Marked as</span>
+      {showLabel && <span className="text-[15px] text-gray-500 mr-2">Marked as</span>}
       <button
         onClick={() => setOpen((o) => !o)}
         className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-gray-300 text-sm hover:bg-gray-50"
