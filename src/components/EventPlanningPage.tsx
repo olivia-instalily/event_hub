@@ -3399,7 +3399,7 @@ function ReflectionSection({ plan, onApplied, incoming }: { plan: EventPlanning;
 }
 
 // Two-step budget stepper: budget target (set directly in the Budget tab) → spend tracking.
-function BudgetCard({ plan, onOpenBudget }: { plan: EventPlanning; onOpenBudget: () => void }) {
+function BudgetCard({ plan, onOpenBudget, onSetTarget }: { plan: EventPlanning; onOpenBudget: () => void; onSetTarget?: () => void }) {
   const lines = plan.budget?.lines ?? [];
   const committed = lines.filter((l) => l.status !== "estimate").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
   const target = plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null;
@@ -3415,7 +3415,7 @@ function BudgetCard({ plan, onOpenBudget }: { plan: EventPlanning; onOpenBudget:
       {target == null ? (
         // No target yet → an amber nudge, same treatment as the setup fields; links to the Budget tab.
         // Once a target exists it tracks against it, and any budget captures from Slack land below.
-        <button onClick={onOpenBudget} className="group w-full flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left hover:bg-amber-100 transition-colors">
+        <button onClick={onSetTarget ?? onOpenBudget} className="group w-full flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left hover:bg-amber-100 transition-colors">
           <DollarSign className="w-5 h-5 text-amber-700 shrink-0" />
           <span className="flex-1 min-w-0">
             <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">Set a budget target</span>
@@ -3961,9 +3961,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
           {/* Budget | Staffing — the two current-state cards, side by side. Each carries its own
               proposed Slack captures (budget / person) as engageable violet cards. */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <div className="grid grid-cols-2 gap-6 items-start">
             <div className="space-y-3 min-w-0">
-              <BudgetCard plan={plan} onOpenBudget={onOpenBudget} />
+              <BudgetCard plan={plan} onOpenBudget={onOpenBudget} onSetTarget={() => { onOpenBudget(); reviewBudgetField(); }} />
               {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} />)}
             </div>
             <div className="space-y-3 min-w-0">
