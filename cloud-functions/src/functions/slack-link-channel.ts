@@ -47,12 +47,12 @@ export async function handler(req: Request, res: Response) {
       }
     } else if (id) {
       // Linking an EXISTING channel → make sure the bot is a member so it receives events.
-      // Public channels: the bot self-joins. Private channels it isn't in: can't self-join → ask for an invite.
+      // Public channels: conversations.join adds the bot. Private channels can't be joined via the API
+      // at all (method_not_supported_for_channel_type) — but they only surface in the picker when the
+      // bot is ALREADY a member, so treat that (and already_in_channel) as fine and just link.
       const j = await slackPost('conversations.join', { channel: id });
-      if (!j.ok && j.error !== 'already_in_channel') {
-        res.status(400).json({ error: j.error === 'method_not_supported_for_channel_type' ? 'private_needs_invite' : (j.error ?? 'join failed') });
-        return;
-      }
+      const okish = j.ok || j.error === 'already_in_channel' || j.error === 'method_not_supported_for_channel_type';
+      if (!okish) { res.status(400).json({ error: j.error ?? 'join failed' }); return; }
     }
 
     // Set (or clear) the link with the service role.
