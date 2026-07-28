@@ -50,7 +50,7 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
   if (slackChannel) {
     return (
       <span className="inline-flex items-center gap-1 rounded-lg border border-gray-300 pl-2.5 pr-1.5 py-1" onClick={(e) => e.stopPropagation()}>
-        <a href={`https://slack.com/app_redirect?channel=${slackChannel}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-gray-700 hover:text-gray-900">
+        <a href={`https://slack.com/app_redirect?channel=${slackChannel}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900">
           <SlackLogo /> #{linkedName ?? "channel"}
         </a>
         <button onClick={() => run(() => unlinkSlackChannel(eventId))} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
@@ -61,8 +61,8 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
   const filtered = channels.filter((c) => c.name.includes(q.toLowerCase()));
   return (
     <div className="relative inline-block" ref={ref} onClick={(e) => e.stopPropagation()}>
-      <button onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1.5 text-sm text-gray-700 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors">
-        <SlackLogo /> Connect Slack channel
+      <button onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors">
+        <SlackLogo /> + Channel
       </button>
       {open && (
         <div className="absolute z-40 mt-1 w-72 rounded-xl border border-border bg-white shadow-xl p-3 space-y-3">

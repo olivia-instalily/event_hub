@@ -50,7 +50,7 @@ export function SeriesAttach({ eventId, seriesId, seriesName, onChanged }: {
         onClick={() => setOpen((o) => !o)}
         disabled={busy}
         title={curName ? `In series: ${curName}` : "Attach this event to a series"}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[13px] transition-colors disabled:opacity-60 ${curName ? "border-border bg-white text-gray-700 hover:bg-gray-50" : "border-dashed border-gray-300 text-gray-500 hover:bg-gray-50"}`}
+        className={`inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-2.5 py-1 text-[13px] transition-colors disabled:opacity-60 ${curName ? "bg-white text-gray-700 hover:bg-gray-50" : "text-gray-500 hover:bg-gray-50"}`}
       >
         <Layers className="w-3.5 h-3.5 shrink-0" />
         <span className="truncate max-w-[16rem]">{curName ?? "Add to series"}</span>

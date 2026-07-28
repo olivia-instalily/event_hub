@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
-  saveSetupState, setHeadcount,
+  saveSetupState,
 } from "../lib/db";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { TagStack } from "./TagStack";
@@ -261,7 +261,7 @@ function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: str
   );
   return (
     <>
-      <button onClick={() => setMode("menu")} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-700"><Link2 className="w-4 h-4" /> Attach / Create Luma</button>
+      <button onClick={() => setMode("menu")} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors"><Link2 className="w-4 h-4" /> Luma</button>
       {mode === "create" && <CreateLumaModal eventId={eventId} draft={draft} descriptions={descriptions} onClose={() => setMode("idle")} onCreated={(u) => { setUrl(u); setMode("idle"); }} />}
     </>
   );
@@ -4175,7 +4175,8 @@ function TimeRangeEditor({ eventId, startTime, endTime, onSaved }: { eventId: st
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { setS(startTime ?? ""); setE(endTime ?? ""); }, [startTime, endTime]);
+  const [expanded, setExpanded] = useState<boolean>(!!(startTime || endTime));
+  useEffect(() => { setS(startTime ?? ""); setE(endTime ?? ""); if (startTime || endTime) setExpanded(true); }, [startTime, endTime]);
   const dirty = (s || null) !== (startTime ?? null) || (e || null) !== (endTime ?? null);
   const save = async () => {
     setSaving(true); setErr(null);
@@ -4189,9 +4190,12 @@ function TimeRangeEditor({ eventId, startTime, endTime, onSaved }: { eventId: st
       setErr(ex?.message ?? String(ex));
     } finally { setSaving(false); }
   };
-  const cls = "px-1.5 py-0.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300";
+  const cls = "px-1 py-0.5 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300";
+  if (!expanded) {
+    return <button onClick={() => setExpanded(true)} className="text-sm text-gray-400 hover:text-gray-700">+ time</button>;
+  }
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="inline-flex items-center gap-1">
       <input type="time" value={s} onChange={(ev) => setS(ev.target.value)} title="Start time" className={cls} />
       <span className="text-gray-400">–</span>
       <input type="time" value={e} onChange={(ev) => setE(ev.target.value)} title="End time" className={cls} />
@@ -4420,39 +4424,23 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                         setPlan((p) => (p ? { ...p, date: iso } : p));
                         void setEventDate(eventId, iso);
                       }}
-                      placeholder="Date TBD"
+                      placeholder="Date"
                     />
                     <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                   </span>
                 ) : (
                   <>
                     <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
-                    <span>{plan.date ?? "Date TBD"}</span>
+                    <span>{plan.date ?? "Date"}</span>
                   </>
                 )}
                 <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
               </div>
               <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
               <FormatPicker value={parseFormats(plan.format)} onChange={(arr) => { const format = joinFormats(arr); setPlan((p) => (p ? { ...p, format } : p)); void setEventFormat(eventId, format); }} />
-              <button onClick={() => goPeople('all')} className="flex items-center gap-2 hover:text-gray-900 text-left">
-                <Users className="w-5 h-5" /><span className="underline decoration-dotted underline-offset-4">{headcount}</span>
+              <button id="hlf-headcount" onClick={() => goPeople('all')} className="flex items-center gap-1.5 hover:text-gray-900 text-left">
+                <Users className="w-4 h-4" /><span className="underline decoration-dotted underline-offset-4">{headcount === "—" ? "expected" : headcount}</span>
               </button>
-              <label id="hlf-headcount" className="flex items-center gap-1.5 text-sm text-gray-500">
-                <span className="text-sm text-gray-400 whitespace-nowrap">expected</span>
-                <input
-                  type="number"
-                  min={0}
-                  placeholder="—"
-                  value={plan.headcount ?? ""}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    const n = raw.trim() === "" ? null : Number(raw);
-                    setPlan((p) => (p ? { ...p, headcount: n } : p));
-                    void setHeadcount(eventId, n);
-                  }}
-                  className="w-16 bg-transparent border-b border-dashed border-gray-300 focus:border-gray-500 focus:outline-none text-sm text-gray-700 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                />
-              </label>
             </div>
             {/* Tier 3 — people (who; secondary metadata, lighter than the facts row) */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-4 text-sm text-gray-400">

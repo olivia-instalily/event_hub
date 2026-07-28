@@ -35,6 +35,6 @@ export function DocLinkControl({ url, onSave, label, icon, placeholder = "Paste 
     );
   }
   return (
-    <button onClick={() => { setInput(""); setEditing(true); }} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 border border-dashed border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors">{icon} Add {label.toLowerCase()}</button>
+    <button onClick={() => { setInput(""); setEditing(true); }} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors">{icon} Add {label.toLowerCase()}</button>
   );
 }
