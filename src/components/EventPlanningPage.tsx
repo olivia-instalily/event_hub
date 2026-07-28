@@ -4445,18 +4445,18 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 )}
               </div>
               <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
-              <FormatPicker value={parseFormats(plan.format)} onChange={(arr) => { const format = joinFormats(arr); setPlan((p) => (p ? { ...p, format } : p)); void setEventFormat(eventId, format); }} />
               <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
               <button id="hlf-headcount" onClick={() => goPeople('all')} className="flex items-center gap-1.5 hover:text-gray-900 text-left">
                 <Users className="w-4 h-4" /><span className={headcount === "—" ? "text-gray-400" : ""}>{headcount === "—" ? "expected" : headcount}</span>
               </button>
               <SpeakerField eventId={eventId} />
             </div>
-            {/* Tier 3 — owners (secondary metadata) */}
+            {/* Tier 3 — owners + format (format lives here so its hover fan-out has room and isn't clipped by the cover image) */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-4 text-sm text-gray-400">
               <span id="hlf-owners" className="inline-flex items-center rounded-md">
                 <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
               </span>
+              <FormatPicker value={parseFormats(plan.format)} onChange={(arr) => { const format = joinFormats(arr); setPlan((p) => (p ? { ...p, format } : p)); void setEventFormat(eventId, format); }} />
             </div>
             {/* Attach-actions — set apart from the facts; folder+series up top, slack+luma below */}
             <div className="mb-5 pt-4 border-t border-gray-100 space-y-2">
