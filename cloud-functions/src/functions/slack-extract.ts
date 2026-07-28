@@ -1,6 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { SlackMsg, Proposal } from './slack-capture-lib.js';
 
+// Anthropic strict json_schema: every object needs additionalProperties:false and all keys in
+// `required`. So payload is a stringified JSON object (parsed back below) and ambiguity is a
+// nullable string — avoids an open-ended object the strict validator rejects.
 const SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
@@ -10,12 +13,12 @@ const SCHEMA = {
         type: 'object', additionalProperties: false,
         properties: {
           type: { enum: ['note', 'status', 'debrief', 'people', 'budget', 'vendor', 'other'] },
-          payload: { type: 'object', description: 'fields for the type; see instructions' },
+          payload: { type: 'string', description: 'a JSON object (stringified) with the fields for this type, e.g. {"text":"..."} or {"category":"venue","amount":4000}' },
           confidence: { type: 'number' },
           contextTs: { type: 'object', additionalProperties: false, properties: { first: { type: 'string' }, last: { type: 'string' } }, required: ['first', 'last'] },
-          ambiguity: { type: ['object', 'null'], additionalProperties: false, properties: { question: { type: 'string' } } },
+          ambiguity: { type: ['string', 'null'], description: 'a one-line "which did you mean?" question if the value is genuinely ambiguous, else null' },
         },
-        required: ['type', 'payload', 'confidence', 'contextTs'],
+        required: ['type', 'payload', 'confidence', 'contextTs', 'ambiguity'],
       },
     },
   },
@@ -43,6 +46,17 @@ export async function extractCaptures(pinnedTs: string, msgs: SlackMsg[]): Promi
   });
   const textBlock = (resp.content as any[]).find((b: any) => b.type === 'text');
   if (!textBlock) return [];
-  try { return (JSON.parse(textBlock.text).proposals ?? []) as Proposal[]; }
-  catch { console.error(JSON.stringify({ fn: 'slack-extract', error: 'invalid json', raw: textBlock.text })); return []; }
+  try {
+    const raw = (JSON.parse(textBlock.text).proposals ?? []) as any[];
+    // Unpack the stringified payload; map the nullable ambiguity string to { question }.
+    return raw.map((p) => {
+      let payload: any;
+      try { payload = typeof p.payload === 'string' ? JSON.parse(p.payload) : p.payload; }
+      catch { payload = { text: String(p.payload ?? '') }; }
+      return {
+        type: p.type, payload, confidence: p.confidence, contextTs: p.contextTs,
+        ambiguity: typeof p.ambiguity === 'string' && p.ambiguity.trim() ? { question: p.ambiguity } : undefined,
+      } as Proposal;
+    });
+  } catch { console.error(JSON.stringify({ fn: 'slack-extract', error: 'invalid json', raw: textBlock.text })); return []; }
 }
