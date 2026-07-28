@@ -46,6 +46,8 @@ export async function handler(req: Request, res: Response) {
   res.status(decision.status).send(decision.body);
 
   const ev = decision.event;
+  // Diagnostic: surface what Slack actually sent so an emoji-name/type mismatch is visible in logs.
+  if (ev) console.log(JSON.stringify({ fn: 'slack-events', op: 'event', type: ev.type, reaction: ev.reaction, item: ev.item?.type, channel: ev.item?.channel }));
   if (ev?.reaction === 'eventhub' && ev?.item?.type === 'message') {
     const work = ev.type === 'reaction_added' ? onReactionAdded(ev)
       : ev.type === 'reaction_removed' ? onReactionRemoved(ev)
