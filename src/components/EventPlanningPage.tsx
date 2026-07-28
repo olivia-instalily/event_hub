@@ -41,7 +41,7 @@ import {
   saveSetupState,
   listSlackCaptures, confirmSlackCapture, addBudgetLineForEvent, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
-import { parseMoney, parsePersonRole } from "../lib/capturePromote";
+import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
@@ -857,7 +857,6 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
 const BUDGET_STATUS_META: Record<BudgetStatus, { label: string; badge: string; ring: string }> = {
   estimate:  { label: "Estimate",  badge: "bg-gray-100 text-gray-600",   ring: "ring-gray-300" },
   quoted:    { label: "Quoted",    badge: "bg-blue-100 text-blue-700",   ring: "ring-blue-400" },
-  in_review: { label: "In review", badge: "bg-amber-100 text-amber-700", ring: "ring-amber-400" },
   paid:      { label: "Paid",      badge: "bg-green-100 text-green-700", ring: "ring-green-400" },
 };
 
@@ -3819,8 +3818,10 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // accepts them (they clear from the list; wiring open→plan/deliverable is the next pass).
   const promoteAndConfirm = async (c: SlackCapture) => {
     if (c.home === "budget") {
-      // The figure may sit in detail, summary, or (older captures) only the source quote.
-      await addBudgetLineForEvent(eventId, c.summary, parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote));
+      // The figure may sit in detail, summary, or (older captures) only the source quote; status
+      // ('paid'/'quoted'/'estimate') is read from the same wording. Merge-by-label happens in db.
+      const text = `${c.summary} ${c.detail ?? ""} ${c.sourceQuote ?? ""}`;
+      await addBudgetLineForEvent(eventId, c.summary, parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote), parseBudgetStatus(text));
     } else if (c.home === "person") {
       const { name, role } = parsePersonRole(c.summary);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);

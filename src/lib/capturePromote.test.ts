@@ -1,5 +1,34 @@
 import { describe, it, expect } from "vitest";
-import { parseMoney, parsePersonRole } from "./capturePromote";
+import { parseMoney, parsePersonRole, parseBudgetStatus, labelsMatch } from "./capturePromote";
+
+describe("parseBudgetStatus", () => {
+  it("reads 'paid' as paid", () => {
+    expect(parseBudgetStatus("1500 paid for robodog")).toBe("paid");
+    expect(parseBudgetStatus("we already paid the deposit")).toBe("paid");
+  });
+  it("reads estimate/rough language as estimate", () => {
+    expect(parseBudgetStatus("roughly $500, just an estimate")).toBe("estimate");
+    expect(parseBudgetStatus("aiming ~$14k")).toBe("estimate");
+  });
+  it("treats a quote or a bare concrete figure as quoted", () => {
+    expect(parseBudgetStatus("got a quote back, $1,200")).toBe("quoted");
+    expect(parseBudgetStatus("$1,200 for the night")).toBe("quoted");
+  });
+});
+
+describe("labelsMatch", () => {
+  it("matches case-insensitively", () => {
+    expect(labelsMatch("Robot dog rental", "robot dog rental")).toBe(true);
+  });
+  it("matches on containment and shared significant tokens", () => {
+    expect(labelsMatch("Robot dog", "Robot dog rental")).toBe(true);
+    expect(labelsMatch("robot dog rental", "the robot dog")).toBe(true);
+  });
+  it("does not match unrelated labels", () => {
+    expect(labelsMatch("Catering", "Robot dog rental")).toBe(false);
+    expect(labelsMatch("Bar staff", "Photographer")).toBe(false);
+  });
+});
 
 describe("parseMoney", () => {
   it("pulls a dollar figure out of prose", () => {

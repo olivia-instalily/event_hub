@@ -48,7 +48,9 @@ Hard rules:
 - When a later message supersedes an earlier one, capture only the latest state.
 - Something dropped/cancelled ("mural fell through") → a removals[] entry (a short label of what was dropped), NOT a capture.
 - summary = a short human label (no field syntax). detail = a little more or "". sourceQuote = the phrase, or "". usedContext = the ts range you actually read. ambiguity = a one-line question only if genuinely unclear, else null.
-- BUDGET captures MUST carry the actual figure in the summary or detail — e.g. summary "Robot dog rental", detail "$1,200 for the night". Never leave the dollar amount only in sourceQuote; if the figure isn't in summary/detail it can't be tracked.
+- BUDGET captures MUST carry the actual figure AND the payment wording (paid / quote / estimate) in the summary or detail — e.g. summary "Robot dog rental", detail "$1,200 quoted", or detail "$1,500 paid". Never leave the amount only in sourceQuote; if the figure isn't in summary/detail it can't be tracked.
+- Name a budget item with a consistent, full label ("Robot dog rental", not "robodog"), and reuse the earlier wording if the same item was mentioned before in the conversation — so a later price merges onto the same line instead of creating a duplicate.
+- Capture only what the PINNED message is about. Do NOT sweep every message in the window into a capture; default to 1–3 captures and only exceed that if the pin itself announces several distinct decisions.
 - radiusNote: a short "read N messages around your pin to …" only when you needed context beyond the pin; else null.
 No preamble.`;
 

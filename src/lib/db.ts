@@ -4,6 +4,7 @@ import { scopingToApproval, loadScoping } from './scoping';
 import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
+import { labelsMatch } from './capturePromote';
 import { categoryKey } from './budgetCategories';
 import { eventFocus, type EventFocus } from './eventFocus';
 import type { BackfillExtract, TemplateLite, TemplateAdditions } from './backfill';
@@ -2060,10 +2061,10 @@ export async function listSlackCaptures(eventId: string): Promise<SlackCapture[]
   }));
 }
 
-/** Promote a confirmed budget capture: ensure the event has a budget row, then add the figure as a
- *  single line. A captured figure is a quote (not a paid actual), so status is 'quoted' when there's
- *  an amount, else a bare 'estimate' placeholder line. */
-export async function addBudgetLineForEvent(eventId: string, label: string, amount: number | null): Promise<void> {
+/** Promote a confirmed budget capture into a budget line. If a line for the same item already exists
+ *  (fuzzy label match), MERGE into it — set the amount and advance the status — rather than adding a
+ *  duplicate. Otherwise add a new line. Status ladder never downgrades (paid > quoted > estimate). */
+export async function addBudgetLineForEvent(eventId: string, label: string, amount: number | null, status: BudgetStatus = 'quoted'): Promise<void> {
   const { data } = await supabase.from('budget').select('id').eq('event_id', eventId).limit(1);
   let budgetId = data?.[0]?.id as string | undefined;
   if (!budgetId) {
@@ -2071,9 +2072,20 @@ export async function addBudgetLineForEvent(eventId: string, label: string, amou
     const { error } = await supabase.from('budget').insert({ id: budgetId, event_id: eventId, currency: 'USD' });
     if (error) throw new Error(error.message);
   }
+  const wantStatus = amount != null ? status : 'estimate';
+  const existing = await listBudgetLines(budgetId);
+  const match = existing.find((l) => l.label && labelsMatch(l.label, label));
+  if (match) {
+    // Keep the higher status (a later quote shouldn't undo a 'paid'); take the new amount when given.
+    const nextStatus = BUDGET_RANK[wantStatus] >= BUDGET_RANK[match.status] ? wantStatus : match.status;
+    const { error } = await supabase.from('budget_line')
+      .update({ confirmed_amount: amount ?? match.confirmedAmount, payment_status: nextStatus })
+      .eq('id', match.id);
+    if (error) throw new Error(error.message);
+    return;
+  }
   const { error } = await supabase.from('budget_line').insert({
-    id: genId('bl'), budget_id: budgetId, label, confirmed_amount: amount,
-    payment_status: amount != null ? 'quoted' : 'estimate',
+    id: genId('bl'), budget_id: budgetId, label, confirmed_amount: amount, payment_status: wantStatus,
   });
   if (error) throw new Error(error.message);
 }
@@ -2619,14 +2631,17 @@ export interface EngagementWithCandidates {
   watchInbox: boolean;      // setup walkthrough: opted in to inbox auto-log (V2 Gmail sync)
 }
 // Budget line lifecycle stage (replaces the old pending/committed/paid model).
-export const BUDGET_STATUSES = ['estimate', 'quoted', 'in_review', 'paid'] as const;
+// The budget status ladder: estimate (a figure we're guessing) → quoted (a confirmed number) →
+// paid (actually paid out). No 'in_review' — legacy committed/pending/in_review fold into 'quoted'.
+export const BUDGET_STATUSES = ['estimate', 'quoted', 'paid'] as const;
 export type BudgetStatus = (typeof BUDGET_STATUSES)[number];
-/** Map any stored value (incl. legacy 'pending'/null) to a current status. */
+/** Map any stored value (incl. legacy 'pending'/'committed'/'in_review'/null) to a current status. */
 export function normBudgetStatus(s: any): BudgetStatus {
-  if (s === 'paid' || s === 'quoted' || s === 'in_review') return s;
-  if (s === 'pending' || s === 'committed') return 'in_review'; // legacy
+  if (s === 'paid' || s === 'quoted' || s === 'estimate') return s;
+  if (s === 'in_review' || s === 'pending' || s === 'committed') return 'quoted'; // legacy → confirmed number
   return 'estimate';
 }
+const BUDGET_RANK: Record<BudgetStatus, number> = { estimate: 0, quoted: 1, paid: 2 };
 export interface BudgetLineTracker {
   id: string;
   label: string | null;
