@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { Hash, Plus, X, ExternalLink, Loader2 } from "lucide-react";
+import { Plus, X, Loader2 } from "lucide-react";
 import { slugifyChannel } from "../lib/slackChannel";
 import { listSlackChannels, linkSlackChannel, unlinkSlackChannel } from "../lib/db";
+
+// Official 4-colour Slack mark, so the control reads as Slack rather than a generic button.
+function SlackLogo({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 122.8 122.8" className={className} aria-hidden="true">
+      <path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A"/>
+      <path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0"/>
+      <path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D"/>
+      <path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22E"/>
+    </svg>
+  );
+}
 
 export function SlackChannelControl({ eventId, title, slackChannel, onChange }: { eventId: string; title: string; slackChannel: string | null; onChange: () => void }) {
   const [open, setOpen] = useState(false);
@@ -37,9 +49,9 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
 
   if (slackChannel) {
     return (
-      <span className="inline-flex items-center gap-1 text-sm text-gray-600" onClick={(e) => e.stopPropagation()}>
-        <a href={`https://slack.com/app_redirect?channel=${slackChannel}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-[#4A154B] hover:underline">
-          <Hash className="w-3.5 h-3.5" />{linkedName ?? "slack channel"}<ExternalLink className="w-3 h-3" />
+      <span className="inline-flex items-center gap-1 rounded-lg border border-gray-300 pl-2.5 pr-1.5 py-1" onClick={(e) => e.stopPropagation()}>
+        <a href={`https://slack.com/app_redirect?channel=${slackChannel}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-gray-700 hover:text-gray-900">
+          <SlackLogo /> #{linkedName ?? "channel"}
         </a>
         <button onClick={() => run(() => unlinkSlackChannel(eventId))} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
       </span>
@@ -49,8 +61,8 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
   const filtered = channels.filter((c) => c.name.includes(q.toLowerCase()));
   return (
     <div className="relative inline-block" ref={ref} onClick={(e) => e.stopPropagation()}>
-      <button onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1.5 text-sm font-medium text-[#4A154B] hover:opacity-75 transition-opacity">
-        <Hash className="w-4 h-4" /> Connect Slack channel
+      <button onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1.5 text-sm text-gray-700 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors">
+        <SlackLogo /> Connect Slack channel
       </button>
       {open && (
         <div className="absolute z-40 mt-1 w-72 rounded-xl border border-border bg-white shadow-xl p-3 space-y-3">
