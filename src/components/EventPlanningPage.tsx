@@ -4011,22 +4011,22 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
       {setupFlags.length > 0 && (
         <div className="mb-4">
           <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">Setup</p>
-          {/* Same amber treatment as the classic setup nudges: click links to the field; the check
-              dismisses ("don't show this again"). */}
-          <div className="space-y-2">
+          {/* Same amber treatment as the classic setup nudges, but half-width in a 2-col grid and
+              more compact: click links to the field; the check dismisses ("don't show this again"). */}
+          <div className="grid grid-cols-2 gap-2">
             {setupFlags.map((key) => {
               const m = setupMeta[key];
               return (
-                <div key={key} className="flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 pr-2">
-                  <button onClick={m.go} className="group flex-1 min-w-0 flex items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition-colors">
-                    <m.Icon className="w-5 h-5 text-amber-700 shrink-0" />
+                <div key={key} className="flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 pr-1.5 min-w-0">
+                  <button onClick={m.go} className="group flex-1 min-w-0 flex items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-amber-100 transition-colors">
+                    <m.Icon className="w-4 h-4 text-amber-700 shrink-0" />
                     <span className="flex-1 min-w-0">
-                      <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">{m.title}</span>
-                      <span className="block text-[13px] text-amber-700">{m.blurb}</span>
+                      <span className="block text-[13px] font-medium text-amber-900 group-hover:underline truncate">{m.title}</span>
+                      <span className="block text-[11px] text-amber-700 truncate">{m.blurb}</span>
                     </span>
                   </button>
-                  <button onClick={() => onDismissSetup(key)} title="Dismiss — don't show this again" className="w-5 h-5 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
-                    <Check className="w-3 h-3" />
+                  <button onClick={() => onDismissSetup(key)} title="Dismiss — don't show this again" className="w-4 h-4 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
+                    <Check className="w-2.5 h-2.5" />
                   </button>
                 </div>
               );
