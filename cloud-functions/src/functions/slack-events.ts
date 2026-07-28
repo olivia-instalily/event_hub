@@ -42,12 +42,12 @@ export async function handler(req: Request, res: Response) {
     { timestamp: req.header('x-slack-request-timestamp'), signature: req.header('x-slack-signature') },
     process.env.SLACK_SIGNING_SECRET ?? '',
   );
+  const ev = decision.event;
+  // Diagnostic (BEFORE the ack, so it flushes during the request even under CPU throttling).
+  if (ev) console.log(JSON.stringify({ fn: 'slack-events', op: 'event', type: ev.type, reaction: ev.reaction, item: ev.item?.type, channel: ev.item?.channel }));
   // Ack within Slack's 3s window before doing any work.
   res.status(decision.status).send(decision.body);
 
-  const ev = decision.event;
-  // Diagnostic: surface what Slack actually sent so an emoji-name/type mismatch is visible in logs.
-  if (ev) console.log(JSON.stringify({ fn: 'slack-events', op: 'event', type: ev.type, reaction: ev.reaction, item: ev.item?.type, channel: ev.item?.channel }));
   if (ev?.reaction === 'eventhub' && ev?.item?.type === 'message') {
     const work = ev.type === 'reaction_added' ? onReactionAdded(ev)
       : ev.type === 'reaction_removed' ? onReactionRemoved(ev)
