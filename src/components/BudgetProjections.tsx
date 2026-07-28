@@ -35,11 +35,14 @@ export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPla
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
 
-  if (!plan.budget || projections === null) return null;
+  if (!plan.budget) return null;
+  // Hidden state marker so the "Review budget" flag can tell whether there are comparables to draw
+  // from — and fall back to highlighting the target field when there aren't.
+  if (projections === null) return <span id="budget-projections-state" data-state="loading" hidden />;
 
   // Only draw the area when there are real projections from other events.
   const rows = projections.filter((p) => p.pastEvents > 0 && p.projected != null);
-  if (rows.length === 0) return null;
+  if (rows.length === 0) return <span id="budget-projections-state" data-state="empty" hidden />;
 
   const valueFor = (p: BudgetProjection) => amounts[categoryKey(p.category)] ?? String(p.projected ?? "");
   const total = rows.reduce((s, p) => s + (Number(valueFor(p)) || 0), 0);
@@ -58,6 +61,7 @@ export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPla
 
   return (
     <div className="bg-white rounded-2xl border border-border p-5">
+      <span id="budget-projections-state" data-state="ready" hidden />
       <h3 className="font-semibold text-gray-900 mb-0.5">Budget projections</h3>
       <p className="text-sm text-gray-500 mb-4">Estimated from comparable past events — tweak any figure, then set the total as your budget estimate.</p>
 

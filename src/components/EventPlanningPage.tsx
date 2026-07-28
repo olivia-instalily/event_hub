@@ -1134,7 +1134,7 @@ function BudgetTracker({ budget, eventId, eventBudgetTarget = null, engagements 
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2 text-sm">
+        <div id="budget-target-field" className="flex items-center gap-2 text-sm">
           <span className="text-gray-500">Target</span>
           <input
             type="number"
@@ -3858,11 +3858,24 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           const clear = () => el.classList.remove(...cls);
           setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
         };
+        // After opening the Budget tab: if there are no past-event comparables to draw from,
+        // guide the eye to the target field instead of the (absent) projections area.
+        const reviewBudget = () => {
+          let tries = 0;
+          const tick = () => {
+            const state = document.getElementById("budget-projections-state")?.getAttribute("data-state");
+            if (state === "ready") return;                          // comparables exist → projections area is the guide
+            if (state === "empty") { highlight("budget-target-field"); return; }
+            if (tries++ < 15) { setTimeout(tick, 100); return; }    // still loading — keep waiting (~1.5s)
+            highlight("budget-target-field");                       // fallback if it never resolves
+          };
+          setTimeout(tick, 120);
+        };
         const META: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }> = {
           date: { title: "Set the event date", blurb: "Unlocks scheduling and deliverable due-dates.", Icon: Calendar, go: () => highlight("hlf-date") },
           headcount: { title: "Add expected headcount", blurb: "Sizes budget and logistics.", Icon: Users, go: () => highlight("hlf-headcount") },
           owners: { title: "Add owners", blurb: "Give this event a co-owner.", Icon: UserPlus, go: () => highlight("hlf-owners") },
-          budget: { title: "Review budget", blurb: "Set targets from comparable past events.", Icon: DollarSign, go: onOpenBudget },
+          budget: { title: "Review budget", blurb: "Set targets from comparable past events.", Icon: DollarSign, go: () => { onOpenBudget(); reviewBudget(); } },
           timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
         };
         const settle = (key: SetupFlagKey) => {
