@@ -1,7 +1,6 @@
 import { Bookmark, Calendar, CalendarDays, MapPin, LayoutGrid, List, Plus, ChevronDown, ChevronLeft, ChevronRight, Link2, X, Search, Trash2, Check, AlertCircle, ArrowRight, Sparkles, BadgeCheck, Loader2 } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { EventDetailPage } from "./EventDetailPage";
 import { listEvents, attachLuma, updateEventTags, setEventFormat, listFormats, generateTemplate, extractBrief, createPlanningEvent, backfillEvent, deleteEvent, getEventPlanning, updateEventCover, addBudgetLines, listProfiles, addEventOwner, setHeadcount, saveSetupState, uploadAttachment, uploadDocument, addAttendee, addDeliverable, spinUpFromTemplate, updateEvent, setEventDate, setEventStaffRoles, setEventReflections, setEventAgenda, setEventPattern, listExternalConferences, type EventListItem, type EventStatus, type GeneratedTemplate, type ExtractedBrief, type WalkStep, type OutreachTemplate, type EventPlanning, setEventMaterials, type SourceMaterial } from "../lib/db";
 import { ExternalDetail, effectiveStatus } from "./externalEvents";
 import { looksLikeBackfill } from "../lib/backfill";
@@ -32,7 +31,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { parseBudgetText } from "./BudgetImport";
 import { filesFromDrop } from "../lib/drop";
 import { findDuplicateEvent, type DupEvent, type DupReason } from "../lib/dedup";
-import { peekPendingScopingBudget } from "../lib/deepLink";
 import { addSourceMaterial, findDuplicateBySourceFiles } from "../lib/db";
 
 const NOT_CAPTURED = "Not captured";
@@ -2089,14 +2087,11 @@ export function EventsPage({ selectedEventId, setSelectedEventId, onViewPeople, 
         setSelectedEventId(null);
       }
     };
-    // A budget deep-link (Slack "Open in EventHub") targets the scoping form, which lives ONLY in the
-    // planning view — route there regardless of macro_stage / list membership, so it never lands on
-    // the legacy recap view's "Event not found".
-    const budgetDeepLink = peekPendingScopingBudget() === selectedEventId;
-    return (sel?.macroStage != null || budgetDeepLink) ? (
+    // Every event opens the editable planning page — it handles templates, active planning, and
+    // past/wrapped states internally. (The legacy read-only recap view is retired; without it,
+    // Luma-imported events no longer land on a non-editable page that looks unlike a platform event.)
+    return (
       <EventPlanningPage eventId={selectedEventId} onBack={onBack} onViewPeople={onViewPeople} onOpenEvent={(id) => setSelectedEventId(id)} onReview={() => openReviewForEvent(selectedEventId)} />
-    ) : (
-      <EventDetailPage eventId={selectedEventId} onBack={onBack} onViewPeople={onViewPeople} />
     );
   }
 
