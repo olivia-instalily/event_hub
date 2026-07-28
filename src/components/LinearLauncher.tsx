@@ -171,7 +171,7 @@ export function LinearLauncher({ eventId, linearSynced = false, onApplied }: { e
   // ONE element that transitions size / shape / position: corner circle ⇆ centered window. top/left are
   // set in BOTH states (auto isn't animatable) so the bubble visibly travels to the center.
   const resting: CSSProperties = { left: "calc(100vw - 72px)", top: "calc(100vh - 72px)", width: 52, height: 52, borderRadius: 9999, transform: "none", backgroundColor: "#7c3aed", border: "1px solid transparent", cursor: "pointer" };
-  const opened: CSSProperties = { left: "50%", top: "50%", width: "min(440px, 94vw)", height: "min(460px, 82vh)", borderRadius: 16, transform: "translate(-50%, -50%)", backgroundColor: "#ffffff", border: "1px solid #e5e7eb", cursor: "default" };
+  const opened: CSSProperties = { left: "50%", top: "50%", width: "min(560px, 94vw)", height: "min(320px, 80vh)", borderRadius: 16, transform: "translate(-50%, -50%)", backgroundColor: "#ffffff", border: "1px solid #e5e7eb", cursor: "default" };
   const ease = "cubic-bezier(.4,0,.2,1)";
   const morph = reduced.current ? "none"
     : `left .3s ${ease}, top .3s ${ease}, width .3s ${ease}, height .3s ${ease}, border-radius .3s ${ease}, transform .3s ${ease}, background-color .2s ${ease}, border-color .2s ${ease}`;
