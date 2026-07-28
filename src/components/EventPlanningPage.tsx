@@ -4402,23 +4402,15 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         <div className="header-row flex gap-10">
           <div className="flex-1 min-w-0">
             <div className="mb-3"><TagStack tags={plan.tags} editable onChange={(tags) => { setPlan((p) => (p ? { ...p, tags } : p)); void updateEventTags(eventId, tags); }} /></div>
-            <div className="mb-4">
+            {/* Tier 1 — identity: title + status read as what the event IS */}
+            <div className="mb-4 flex items-start gap-3 flex-wrap">
               <EditableTitle value={plan.title} onChange={(name) => { setPlan((p) => (p ? { ...p, title: name } : p)); void updateEvent(eventId, { name }); }} className="text-3xl" />
+              <div className="mt-1"><StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} /></div>
             </div>
-            <div className="mb-4 flex items-center gap-4 flex-wrap">
-              <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
-              <SeriesAttach eventId={eventId} />
-              <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || "" }} />
-              <DocLinkControl url={plan.docLink} onSave={(u) => { setPlan((p) => (p ? { ...p, docLink: u } : p)); void updateEvent(eventId, { docLink: u }); }} label="Folder" icon={<Folder className="w-4 h-4" />} placeholder="Paste Drive folder link…" />
-              <SlackChannelControl eventId={eventId} title={plan.title} slackChannel={plan.slackChannel} onChange={() => setReload((x) => x + 1)} />
-              {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
-              {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
-            </div>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 text-gray-600">
+            {/* Tier 2 — core facts (what/when/where); empty fields stay as their own faint prompts */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3 text-gray-600">
               <div id="hlf-date" className="flex items-center gap-2">
                 {!plan.lumaEventId ? (
-                  // Not tied to Luma → date is freely editable inline. If it's on Google Calendar,
-                  // re-push the change so the calendar entry can't drift, and show a green link to it.
                   <span className="inline-flex items-center gap-1.5">
                     <DateEdit
                       value={plan.date}
@@ -4431,7 +4423,6 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                     <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                   </span>
                 ) : (
-                  // Luma owns the date → read-only; green icon links to the GCal event when synced.
                   <>
                     <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                     <span>{plan.date ?? "Date TBD"}</span>
@@ -4460,12 +4451,28 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                   className="w-16 bg-transparent border-b border-dashed border-gray-300 focus:border-gray-500 focus:outline-none text-sm text-gray-700 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
               </label>
-              <SpeakerField eventId={eventId} />
+            </div>
+            {/* Tier 3 — people (who; secondary metadata, lighter than the facts row) */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-4 text-sm text-gray-400">
               <span id="hlf-owners" className="inline-flex items-center rounded-md">
                 <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
               </span>
+              <SpeakerField eventId={eventId} />
             </div>
-            <MacroStepper eventId={eventId} initial={plan.macroStage} eventDate={plan.date} />
+            {/* Attach-actions — things you DO to connect this event elsewhere, grouped and set apart from the facts */}
+            <div className="flex items-center gap-2 flex-wrap mb-5 pt-4 border-t border-gray-100">
+              <SeriesAttach eventId={eventId} />
+              <LumaAttach eventId={eventId} initialUrl={plan.lumaUrl} descriptions={plan.outreach.filter(isLumaDescription)} draft={{ name: plan.title, date: plan.date, startTime: plan.startTime, endTime: plan.endTime, location: plan.location, description: plan.description || "" }} />
+              <DocLinkControl url={plan.docLink} onSave={(u) => { setPlan((p) => (p ? { ...p, docLink: u } : p)); void updateEvent(eventId, { docLink: u }); }} label="Folder" icon={<Folder className="w-4 h-4" />} placeholder="Paste Drive folder link…" />
+              <SlackChannelControl eventId={eventId} title={plan.title} slackChannel={plan.slackChannel} onChange={() => setReload((x) => x + 1)} />
+              {/* Past + Luma-linked → the background sync skips it; let the owner pull late additions by hand (add-only). */}
+              {plan.lumaEventId && plan.date && plan.date < today() && <LumaResync eventId={eventId} onDone={() => setReload((x) => x + 1)} />}
+            </div>
+            {/* Phase rail on its own line; Sync to Linear (a phase-level action) at the far end */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <MacroStepper eventId={eventId} initial={plan.macroStage} eventDate={plan.date} />
+              <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} onSynced={() => setReload((x) => x + 1)} />
+            </div>
           </div>
           <CoverImage
             eventId={eventId}
@@ -4477,7 +4484,6 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             onPosition={(coverPosition) => setPlan((p) => (p ? { ...p, coverPosition } : p))}
           />
         </div>
-        <OpenInLinear eventId={eventId} projectUrl={plan.linearProjectUrl} className="absolute bottom-4 right-6" onSynced={() => setReload((x) => x + 1)} />
       </div>
 
       {wrapped && !reopened ? (
