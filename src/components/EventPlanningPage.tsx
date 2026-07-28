@@ -3399,55 +3399,35 @@ function ReflectionSection({ plan, onApplied, incoming }: { plan: EventPlanning;
 }
 
 // Two-step budget stepper: budget target (set directly in the Budget tab) → spend tracking.
-function StepDot({ n, done, active }: { n: number; done?: boolean; active?: boolean }) {
-  return (
-    <span className={`relative z-[1] flex items-center justify-center w-6 h-6 rounded-full text-[15px] shrink-0 ${done ? "bg-green-600 text-white" : active ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500"}`}>
-      {done ? <Check className="w-3.5 h-3.5" /> : n}
-    </span>
-  );
-}
 function BudgetCard({ plan, onOpenBudget }: { plan: EventPlanning; onOpenBudget: () => void }) {
-  const assigned = plan.eventBudgetTarget;
-  const hasAssigned = assigned != null;
   const lines = plan.budget?.lines ?? [];
   const committed = lines.filter((l) => l.status !== "estimate").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
-  const target = assigned ?? plan.budget?.targetAmount ?? null;
+  const target = plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null;
   const pct = target ? Math.min(100, Math.round((committed / target) * 100)) : 0;
   const over = target != null && committed > target;
 
   return (
     <div className="bg-white rounded-2xl border border-border p-5">
-      <h3 className="font-medium mb-4">Budget</h3>
-      <ol className="relative space-y-5 before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-px before:bg-gray-200">
-        {/* 1 · Budget target */}
-        <li className="relative flex gap-3">
-          <StepDot n={1} done={hasAssigned} active={!hasAssigned} />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium inline-flex items-center gap-1.5">{hasAssigned && <Lock className="w-3.5 h-3.5 text-gray-400" />} Budget target</p>
-              <button onClick={onOpenBudget} className="text-[15px] text-gray-600 border border-gray-300 rounded-md px-1.5 py-0.5 hover:bg-gray-50">Budget tab</button>
-            </div>
-            {hasAssigned ? (
-              <p className="text-sm mt-0.5">{money(assigned)}</p>
-            ) : (
-              <p className="text-[15px] text-gray-400 mt-0.5">Set a budget target in the Budget tab.</p>
-            )}
-          </div>
-        </li>
-        {/* 2 · Tracking */}
-        <li className="relative flex gap-3">
-          <StepDot n={2} active={hasAssigned} />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium">Tracking</p>
-            {target != null ? (
-              <>
-                <div className="mt-1.5 h-2 bg-gray-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${over ? "bg-red-500" : "bg-gradient-to-r from-gray-400 to-gray-900"}`} style={{ width: `${pct}%` }} /></div>
-                <p className={`text-[15px] mt-1 ${over ? "text-red-600" : "text-gray-500"}`}>{money(committed)} of {money(target)} {over ? `· ${money(committed - target)} over` : `· ${money(target - committed)} left`}</p>
-              </>
-            ) : <p className="text-[15px] text-gray-400 mt-0.5">Track spend once a budget is set — add vendor info to keep it accurate.</p>}
-          </div>
-        </li>
-      </ol>
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <h3 className="font-medium">Budget</h3>
+        <button onClick={onOpenBudget} className="text-[13px] text-gray-600 border border-gray-300 rounded-md px-1.5 py-0.5 hover:bg-gray-50">Budget tab</button>
+      </div>
+      {target == null ? (
+        // No target yet → an amber nudge, same treatment as the setup fields; links to the Budget tab.
+        // Once a target exists it tracks against it, and any budget captures from Slack land below.
+        <button onClick={onOpenBudget} className="group w-full flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left hover:bg-amber-100 transition-colors">
+          <DollarSign className="w-5 h-5 text-amber-700 shrink-0" />
+          <span className="flex-1 min-w-0">
+            <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">Set a budget target</span>
+            <span className="block text-[13px] text-amber-700">Then track spend against it here.</span>
+          </span>
+        </button>
+      ) : (
+        <div>
+          <div className="h-2 bg-gray-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${over ? "bg-red-500" : "bg-gradient-to-r from-gray-400 to-gray-900"}`} style={{ width: `${pct}%` }} /></div>
+          <p className={`text-[15px] mt-1.5 ${over ? "text-red-600" : "text-gray-500"}`}>{money(committed)} of {money(target)} {over ? `· ${money(committed - target)} over` : `· ${money(target - committed)} left`}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -3974,7 +3954,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {/* Top slot goes to whatever's most useful now: anything open → Open·next-up leads and the
               summary sits under it; nothing open → the summary takes the slot and Open is not shown. */}
           {anythingOpen && (
-            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} captures={openCaptures} onCaptureChange={reloadCaptures} />
+            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={openCaptures} onCaptureChange={reloadCaptures} />
           )}
 
           <WhereThingsStand bullets={summaryBullets} fallback={synthDigest} onRefresh={resync} refreshing={resyncing} note={resyncMsg} />
@@ -4015,9 +3995,10 @@ void [LinearUpdateBox, OverviewDeliverables, AutoUpdates, GlanceTile, CarriedLes
 //   Setup — key event fields still unset (date, headcount, owners, budget). 2-col.
 //   Needs confirmation — Slack-captured tentative decisions to resolve (confirm / edit / dismiss).
 // Yields the top slot entirely (renders nothing) when both groups are empty.
-function OpenNextUp({ setupFlags, setupMeta, captures, onCaptureChange }: {
+function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange }: {
   setupFlags: SetupFlagKey[];
   setupMeta: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }>;
+  onDismissSetup: (key: SetupFlagKey) => void;
   captures: SlackCapture[];
   onCaptureChange: () => void;
 }) {
@@ -4030,15 +4011,24 @@ function OpenNextUp({ setupFlags, setupMeta, captures, onCaptureChange }: {
       {setupFlags.length > 0 && (
         <div className="mb-4">
           <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">Setup</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {/* Same amber treatment as the classic setup nudges: click links to the field; the check
+              dismisses ("don't show this again"). */}
+          <div className="space-y-2">
             {setupFlags.map((key) => {
               const m = setupMeta[key];
               return (
-                <button key={key} onClick={m.go} className="group flex items-center gap-2.5 rounded-lg border border-gray-200 px-3 py-2.5 text-left hover:border-gray-300 hover:bg-gray-50 transition-colors">
-                  <m.Icon className="w-4 h-4 text-gray-500 shrink-0" />
-                  <span className="flex-1 min-w-0 text-[14px] text-gray-800 group-hover:text-gray-900">{m.title}</span>
-                  <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-400 shrink-0" />
-                </button>
+                <div key={key} className="flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 pr-2">
+                  <button onClick={m.go} className="group flex-1 min-w-0 flex items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition-colors">
+                    <m.Icon className="w-5 h-5 text-amber-700 shrink-0" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">{m.title}</span>
+                      <span className="block text-[13px] text-amber-700">{m.blurb}</span>
+                    </span>
+                  </button>
+                  <button onClick={() => onDismissSetup(key)} title="Dismiss — don't show this again" className="w-5 h-5 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
+                    <Check className="w-3 h-3" />
+                  </button>
+                </div>
               );
             })}
           </div>
