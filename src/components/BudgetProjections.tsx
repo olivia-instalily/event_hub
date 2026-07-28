@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Check } from "lucide-react";
+import { AlertCircle, Check, Sparkles } from "lucide-react";
 import {
   getBudgetProjections, setEventBudgetTarget, setBudgetTarget,
   type EventPlanning, type BudgetProjection,
@@ -62,7 +62,7 @@ export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPla
   return (
     <div className="bg-white rounded-2xl border border-border p-5">
       <span id="budget-projections-state" data-state="ready" hidden />
-      <h3 className="font-semibold text-gray-900 mb-0.5">Budget projections</h3>
+      <h3 className="flex items-center gap-1.5 font-semibold text-gray-900 mb-0.5"><Sparkles className="w-4 h-4 text-yellow-500" /> Budget projections</h3>
       <p className="text-sm text-gray-500 mb-4">Estimated from comparable past events — tweak any figure, then set the total as your budget estimate.</p>
 
       <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
