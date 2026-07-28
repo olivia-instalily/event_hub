@@ -122,9 +122,9 @@ export function LocationEdit({ value, onChange }: { value: string | null; onChan
     );
   }
   return (
-    <button onClick={() => { setDraft(value ?? ""); setEditing(true); }} className="inline-flex items-center gap-2 hover:text-gray-900 text-left">
-      <MapPin className="w-5 h-5" />
-      <span className="underline decoration-dotted underline-offset-4">{value ?? "Add location"}</span>
+    <button onClick={() => { setDraft(value ?? ""); setEditing(true); }} className="inline-flex items-center gap-1.5 hover:text-gray-900 text-left">
+      <MapPin className="w-4 h-4" />
+      <span className={value ? "" : "text-gray-400"}>{value ?? "Add location"}</span>
     </button>
   );
 }

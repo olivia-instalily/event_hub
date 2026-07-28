@@ -4190,12 +4190,14 @@ function TimeRangeEditor({ eventId, startTime, endTime, onSaved }: { eventId: st
       setErr(ex?.message ?? String(ex));
     } finally { setSaving(false); }
   };
-  const cls = "px-1 py-0.5 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300";
+  // Hide the native per-input clock picker indicator — we show a single Clock icon to the left instead.
+  const cls = "px-1 py-0.5 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300 [&::-webkit-calendar-picker-indicator]:hidden";
   if (!expanded) {
-    return <button onClick={() => setExpanded(true)} className="text-sm text-gray-400 hover:text-gray-700">+ time</button>;
+    return <button onClick={() => setExpanded(true)} className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700"><Clock className="w-4 h-4" /> + time</button>;
   }
   return (
     <span className="inline-flex items-center gap-1">
+      <Clock className="w-4 h-4 text-gray-400 shrink-0 mr-0.5" />
       <input type="time" value={s} onChange={(ev) => setS(ev.target.value)} title="Start time" className={cls} />
       <span className="text-gray-400">–</span>
       <input type="time" value={e} onChange={(ev) => setE(ev.target.value)} title="End time" className={cls} />
@@ -4408,14 +4410,14 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         <div className="header-row flex gap-10">
           <div className="flex-1 min-w-0">
             <div className="mb-3"><TagStack tags={plan.tags} editable onChange={(tags) => { setPlan((p) => (p ? { ...p, tags } : p)); void updateEventTags(eventId, tags); }} /></div>
-            {/* Tier 1 — identity: title + status read as what the event IS */}
-            <div className="mb-4 flex items-start gap-3 flex-wrap">
+            {/* Tier 1 — identity: title + status, vertically centered */}
+            <div className="mb-4 flex items-center gap-3 flex-wrap">
               <EditableTitle value={plan.title} onChange={(name) => { setPlan((p) => (p ? { ...p, title: name } : p)); void updateEvent(eventId, { name }); }} className="text-3xl" />
-              <div className="mt-1"><StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} showLabel={false} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} /></div>
+              <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} showLabel={false} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
             </div>
-            {/* Tier 2 — core facts (what/when/where); empty fields stay as their own faint prompts */}
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3 text-sm text-gray-600">
-              <div id="hlf-date" className="flex items-center gap-2">
+            {/* Tier 2 — core facts: date block · time · format · location · expected · speakers */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3 text-sm text-gray-600">
+              <div id="hlf-date" className="inline-flex items-center gap-1.5 border border-gray-200 rounded px-2 py-0.5">
                 {!plan.lumaEventId ? (
                   <span className="inline-flex items-center gap-1.5">
                     <DateEdit
@@ -4434,20 +4436,20 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                     <span>{plan.date ?? "Date"}</span>
                   </>
                 )}
-                <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
               </div>
-              <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
+              <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
               <FormatPicker value={parseFormats(plan.format)} onChange={(arr) => { const format = joinFormats(arr); setPlan((p) => (p ? { ...p, format } : p)); void setEventFormat(eventId, format); }} />
+              <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
               <button id="hlf-headcount" onClick={() => goPeople('all')} className="flex items-center gap-1.5 hover:text-gray-900 text-left">
-                <Users className="w-4 h-4" /><span className="underline decoration-dotted underline-offset-4">{headcount === "—" ? "expected" : headcount}</span>
+                <Users className="w-4 h-4" /><span className={headcount === "—" ? "text-gray-400" : ""}>{headcount === "—" ? "expected" : headcount}</span>
               </button>
+              <SpeakerField eventId={eventId} />
             </div>
-            {/* Tier 3 — people (who; secondary metadata, lighter than the facts row) */}
+            {/* Tier 3 — owners (secondary metadata) */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-4 text-sm text-gray-400">
               <span id="hlf-owners" className="inline-flex items-center rounded-md">
                 <OwnerPicker eventId={eventId} owners={plan.owners} onChange={(owners) => setPlan((p) => (p ? { ...p, owners, owner: owners.map((o) => o.name).join(", ") || null } : p))} />
               </span>
-              <SpeakerField eventId={eventId} />
             </div>
             {/* Attach-actions — things you DO to connect this event elsewhere, grouped and set apart from the facts */}
             <div className="flex items-center gap-2 flex-wrap mb-5 pt-4 border-t border-gray-100">

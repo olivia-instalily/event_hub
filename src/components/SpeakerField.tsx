@@ -51,9 +51,9 @@ export function SpeakerField({ eventId }: { eventId: string }) {
 
   return (
     <div className="relative inline-flex" ref={ref}>
-      <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 hover:text-gray-900 text-left" title="Speakers for this event">
-        <Mic className="w-5 h-5 shrink-0" />
-        <span className={`underline decoration-dotted underline-offset-4 ${names.length ? "" : "text-gray-400"}`}>{label}</span>
+      <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-1.5 hover:text-gray-900 text-left" title="Speakers for this event">
+        <Mic className="w-4 h-4 shrink-0" />
+        <span className={names.length ? "" : "text-gray-400"}>{label}</span>
       </button>
       {open && (
         <div className="absolute z-50 top-full left-0 mt-1 w-72 rounded-xl border border-border bg-white shadow-lg p-3 text-sm text-gray-800">
