@@ -2872,7 +2872,12 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     focusOverride: ((row as any).focus_override ?? null) as EventFocus | null,
     location: (row as any).location ?? (row as any).office ?? null,
     description: (row as any).description ?? null,
-    phases: Array.isArray((row as any).phases) ? (row as any).phases as EventPhase[] : [],
+    // Luma-imported (and other) events can land with NO phases; fall back to the same date-aware
+    // defaults platform/backfilled events get, so the beginning page renders the normal timeline.
+    phases: (() => {
+      const p = Array.isArray((row as any).phases) ? (row as any).phases as EventPhase[] : [];
+      return (p.length || (row as any).is_template) ? p : defaultPhases((row as any).event_date ?? null);
+    })(),
     planningLeadTime: (row as any).planning_lead_time ?? null,
     agenda: Array.isArray((row as any).agenda) ? (row as any).agenda as RunOfShowItem[] : [],
     staffRoles: Array.isArray((row as any).staff_roles) ? (row as any).staff_roles as string[] : [],
@@ -2892,7 +2897,9 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     rsvp: (row as any).rsvp ?? null,
     checkedIn: (row as any).checked_in ?? null,
     ...ownersOf(row),
-    macroStage: (row as any).macro_stage ?? null,
+    // A set macro_stage routes to the active-planning view; Luma-imported events arrive null, which
+    // renders an unplanned-looking page. Default non-template events to Planning for parity.
+    macroStage: (row as any).macro_stage ?? ((row as any).is_template ? null : 'Planning'),
     status: resolveStatus(row, (row as any).series ?? null),
     settleState: (row as any).settle_state ?? null,
     settledAt: (row as any).settled_at ?? null,
