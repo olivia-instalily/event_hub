@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { TemplateView, PhaseRail, enrichPhases, PHASE_COLORS, tLabel as railLabel } from "./TemplateView";
 import { SourceMaterials } from "./SourceMaterials";
+import { SlackCaptureCard } from "./SlackCaptureCard";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
   Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
-  UserPlus, DollarSign, ClipboardList,
+  UserPlus, DollarSign, ClipboardList, Sparkles,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
@@ -38,6 +39,7 @@ import {
   getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
+  listSlackCaptures, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { TagStack } from "./TagStack";
@@ -3801,7 +3803,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     finally { setResyncing(false); }
   };
 
-  const contracted = plan.engagements.filter((e) => e.stage === "Contracted");
   // Status digest is stored as one fact per line → render as bullets when present.
   const summaryBullets = (summary ?? "").split("\n").map((l) => l.replace(/^[\s•\-*]+/, "").trim()).filter(Boolean);
   // Synthesized one-liner used when there's no Claude digest yet (never a blank empty state).
@@ -3816,14 +3817,65 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // not an active plan — so it gets the completeness panel instead of the active-planning prompts.
   const pastByDate = !!plan.date && plan.date < new Date().toISOString().slice(0, 10);
 
-  const expectedTurnout = plan.rsvp ?? plan.headcount ?? null;
-  const showRate = plan.heuristics.find((h) => /show|rsvp|turn ?out|%/.test(h.toLowerCase())) ?? null;
-  const committed = facts.budget?.committed ?? 0;
   const tgt = plan.eventBudgetTarget ?? facts.budget?.target ?? null;
+  void onOpenEvent; // retired with the carried-learnings card; prop kept for the caller.
 
   const gcalMatchCandidates = plan.gcalMatchPending
     ? Object.entries(plan.gcalMatchPending).filter((e): e is [string, { gcalEventId: string; summary: string; start: string; htmlLink: string }] => e[1] !== null)
     : [];
+
+  // ── Slack captures ─────────────────────────────────────────────────────────
+  // Pins land in the ledger as `proposed`; the composed Overview surfaces them per home
+  // (open → Open·next-up, budget → Budget, person → Staffing) as engageable violet cards.
+  const [captures, setCaptures] = useState<SlackCapture[]>([]);
+  const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); };
+  useEffect(() => { reloadCaptures(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [eventId]);
+  const capByHome = (h: CaptureHome) => captures.filter((c) => c.home === h);
+
+  // The active planning home gets the composed layout; the phase views keep the classic body.
+  const planningActive = !locked && selectedView === "planning";
+
+  // Setup-nudge navigation, shared by the classic amber cards (phase views) and the new
+  // Open·next-up "Setup" group (planning view).
+  const highlightField = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const cls = ["ring-2", "ring-amber-300", "ring-offset-2", "rounded-md"];
+    el.classList.add(...cls);
+    const clear = () => el.classList.remove(...cls);
+    setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
+  };
+  const reviewBudgetField = () => {
+    let tries = 0;
+    const tick = () => {
+      const state = document.getElementById("budget-projections-state")?.getAttribute("data-state");
+      if (state === "ready") return;
+      if (state === "empty") { highlightField("budget-target-field"); return; }
+      if (tries++ < 15) { setTimeout(tick, 100); return; }
+      highlightField("budget-target-field");
+    };
+    setTimeout(tick, 120);
+  };
+  const settleSetup = (key: SetupFlagKey) => {
+    setPlan((p) => {
+      if (!p) return p;
+      const next = [...p.setupProgress, key];
+      void saveSetupState(eventId, next, p.setupComplete);
+      return { ...p, setupProgress: next };
+    });
+  };
+  const SETUP_META: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }> = {
+    date: { title: "Set the event date", blurb: "Unlocks scheduling and deliverable due-dates.", Icon: Calendar, go: () => highlightField("hlf-date") },
+    headcount: { title: "Add expected headcount", blurb: "Sizes budget and logistics.", Icon: Users, go: () => highlightField("hlf-headcount") },
+    owners: { title: "Add owners", blurb: "Give this event a co-owner.", Icon: UserPlus, go: () => highlightField("hlf-owners") },
+    budget: { title: "Review budget targets", blurb: "Set targets from comparable past events.", Icon: DollarSign, go: () => { onOpenBudget(); reviewBudgetField(); } },
+    timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
+  };
+  const openFlags = visibleFlags(plan);
+  const openCaptures = capByHome("open");
+  // "Anything open" = a setup gap OR an unresolved decision/to-do. Drives the top-slot choice.
+  const anythingOpen = openFlags.length > 0 || openCaptures.length > 0;
 
   return (
     <div className="space-y-6">
@@ -3855,93 +3907,55 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
         />
       )}
 
-      {/* Setup flags — amber nudge cards for each incomplete onboarding step. */}
-      {(() => {
-        const flags = visibleFlags(plan);
-        if (flags.length === 0) return null;
-        // Clicking a flag scrolls to its field and briefly rings it (self-contained; header lives in the outer component).
-        const highlight = (id: string) => {
-          const el = document.getElementById(id);
-          if (!el) return;
-          el.scrollIntoView({ behavior: "smooth", block: "center" });
-          const cls = ["ring-2", "ring-amber-300", "ring-offset-2", "rounded-md"];
-          el.classList.add(...cls);
-          // Stays until the user clicks somewhere; defer so the click that opened it doesn't clear it.
-          const clear = () => el.classList.remove(...cls);
-          setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
-        };
-        // After opening the Budget tab: if there are no past-event comparables to draw from,
-        // guide the eye to the target field instead of the (absent) projections area.
-        const reviewBudget = () => {
-          let tries = 0;
-          const tick = () => {
-            const state = document.getElementById("budget-projections-state")?.getAttribute("data-state");
-            if (state === "ready") return;                          // comparables exist → projections area is the guide
-            if (state === "empty") { highlight("budget-target-field"); return; }
-            if (tries++ < 15) { setTimeout(tick, 100); return; }    // still loading — keep waiting (~1.5s)
-            highlight("budget-target-field");                       // fallback if it never resolves
-          };
-          setTimeout(tick, 120);
-        };
-        const META: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }> = {
-          date: { title: "Set the event date", blurb: "Unlocks scheduling and deliverable due-dates.", Icon: Calendar, go: () => highlight("hlf-date") },
-          headcount: { title: "Add expected headcount", blurb: "Sizes budget and logistics.", Icon: Users, go: () => highlight("hlf-headcount") },
-          owners: { title: "Add owners", blurb: "Give this event a co-owner.", Icon: UserPlus, go: () => highlight("hlf-owners") },
-          budget: { title: "Review budget", blurb: "Set targets from comparable past events.", Icon: DollarSign, go: () => { onOpenBudget(); reviewBudget(); } },
-          timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
-        };
-        const settle = (key: SetupFlagKey) => {
-          setPlan((p) => {
-            if (!p) return p;
-            const next = [...p.setupProgress, key];
-            void saveSetupState(eventId, next, p.setupComplete);
-            return { ...p, setupProgress: next };
-          });
-        };
-        return (
-          <div className="space-y-2">
-            {flags.map((key) => {
-              const m = META[key];
-              return (
-                <div key={key} className="flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 pr-2">
-                  {/* Whole icon+text area is the link to the field; hover signals it's clickable. */}
-                  <button onClick={m.go} className="group flex-1 min-w-0 flex items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition-colors">
-                    <m.Icon className="w-5 h-5 text-amber-700 shrink-0" />
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">{m.title}</span>
-                      <span className="block text-[13px] text-amber-700">{m.blurb}</span>
-                    </span>
-                  </button>
-                  <button onClick={() => settle(key)} title="Dismiss — don't show this again" className="w-5 h-5 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
-                    <Check className="w-3 h-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })()}
-
-
-      {/* Status digest — synthesized one-liner by default; Claude bullets after Resync. */}
-      <div className="bg-white rounded-2xl border border-border p-4">
-        <div className="flex items-center justify-between gap-3">
-          {summaryBullets.length > 0 ? (
-            <ul className="flex-1 list-disc pl-5 space-y-1 text-[15px] text-gray-700 leading-relaxed">
-              {summaryBullets.map((b, i) => <li key={i}>{b}</li>)}
-            </ul>
-          ) : (
-            <p className="flex-1 text-[15px] text-gray-700">{synthDigest}</p>
-          )}
-          <button onClick={resync} disabled={resyncing} className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            <RefreshCw className={`w-3 h-3 ${resyncing ? "animate-spin" : ""}`} /> {resyncing ? "Resyncing…" : "Resync"}
-          </button>
+      {/* Classic setup-flag cards — kept for the phase views (day-before / day-of / post).
+          The planning view folds these into "Open · next up" instead (below). */}
+      {!planningActive && openFlags.length > 0 && (
+        <div className="space-y-2">
+          {openFlags.map((key) => {
+            const m = SETUP_META[key];
+            return (
+              <div key={key} className="flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 pr-2">
+                <button onClick={m.go} className="group flex-1 min-w-0 flex items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition-colors">
+                  <m.Icon className="w-5 h-5 text-amber-700 shrink-0" />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">{m.title}</span>
+                    <span className="block text-[13px] text-amber-700">{m.blurb}</span>
+                  </span>
+                </button>
+                <button onClick={() => settleSetup(key)} title="Dismiss — don't show this again" className="w-5 h-5 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
+                  <Check className="w-3 h-3" />
+                </button>
+              </div>
+            );
+          })}
         </div>
-        {resyncMsg && <p className="text-[15px] text-gray-400 mt-2">{resyncMsg}</p>}
-      </div>
+      )}
 
-      {/* Phase timeline — interactive while live; a static record once settled/locked. */}
-      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
+      {/* Status digest (classic one-liner) — phase views only; the planning view uses the composed
+          "Where things stand" card below. */}
+      {!planningActive && (
+        <div className="bg-white rounded-2xl border border-border p-4">
+          <div className="flex items-center justify-between gap-3">
+            {summaryBullets.length > 0 ? (
+              <ul className="flex-1 list-disc pl-5 space-y-1 text-[15px] text-gray-700 leading-relaxed">
+                {summaryBullets.map((b, i) => <li key={i}>{b}</li>)}
+              </ul>
+            ) : (
+              <p className="flex-1 text-[15px] text-gray-700">{synthDigest}</p>
+            )}
+            <button onClick={resync} disabled={resyncing} className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+              <RefreshCw className={`w-3 h-3 ${resyncing ? "animate-spin" : ""}`} /> {resyncing ? "Resyncing…" : "Resync"}
+            </button>
+          </div>
+          {resyncMsg && <p className="text-[15px] text-gray-400 mt-2">{resyncMsg}</p>}
+        </div>
+      )}
+
+      {/* Phase timeline — interactive while live; a static record once settled/locked. Hidden in the
+          composed planning view (navigation returns via the phase views' own controls). */}
+      {!planningActive && (
+        <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
+      )}
 
       {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
       {locked ? (
@@ -3953,52 +3967,115 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       ) : selectedView === "post" ? (
         <PostEventView plan={plan} temporal={temporal} onOpenDeliverable={onOpenDeliverable} onOpenPeople={onOpenPeople} assignedTarget={tgt} onApplied={onApplied} onFocusChange={(f) => setPlan((p) => (p ? { ...p, focusOverride: f } : p))} />
       ) : (
-        // PLANNING view — the build-it spine (budget, deliverables, guardrails, staffing).
+        // PLANNING view — composed Overview: Open·next-up ⇄ Where-things-stand, then Budget|Staffing,
+        // then Learnings. Cut vs. the old stack: deliverables preview, at-a-glance, Linear box,
+        // auto-updates, carried-learnings card (compounding now permeates the state cards inline).
         <div className="space-y-6">
-          {/* Top row: budget shares its width with At-a-glance + Guardrails. */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-            {/* Left column: Budget, then the Linear update box fills the space beneath it. */}
-            <div className="space-y-6 min-w-0">
+          {/* Top slot goes to whatever's most useful now: anything open → Open·next-up leads and the
+              summary sits under it; nothing open → the summary takes the slot and Open is not shown. */}
+          {anythingOpen && (
+            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} captures={openCaptures} onCaptureChange={reloadCaptures} />
+          )}
+
+          <WhereThingsStand bullets={summaryBullets} fallback={synthDigest} onRefresh={resync} refreshing={resyncing} note={resyncMsg} />
+
+          {/* Budget | Staffing — the two current-state cards, side by side. Each carries its own
+              proposed Slack captures (budget / person) as engageable violet cards. */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            <div className="space-y-3 min-w-0">
               <BudgetCard plan={plan} onOpenBudget={onOpenBudget} />
-              <LinearUpdateBox eventId={eventId} linearSynced={!!plan.linearProjectId} onApplied={onApplied} variant="card" />
+              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} />)}
             </div>
-            <div className="flex flex-col gap-4 min-w-0">
-              {/* At a glance */}
-              <div className="bg-white rounded-2xl border border-border p-5">
-                <h3 className="font-medium mb-3">At a glance</h3>
-                <div className="space-y-3">
-                  <GlanceTile label="Deliverables" value={`${facts.deliverables.done}/${facts.deliverables.total}`} hint={facts.deliverables.overdue ? `${facts.deliverables.overdue} overdue` : "done"} />
-                  <GlanceTile label="Vendors" value={`${contracted.length}/${plan.engagements.length}`} hint="contracted" />
-                  <GlanceTile label="Budget" value={tgt != null ? `${money(committed)} / ${money(tgt)}` : money(committed)} hint={tgt != null ? "committed vs target" : "committed"} />
-                  <GlanceTile label="Expected turnout" value={expectedTurnout != null ? String(expectedTurnout) : "—"} hint={showRate ?? "from RSVPs"} />
-                </div>
-              </div>
-              {/* Grows to fill the right column so its bottom aligns with the Linear box on the left. */}
-              <div className="flex-1 flex flex-col">
-                <StringListEditor title="Learnings" initial={plan.reflections} onSave={(v) => setEventReflections(eventId, v).catch(() => {})} variant="bullets" addLabel="Add note" placeholder="Add a learning" empty="No learnings yet." />
-              </div>
+            <div className="space-y-3 min-w-0">
+              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} />)}
+              <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} />
             </div>
           </div>
 
-          {/* Below, full width. */}
-          <OverviewDeliverables plan={plan} onOpen={onOpenDeliverable} />
-          <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} />
-          <div>
-            <h3 className="text-lg font-medium mb-3">Auto-updates</h3>
-            <AutoUpdates eventId={eventId} engagements={plan.engagements} onApplied={onApplied} />
-          </div>
+          {/* Learnings — this event's own (the write side of compounding). */}
+          <StringListEditor title="Learnings" initial={plan.reflections} onSave={(v) => setEventReflections(eventId, v).catch(() => {})} variant="bullets" addLabel="Add note" placeholder="Add a learning" empty="No learnings yet." />
         </div>
       )}
 
 
-      {/* Resources — open-only reference links (Google Docs / Sheets / folders). */}
+      {/* Resources — open-only reference links (Google Docs / Sheets / folders). Full width, bottom. */}
       <ResourcesSection links={plan.referenceLinks ?? []} eventId={eventId} setPlan={setPlan} />
+    </div>
+  );
+}
 
-      {/* Carried lessons */}
-      <div>
-        <h3 className="text-lg font-medium mb-3">Carried learnings</h3>
-        <CarriedLessons eventId={eventId} onOpenEvent={onOpenEvent} />
+// Retired from the composed Overview: the deliverables preview, at-a-glance tiles, the Linear-update
+// box, auto-updates, and the carried-learnings card. Kept in the file because the forthcoming
+// Activity summary + inline compounding hints will reuse parts (AutoUpdates → Activity feed,
+// CarriedLessons → in-card hints). Referenced here so the compiler doesn't flag them dead meanwhile.
+void [LinearUpdateBox, OverviewDeliverables, AutoUpdates, GlanceTile, CarriedLessons];
+
+// "Open" — what EventHub surfaces for you to act on. NOT a task list: only two kinds of thing live
+// here, a field to set or a proposal to confirm. No free-floating to-dos, no checkbox affordance.
+//   Setup — key event fields still unset (date, headcount, owners, budget). 2-col.
+//   Needs confirmation — Slack-captured tentative decisions to resolve (confirm / edit / dismiss).
+// Yields the top slot entirely (renders nothing) when both groups are empty.
+function OpenNextUp({ setupFlags, setupMeta, captures, onCaptureChange }: {
+  setupFlags: SetupFlagKey[];
+  setupMeta: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }>;
+  captures: SlackCapture[];
+  onCaptureChange: () => void;
+}) {
+  if (setupFlags.length === 0 && captures.length === 0) return null;
+  return (
+    <div className="bg-white rounded-2xl border border-border p-5">
+      <h3 className="font-medium">Open</h3>
+      <p className="text-[13px] text-gray-500 mt-0.5 mb-4">Event fields to set and captured proposals to confirm.</p>
+
+      {setupFlags.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">Setup</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {setupFlags.map((key) => {
+              const m = setupMeta[key];
+              return (
+                <button key={key} onClick={m.go} className="group flex items-center gap-2.5 rounded-lg border border-gray-200 px-3 py-2.5 text-left hover:border-gray-300 hover:bg-gray-50 transition-colors">
+                  <m.Icon className="w-4 h-4 text-gray-500 shrink-0" />
+                  <span className="flex-1 min-w-0 text-[14px] text-gray-800 group-hover:text-gray-900">{m.title}</span>
+                  <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-400 shrink-0" />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {captures.length > 0 && (
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">Needs confirmation</p>
+          <div className="space-y-2">
+            {captures.map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "Where things stand" — the synthesized, read-only narrative. It reports; the sections below hold
+// the truth. Prose-voice bullets, one light thought per line; a refresh regenerates from activity.
+function WhereThingsStand({ bullets, fallback, onRefresh, refreshing, note }: {
+  bullets: string[]; fallback: string; onRefresh: () => void; refreshing: boolean; note: string | null;
+}) {
+  const lines = bullets.length > 0 ? bullets : [fallback];
+  return (
+    <div className="bg-white rounded-2xl border border-border p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <h3 className="flex items-center gap-1.5 font-medium"><Sparkles className="w-4 h-4 text-violet-500" /> Where things stand</h3>
+        <button onClick={onRefresh} disabled={refreshing} title="Regenerate from the latest activity" className="shrink-0 inline-flex items-center gap-1 text-[12px] text-gray-400 hover:text-gray-600 disabled:opacity-50">
+          <RefreshCw className={`w-3 h-3 ${refreshing ? "animate-spin" : ""}`} /> {refreshing ? "refreshing…" : "refresh"}
+        </button>
       </div>
+      <div className="space-y-2 text-[14px] text-gray-700 leading-relaxed">
+        {lines.map((l, i) => <p key={i}>{l}</p>)}
+      </div>
+      {note && <p className="text-[12px] text-gray-400 mt-2">{note}</p>}
+      <p className="text-[12px] text-gray-400 mt-3 pt-3 border-t border-gray-100">Synthesized from Slack + activity. Details and edits live in the sections below.</p>
     </div>
   );
 }

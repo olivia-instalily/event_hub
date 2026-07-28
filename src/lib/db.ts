@@ -2027,6 +2027,57 @@ export async function unlinkSlackChannel(eventId: string): Promise<void> {
   if (error || (data as any)?.error) throw new Error((data as any)?.error ?? error?.message ?? 'unlink failed');
 }
 
+// ── Slack captures (the pin-to-EventHub ledger) ──────────────────────────────
+// A capture is one extracted planning fact routed to a "home". The Slack pin pipeline writes them
+// as `proposed`; the Overview surfaces the proposed ones for confirm/edit/dismiss. Homes:
+//   plan → run-of-show (Deliverables), person → Staffing/People, open → Open·next-up, budget → Budget.
+export type CaptureHome = 'plan' | 'person' | 'open' | 'budget';
+export interface SlackCapture {
+  id: string;
+  home: CaptureHome;
+  summary: string;
+  detail: string | null;
+  status: 'proposed' | 'confirmed' | 'dismissed';
+  sourceRef: string | null;   // permalink back to the Slack message
+  sourceQuote: string | null;
+  flags: Record<string, unknown>;  // { conflict?: {field}, ambiguity?: string }
+  createdAt: string;
+}
+
+/** The event's still-proposed captures, oldest first (so the reader sees them in arrival order). */
+export async function listSlackCaptures(eventId: string): Promise<SlackCapture[]> {
+  const { data, error } = await supabase
+    .from('slack_capture')
+    .select('id, home, summary, detail, status, source_ref, source_quote, flags, created_at')
+    .eq('event_id', eventId)
+    .eq('status', 'proposed')
+    .order('created_at', { ascending: true });
+  if (error) { console.warn('listSlackCaptures', error.message); return []; }
+  return (data ?? []).map((r: any) => ({
+    id: r.id, home: r.home, summary: r.summary, detail: r.detail ?? null, status: r.status,
+    sourceRef: r.source_ref ?? null, sourceQuote: r.source_quote ?? null,
+    flags: (r.flags as Record<string, unknown>) ?? {}, createdAt: r.created_at,
+  }));
+}
+
+/** Accept a proposed capture (it graduates out of the proposed list into its home's settled state). */
+export async function confirmSlackCapture(id: string): Promise<void> {
+  const { error } = await supabase.from('slack_capture').update({ status: 'confirmed' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/** Reject a proposed capture (a misfire, or already handled elsewhere). */
+export async function dismissSlackCapture(id: string): Promise<void> {
+  const { error } = await supabase.from('slack_capture').update({ status: 'dismissed' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/** Correct a capture's wording before confirming. */
+export async function editSlackCapture(id: string, patch: { summary?: string; detail?: string | null }): Promise<void> {
+  const { error } = await supabase.from('slack_capture').update(patch).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
 // ── Tutorials (admin-editable) ───────────────────────────────────────────────
 // The whole tutorial structure lives as one JSON blob in app_setting.value (text). null = never
 // saved yet → the page falls back to its built-in default seed. `icon` is a lucide name (string),

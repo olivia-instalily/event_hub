@@ -36,12 +36,13 @@ Read the surrounding messages to interpret the pin, but only treat messages that
 Route each thing you find into exactly ONE home:
 - plan   — a DECIDED flow/format/choice ("jazz then a singer", "playlist not a DJ", "pre-pour wine").
 - person — a specific person with a role ("Doug performs", "Thurman on bar").
-- open   — anything TENTATIVE/conditional ("maybe a mural", "robot dog if cost works") OR a to-do/thing to chase ("get quotes", "cost for Karim").
+- open   — a TENTATIVE/undecided CHOICE that still needs confirming ("maybe a mural", "robot dog if cost works", "leaning fortune teller over the robot dog"). A proposal to resolve, not an errand.
 - budget — a stated cost figure or budget decision ("$1,200", "aiming ~$14k").
 
 Hard rules:
-- Tentative language (potentially / if / depending / might / need a quote for) → home "open", never plan/person/budget.
-- There is NO vendor home. A supplier is either a "plan" decision (we're using them) or an "open" item (getting a quote).
+- Tentative/undecided language (maybe / if / depending / might / leaning toward) → home "open", never plan/person/budget.
+- EventHub surfaces fields and decisions to confirm, NOT a personal task list. Do NOT capture bare errands or to-dos ("get quotes", "email the vendor", "follow up", "line up a bar hand", "chase the cost package"). If a message is purely an action item with nothing to confirm, skip it. Only capture the underlying decision when one is actually being made.
+- There is NO vendor home. A supplier is either a "plan" decision (we're using them) or an "open" tentative choice (still deciding whether to).
 - Prefer FEWER real captures over enumerating every mention. Skip small talk.
 - NEVER fabricate a value/name/cost/role that wasn't stated (don't turn "work the crowd" into "magician").
 - When a later message supersedes an earlier one, capture only the latest state.
