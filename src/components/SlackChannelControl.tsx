@@ -49,8 +49,8 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
   const filtered = channels.filter((c) => c.name.includes(q.toLowerCase()));
   return (
     <div className="relative inline-block" ref={ref} onClick={(e) => e.stopPropagation()}>
-      <button onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800">
-        <Hash className="w-3.5 h-3.5" /> Link Slack
+      <button onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg px-2.5 py-1 hover:bg-gray-50 transition-colors">
+        <Hash className="w-4 h-4" /> Link Slack
       </button>
       {open && (
         <div className="absolute z-40 mt-1 w-72 rounded-xl border border-border bg-white shadow-xl p-3 space-y-3">
