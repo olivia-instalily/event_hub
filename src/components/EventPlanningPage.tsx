@@ -4421,29 +4421,27 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
             <div className="mb-3"><TagStack tags={plan.tags} editable onChange={(tags) => { setPlan((p) => (p ? { ...p, tags } : p)); void updateEventTags(eventId, tags); }} /></div>
             {/* Tier 1 — identity: title + status, vertically centered */}
             <div className="mb-4 flex items-center gap-3 flex-wrap">
-              <EditableTitle value={plan.title} onChange={(name) => { setPlan((p) => (p ? { ...p, title: name } : p)); void updateEvent(eventId, { name }); }} className="text-3xl" />
+              <EditableTitle value={plan.title} onChange={(name) => { setPlan((p) => (p ? { ...p, title: name } : p)); void updateEvent(eventId, { name }); }} className="text-3xl leading-none" />
               <StatusControl eventId={eventId} status={plan.status} eventDate={plan.date} showLabel={false} onChange={(s) => setPlan((p) => (p ? { ...p, status: s } : p))} />
             </div>
             {/* Tier 2 — core facts: date block · time · format · location · expected · speakers */}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3 text-sm text-gray-600">
-              <div id="hlf-date" className="inline-flex items-center gap-1.5 border border-gray-200 rounded px-2 py-0.5">
+              <div id="hlf-date" className="inline-flex items-center gap-1 border border-gray-200 rounded pl-1.5 pr-1 py-0.5">
                 {!plan.lumaEventId ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <DateEdit
-                      value={plan.date}
-                      onChange={(iso) => {
-                        setPlan((p) => (p ? { ...p, date: iso } : p));
-                        void setEventDate(eventId, iso);
-                      }}
-                      placeholder="Date"
-                    />
-                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
-                  </span>
+                  <DateEdit
+                    value={plan.date}
+                    onChange={(iso) => {
+                      setPlan((p) => (p ? { ...p, date: iso } : p));
+                      void setEventDate(eventId, iso);
+                    }}
+                    placeholder="Date"
+                  />
                 ) : (
-                  <>
-                    <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
-                    <span>{plan.date ?? "Date"}</span>
-                  </>
+                  <span>{plan.date ?? "Date"}</span>
+                )}
+                {/* Only the meaningful GCal states (synced link / pending review) — no redundant "+calendar" prompt next to DateEdit's own calendar icon. */}
+                {(plan.gcalEventId || plan.gcalMatchPending) && (
+                  <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                 )}
               </div>
               <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
