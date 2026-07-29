@@ -3085,7 +3085,10 @@ export async function setEngagementCategory(engagementId: string, category: stri
     const { data: bud } = await supabase.from('budget').select('id').eq('event_id', eventId).maybeSingle();
     if (bud) {
       const lines = await listBudgetLines((bud as any).id);
-      const match = lines.find((l) => l.label && categoryKey(l.label) === categoryKey(oldCat));
+      // Prefer the line linked to THIS engagement; fall back to the label match. Avoids re-labelling
+      // a sibling engagement's line when two decisions in one event share a category name.
+      const match = lines.find((l) => l.linkedEngagement === engagementId)
+        ?? lines.find((l) => l.label && categoryKey(l.label) === categoryKey(oldCat));
       if (match) await updateBudgetLine(match.id, { label: next });
     }
   }

@@ -575,7 +575,9 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange, allCateg
   };
   const confirmPrompt = async () => {
     if (!prompt || !selected) return;
-    const note = comment.trim() || null;
+    // A blank contract comment must NOT wipe the vendor description (both live in engagement.note) —
+    // keep the existing note when no comment is typed.
+    const note = comment.trim() || eng.note;
     const docUrl = attach.trim() || null;
     await setEngagementStage(eng.id, "Contracted", { note, docUrl, confirmedAmount: selected.quoteAmount });
     // Drop the contracted vendor onto its category budget line (create the line if missing).
