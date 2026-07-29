@@ -40,6 +40,7 @@ import {
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
   listSlackCaptures, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listEngagementCategories, setEngagementCategory, setEngagementNote,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -64,6 +65,7 @@ import { regenerateFromMaterials as runRegenerate } from "../lib/regenerate";
 import { ConfirmModal } from "./Modal";
 import { GCalSync } from "./GCalSync";
 import { GcalLinkControl } from "./GcalLinkControl";
+import { CategoryCombobox, DescriptionLine, SupplierName } from "./vendorFields";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
 import { LinearLauncher } from "./LinearLauncher";
@@ -493,7 +495,7 @@ function VendorCardModal({ eventId, engagementId, candidate, onClose, onSaved }:
 // Advancing to Contracted prompts to pick the winning candidate; a comment/attachment is optional.
 const PROMPTED_STAGES = new Set(["Contracted"]);
 
-function DecisionCard({ initial, eventId, location, onDelete, onChange }: { initial: EngagementWithCandidates; eventId: string; location?: string | null; onDelete: () => void; onChange?: (e: EngagementWithCandidates) => void }) {
+function DecisionCard({ initial, eventId, location, onDelete, onChange, allCategories = [] }: { initial: EngagementWithCandidates; eventId: string; location?: string | null; onDelete: () => void; onChange?: (e: EngagementWithCandidates) => void; allCategories?: string[] }) {
   const [eng, setEng] = useState(initial);
   const [cardId, setCardId] = useState<string | null>(null); // candidate whose vendor card is open
   // "See suggested" — pulls from the vendor database (not yet populated), ranked by location.
@@ -609,13 +611,24 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange }: { init
     <div className="bg-white rounded-2xl border border-border p-5">
       <div className="flex items-start justify-between mb-3">
         <div>
-          <p className="text-lg font-medium">{eng.category ?? "Uncategorized"}</p>
-          {contracted && (
-            <p className="text-sm text-gray-600">
-              Confirmed: <span className="font-medium">{money(eng.confirmedAmount)}</span>
-              {selected?.vendorName ? ` · ${selected.vendorName}` : ""}
+          <CategoryCombobox
+            value={eng.category}
+            options={allCategories}
+            onCommit={async (c) => { setEng((e) => ({ ...e, category: c })); await setEngagementCategory(eng.id, c); }}
+          />
+          {selected && (
+            <p className="text-sm text-gray-600 mt-0.5">
+              {contracted && <>Confirmed: <span className="font-medium">{money(eng.confirmedAmount)}</span> · </>}
+              <SupplierName
+                value={selected.vendorName}
+                onCommit={async (name) => { patchCand(selected.id, { vendorName: name }); await updateCandidate(selected.id, { vendorName: name }); }}
+              />
             </p>
           )}
+          <DescriptionLine
+            value={eng.note}
+            onCommit={async (n) => { setEng((e) => ({ ...e, note: n })); await setEngagementNote(eng.id, n); }}
+          />
         </div>
         <button onClick={onDelete} className="text-gray-400 hover:text-red-600" aria-label="Delete decision"><Trash2 className="w-4 h-4" /></button>
       </div>
@@ -778,6 +791,8 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
   const [engs, setEngs] = useState(initial);
   const [newCat, setNewCat] = useState("");
   const [view, setView] = useState<"cards" | "chart">("cards");
+  const [allCategories, setAllCategories] = useState<string[]>([]);
+  useEffect(() => { listEngagementCategories().then(setAllCategories).catch(() => {}); }, [initial]);
 
   const add = async () => {
     const cat = newCat.trim();
@@ -806,7 +821,7 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
 
       {view === "cards" ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {engs.map((e) => <DecisionCard key={e.id} initial={e} eventId={eventId} location={location} onDelete={() => remove(e.id)} onChange={updateEng} />)}
+          {engs.map((e) => <DecisionCard key={e.id} initial={e} eventId={eventId} location={location} onDelete={() => remove(e.id)} onChange={updateEng} allCategories={allCategories} />)}
         </div>
       ) : engs.length > 0 && (
         <div className="bg-white rounded-2xl border border-border overflow-hidden">
