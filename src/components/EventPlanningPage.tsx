@@ -4206,6 +4206,11 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
         />
       )}
 
+      {/* Timeline first, then open-items + status below it — the SAME relative order as the planning
+          view (which folds the flags into "Open · next up" beneath the timeline). Keeps the layout
+          consistent across planning / day-of / post instead of flags jumping above the timeline. */}
+      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
+
       {/* Classic setup-flag cards — kept for the phase views (day-before / day-of / post).
           The planning view folds these into "Open · next up" instead (below). */}
       {!planningActive && openFlags.length > 0 && (
@@ -4249,12 +4254,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {resyncMsg && <p className="text-[15px] text-gray-400 mt-2">{resyncMsg}</p>}
         </div>
       )}
-
-      {/* Phase timeline — interactive while live; a static record once settled/locked. Hidden in the
-          composed planning view (navigation returns via the phase views' own controls). */}
-      {/* Phase timeline — shown in every view (incl. planning) so the phase nodes are always there to
-          navigate; it self-hides only when there are genuinely no markers. */}
-      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
 
       {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
       {locked ? (
