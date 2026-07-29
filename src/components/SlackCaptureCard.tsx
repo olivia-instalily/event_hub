@@ -1,12 +1,23 @@
 import { useState } from "react";
-import { Check, Pencil, X, ArrowUpRight, AlertTriangle } from "lucide-react";
-import { confirmSlackCapture, dismissSlackCapture, editSlackCapture, type SlackCapture } from "../lib/db";
+import { Check, Pencil, X, ArrowUpRight, AlertTriangle, Shuffle } from "lucide-react";
+import { confirmSlackCapture, dismissSlackCapture, editSlackCapture, type SlackCapture, type CaptureHome } from "../lib/db";
+
+// The lanes a capture can be moved to when the extraction guessed wrong (e.g. a vendor read as a
+// person). Order mirrors the sections; label reads plainly in the menu.
+const HOME_MOVE: { home: CaptureHome; label: string }[] = [
+  { home: "person", label: "Who (staff)" },
+  { home: "vendor", label: "Vendor" },
+  { home: "budget", label: "Budget" },
+  { home: "open", label: "Still open" },
+  { home: "plan", label: "Plan" },
+];
 
 // A single proposed Slack capture, engageable in place: confirm / edit / dismiss, with a link back
 // to the source message. Rendered wherever a capture lands (Open·next-up, Budget, Staffing) so the
 // "from Slack, not yet accepted" treatment is identical everywhere. Violet = proposed-from-Slack.
-export function SlackCaptureCard({ capture, onChange, onConfirm }: { capture: SlackCapture; onChange: () => void; onConfirm?: (capture: SlackCapture) => Promise<void> }) {
+export function SlackCaptureCard({ capture, onChange, onConfirm, onReclassify }: { capture: SlackCapture; onChange: () => void; onConfirm?: (capture: SlackCapture) => Promise<void>; onReclassify?: (capture: SlackCapture, home: CaptureHome) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [summary, setSummary] = useState(capture.summary);
   const [detail, setDetail] = useState(capture.detail ?? "");
   const [busy, setBusy] = useState(false);
@@ -67,6 +78,11 @@ export function SlackCaptureCard({ capture, onChange, onConfirm }: { capture: Sl
                 <button onClick={() => setEditing(true)} disabled={busy} className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700 disabled:opacity-50">
                   <Pencil className="w-3 h-3" /> edit
                 </button>
+                {onReclassify && (
+                  <button onClick={() => setMoving((m) => !m)} disabled={busy} className={`inline-flex items-center gap-1 disabled:opacity-50 ${moving ? "text-violet-700" : "text-gray-500 hover:text-gray-700"}`}>
+                    <Shuffle className="w-3 h-3" /> move
+                  </button>
+                )}
                 <button onClick={() => run(() => dismissSlackCapture(capture.id))} disabled={busy} className="inline-flex items-center gap-1 text-gray-400 hover:text-red-600 disabled:opacity-50">
                   <X className="w-3 h-3" /> dismiss
                 </button>
@@ -78,6 +94,22 @@ export function SlackCaptureCard({ capture, onChange, onConfirm }: { capture: Sl
               </>
             )}
           </div>
+
+          {moving && onReclassify && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-gray-400">move to:</span>
+              {HOME_MOVE.filter((h) => h.home !== capture.home).map((h) => (
+                <button
+                  key={h.home}
+                  onClick={() => run(async () => { await onReclassify(capture, h.home); setMoving(false); })}
+                  disabled={busy}
+                  className="rounded-full border border-gray-200 px-2 py-0.5 text-[11px] text-gray-600 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50"
+                >
+                  {h.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -39,7 +39,7 @@ import {
   getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, confirmSlackCapture, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listSlackCaptures, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -3848,10 +3848,24 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       const { name, role } = parsePersonRole(c.summary);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
+    } else if (c.home === "vendor") {
+      // External supplier → a real Vendors-tab engagement: category from the role, the name as the
+      // (selected) candidate, any figure as the quote.
+      const { name, role } = parsePersonRole(c.summary);
+      const amount = parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote);
+      const eng = await addEngagement(eventId, role || c.summary, amount);
+      const cand = await addCandidate(eng.id, name ?? c.summary, amount, "");
+      await selectCandidate(eng.id, cand.id);
     }
     await confirmSlackCapture(c.id);
     reloadCaptures();
     onApplied();
+  };
+
+  // Fix a misclassified capture's lane (e.g. a vendor read as a person) before it's settled.
+  const reclassifyCapture = async (c: SlackCapture, home: CaptureHome) => {
+    await setCaptureHome(c.id, home);
+    reloadCaptures();
   };
 
   // Resolve the merge flag: replace the line's figure, add on top of it, or keep the capture as its
@@ -4044,7 +4058,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {/* Top slot goes to whatever's most useful now: anything open → Open·next-up leads and the
               summary sits under it; nothing open → the summary takes the slot and Open is not shown. */}
           {anythingOpen && (
-            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={openCaptures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} />
+            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={openCaptures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} />
           )}
 
           <WhereThingsStand bullets={summaryBullets} fallback={synthDigest} onRefresh={resync} refreshing={resyncing} note={resyncMsg} />
@@ -4054,10 +4068,12 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           <div className="grid grid-cols-2 gap-6 items-start">
             <div className="space-y-3 min-w-0">
               <BudgetCard plan={plan} onOpenBudget={onOpenBudget} onSetTarget={() => { onOpenBudget(); reviewBudgetField(); }} />
-              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} />)}
+              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
             </div>
             <div className="space-y-3 min-w-0">
-              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} />)}
+              {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
+                  reclassified in place via the card's "move" menu. */}
+              {[...capByHome("person"), ...capByHome("vendor")].map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
               <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} />
             </div>
           </div>
@@ -4085,13 +4101,14 @@ void [LinearUpdateBox, OverviewDeliverables, AutoUpdates, GlanceTile, CarriedLes
 //   Setup — key event fields still unset (date, headcount, owners, budget). 2-col.
 //   Needs confirmation — Slack-captured tentative decisions to resolve (confirm / edit / dismiss).
 // Yields the top slot entirely (renders nothing) when both groups are empty.
-function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture }: {
+function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture, onReclassifyCapture }: {
   setupFlags: SetupFlagKey[];
   setupMeta: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }>;
   onDismissSetup: (key: SetupFlagKey) => void;
   captures: SlackCapture[];
   onCaptureChange: () => void;
   onConfirmCapture: (c: SlackCapture) => Promise<void>;
+  onReclassifyCapture: (c: SlackCapture, home: CaptureHome) => Promise<void>;
 }) {
   if (setupFlags.length === 0 && captures.length === 0) return null;
   return (
@@ -4130,7 +4147,7 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
         <div>
           <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">Needs confirmation</p>
           <div className="space-y-2">
-            {captures.map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} />)}
+            {captures.map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} onReclassify={onReclassifyCapture} />)}
           </div>
         </div>
       )}

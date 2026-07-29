@@ -2032,7 +2032,7 @@ export async function unlinkSlackChannel(eventId: string): Promise<void> {
 // A capture is one extracted planning fact routed to a "home". The Slack pin pipeline writes them
 // as `proposed`; the Overview surfaces the proposed ones for confirm/edit/dismiss. Homes:
 //   plan → run-of-show (Deliverables), person → Staffing/People, open → Open·next-up, budget → Budget.
-export type CaptureHome = 'plan' | 'person' | 'open' | 'budget';
+export type CaptureHome = 'plan' | 'person' | 'vendor' | 'open' | 'budget';
 export interface SlackCapture {
   id: string;
   home: CaptureHome;
@@ -2101,6 +2101,12 @@ export function maxBudgetStatus(a: BudgetStatus, b: BudgetStatus): BudgetStatus 
 /** Accept a proposed capture (it graduates out of the proposed list into its home's settled state). */
 export async function confirmSlackCapture(id: string): Promise<void> {
   const { error } = await supabase.from('slack_capture').update({ status: 'confirmed' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/** Re-route a proposed capture to a different home (fix a misclassification, e.g. person → vendor). */
+export async function setCaptureHome(id: string, home: CaptureHome): Promise<void> {
+  const { error } = await supabase.from('slack_capture').update({ home }).eq('id', id);
   if (error) throw new Error(error.message);
 }
 
