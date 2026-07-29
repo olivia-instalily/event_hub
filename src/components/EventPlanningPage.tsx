@@ -40,8 +40,9 @@ import {
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
   listSlackCaptures, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
-  listEngagementCategories, setEngagementCategory, setEngagementNote,
+  setEngagementCategory, setEngagementNote,
 } from "../lib/db";
+import { VENDOR_CATEGORY_DEFAULTS } from "../lib/vendorCategories";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { PHASES, PHASE_LABEL, nextTagSelection, type Benchmark } from "../lib/phases";
@@ -793,8 +794,8 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
   const [engs, setEngs] = useState(initial);
   const [newCat, setNewCat] = useState("");
   const [view, setView] = useState<"cards" | "chart">("cards");
-  const [allCategories, setAllCategories] = useState<string[]>([]);
-  useEffect(() => { listEngagementCategories().then(setAllCategories).catch(() => {}); }, [initial]);
+  // Curated defaults only — don't scrape random existing categories. (User-added persistence: later.)
+  const allCategories = VENDOR_CATEGORY_DEFAULTS;
 
   const add = async () => {
     const cat = newCat.trim();

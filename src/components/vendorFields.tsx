@@ -36,7 +36,7 @@ export function CategoryCombobox({ value, options, onCommit }: {
         autoFocus value={q} onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") void commit(q); if (e.key === "Escape") setEditing(false); }}
         placeholder="Category (e.g. Catering)"
-        className="text-lg font-medium border border-gray-300 rounded-md px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-300 w-56"
+        className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-gray-300 w-56"
       />
       {(matches.length > 0 || (q.trim() && !exact)) && (
         <div className="absolute z-20 mt-1 w-64 bg-white border border-border rounded-lg shadow-lg overflow-hidden">
