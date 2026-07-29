@@ -2628,11 +2628,14 @@ export type EngagementStage = (typeof ENGAGEMENT_STAGES)[number];
 const genId = (prefix: string) => `${prefix}-` + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
 const num = (n: unknown): number | null => (n == null || n === '' ? null : Number(n));
 
-// Per-vendor status ladder (replaces the single engagement-level "decree").
-export const CANDIDATE_STATUSES = ['sourced', 'quoted', 'contracted'] as const;
+// Per-vendor status ladder (replaces the single engagement-level "decree"). Multiple vendors can be
+// 'paid'. ('contracted' is the legacy value from the first cut — normalizes to 'paid'.)
+export const CANDIDATE_STATUSES = ['sourced', 'quoted', 'paid'] as const;
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
 export function normCandidateStatus(s: any): CandidateStatus {
-  return s === 'quoted' || s === 'contracted' ? s : 'sourced';
+  if (s === 'paid' || s === 'quoted') return s;
+  if (s === 'contracted') return 'paid'; // legacy
+  return 'sourced';
 }
 export interface VendorCandidate {
   id: string;
