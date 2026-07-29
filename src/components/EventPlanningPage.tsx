@@ -2234,6 +2234,9 @@ function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }
           {markers.map((m) => {
             // Locked: every phase reads as completed (no selection, no NOW), a static record.
             const isSel = !locked && m.key === selectedKey, isNow = !locked && m.key === currentKey, big = m.kind === "primary";
+            // The actual current phase keeps a STRONG highlight (solid + ring-4) even while you preview
+            // another; a previewed non-current phase gets a LIGHTER highlight (soft fill + ring-2).
+            const strong = isNow, preview = isSel && !isNow;
             return (
               <button
                 key={m.key}
@@ -2244,9 +2247,9 @@ function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }
                 className={`group relative flex flex-col items-center text-center ${big ? "flex-1 min-w-[64px] px-1" : "min-w-[40px] px-0.5"} ${locked ? "cursor-default" : ""}`}
               >
                 <span className="relative flex h-9 w-full items-center justify-center">
-                  <span className={`rounded-full transition-colors ${big ? "w-5 h-5 border-2 " + m.color.border : "w-2.5 h-2.5"} ${isSel ? `ring-4 ${m.color.ring}` : `group-hover:ring-2 group-hover:${m.color.ring}`} ${isSel || locked ? m.color.dot : m.kind === "secondary" ? m.color.dot : `bg-white ${m.color.fillSoft}`}`} />
+                  <span className={`rounded-full transition-colors ${big ? "w-5 h-5 border-2 " + m.color.border : "w-2.5 h-2.5"} ${strong ? `ring-4 ${m.color.ring}` : preview ? `ring-2 ${m.color.ring}` : locked ? "" : `group-hover:ring-2 group-hover:${m.color.ring}`} ${strong || locked ? m.color.dot : preview ? `${m.color.band} ${m.color.fillSoft}` : m.kind === "secondary" ? m.color.dot : `bg-white ${m.color.fillSoft}`}`} />
                 </span>
-                <span className={`mt-1.5 leading-tight ${big ? "text-[13px]" : "text-[11px]"} ${isSel ? `${m.color.text} font-semibold` : m.kind === "secondary" ? "text-gray-400" : "text-gray-600"}`}>{m.label}</span>
+                <span className={`mt-1.5 leading-tight ${big ? "text-[13px]" : "text-[11px]"} ${strong ? `${m.color.text} font-semibold` : preview ? m.color.text : m.kind === "secondary" ? "text-gray-400" : "text-gray-600"}`}>{m.label}</span>
                 {m.date && <span className="mt-0.5 text-[11px] text-gray-400 whitespace-nowrap">{fmtShort(m.date)}</span>}
                 {isNow && <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-gray-900"><span className="w-2 h-2 rounded-full bg-gray-900" /> NOW</span>}
               </button>
