@@ -3896,9 +3896,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     const el = document.getElementById(id);
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    const cls = ["ring-2", "ring-amber-300", "ring-offset-2", "rounded-md"];
-    el.classList.add(...cls);
-    const clear = () => el.classList.remove(...cls);
+    // Use inline styles, NOT added classes: when the target's tab finishes loading it re-renders and
+    // React resets className from JSX (wiping ring-* classes → the highlight flashes and vanishes).
+    // React doesn't manage this element's `style`, so an inline outline lingers until the click-away.
+    el.style.outline = "2px solid rgb(252 211 77)"; // amber-300
+    el.style.outlineOffset = "2px";
+    el.style.borderRadius = "6px";
+    const clear = () => { el.style.outline = ""; el.style.outlineOffset = ""; el.style.borderRadius = ""; };
     setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
   };
   // Always ring the budget target field once the Budget tab has mounted it — poll for the element so
