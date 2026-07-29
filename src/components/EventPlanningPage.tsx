@@ -797,13 +797,20 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
   // Curated defaults only — don't scrape random existing categories. (User-added persistence: later.)
   const allCategories = VENDOR_CATEGORY_DEFAULTS;
 
+  const addCat = async (cat: string) => {
+    const e = await addEngagement(eventId, cat);
+    setEngs((p) => [...p, e]);
+  };
   const add = async () => {
     const cat = newCat.trim();
     if (!cat) return;
-    const e = await addEngagement(eventId, cat);
-    setEngs((p) => [...p, e]);
+    await addCat(cat);
     setNewCat("");
   };
+  // Default category chips still available to create (a category disappears once a decision uses it).
+  // Custom categories can be typed too, but they never join the fixed default list.
+  const usedKeys = new Set(engs.map((e) => (e.category ?? "").trim().toLowerCase()).filter(Boolean));
+  const availableCats = allCategories.filter((c) => !usedKeys.has(c.toLowerCase()));
   const remove = async (id: string) => {
     await deleteEngagement(id);
     setEngs((p) => p.filter((e) => e.id !== id));
@@ -815,11 +822,25 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        {engs.length === 0 ? <p className="text-sm text-gray-400">No vendors yet — add one below.</p> : <span />}
+        {engs.length === 0 ? <p className="text-sm text-gray-400">No vendors yet — add one above.</p> : <span />}
         <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-lg p-1">
           <button onClick={() => setView("cards")} className={`p-1.5 rounded ${view === "cards" ? "bg-gray-100" : "hover:bg-gray-50"}`} title="Cards"><LayoutGrid className="w-4 h-4" /></button>
           <button onClick={() => setView("chart")} className={`p-1.5 rounded ${view === "chart" ? "bg-gray-100" : "hover:bg-gray-50"}`} title="Chart"><List className="w-4 h-4" /></button>
         </div>
+      </div>
+
+      {/* Add a decision: click a default category (disappears once used), or type a custom one. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[13px] text-gray-500 mr-0.5">Add a decision:</span>
+        {availableCats.map((cat) => (
+          <button key={cat} onClick={() => void addCat(cat)} className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-2.5 py-1 text-[13px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700">
+            <Plus className="w-3 h-3" /> {cat}
+          </button>
+        ))}
+        <span className="inline-flex items-center gap-1">
+          <input value={newCat} onChange={(e) => setNewCat(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void add(); }} placeholder="custom…" className="w-28 px-2 py-1 border border-gray-200 rounded-md text-[13px] focus:outline-none focus:ring-1 focus:ring-gray-300" />
+          {newCat.trim() && <button onClick={() => void add()} className="text-[13px] font-medium text-violet-700 hover:underline">add</button>}
+        </span>
       </div>
 
       {view === "cards" ? (
@@ -863,11 +884,6 @@ function VendorDecisions({ eventId, location, initial }: { eventId: string; loca
           <p className="px-4 py-2 text-[15px] text-gray-400">Switch to Cards to edit a decision, advance stages, or add candidates.</p>
         </div>
       )}
-
-      <div className="flex gap-2">
-        <input value={newCat} onChange={(e) => setNewCat(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="New decision category (e.g. Venue, Catering, A/V)" className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-        <button onClick={add} disabled={!newCat.trim()} className="inline-flex items-center gap-1 px-3 py-2 bg-gray-200 rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50"><Plus className="w-4 h-4" /> Add decision</button>
-      </div>
     </div>
   );
 }
