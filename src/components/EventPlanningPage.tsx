@@ -2072,7 +2072,6 @@ function buildFacts(plan: EventPlanning): PlanningFacts {
 // status derived from today vs. the phase date ranges, dates resolved when the event has one.
 // ── Phase-aware Overview: view modes + interactive timeline ───────────────────
 type ViewMode = "planning" | "day-before" | "day-of" | "post";
-const DAY_BEFORE_WINDOW = 1; // days before the event the "day-before" view becomes current
 const NEUTRAL_COLOR = { dot: "bg-gray-400", band: "bg-gray-100", text: "text-gray-600", ring: "ring-gray-200", border: "border-gray-400", fillSoft: "group-hover:bg-gray-100" };
 interface OvMarker { key: string; label: string; view: ViewMode; kind: "primary" | "secondary"; phaseName: string | null; date: string | null; color: typeof NEUTRAL_COLOR }
 
@@ -2080,77 +2079,62 @@ const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${St
 const addDays = (iso: string, n: number) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(a + "T00:00:00") - Date.parse(b + "T00:00:00")) / 86_400_000);
 const fmtShort = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-// A phase is "post" if its NAME says so, or it's genuinely after the event (start > 0) — but a
-// planning-named phase (Plan/Prep/Day-of/…) is never post even if its computed start drifts positive,
-// so the Plan node never shows the post-event "How it went" / "Wrap-up" body.
-const isPostPhase = (name: string, start: number | null) =>
-  /wrap|post|measure|after|recap|reflect|debrief|thank|follow/i.test(name) ||
-  (start != null && start > 0 && !/plan|prep|kickoff|lead|scop|brief|setup|day.?of/i.test(name));
 
 // Ordered timeline markers + the date-derived current marker/view ("you are here").
+// Primary markers are always the 3 canonical PHASES (planning / day-of / post); each phase's
+// benchmarks follow as smaller secondary markers, keyed bm:<id>, inheriting the phase color.
 function deriveMarkers(plan: EventPlanning): { markers: OvMarker[]; currentKey: string } {
-  const phases = enrichPhases({ phases: plan.phases, walkthrough: plan.walkthrough, deliverables: plan.deliverables }, DELIVERABLE_PHASES);
   const ev = plan.date;
-  const dayOfRx = /event\s*day|day[-\s]?of|run.?of.?show|\blive\b/i;
-  const markers: OvMarker[] = phases.map((p) => {
-    const view: ViewMode = dayOfRx.test(p.name) || p.start === 0 ? "day-of" : isPostPhase(p.name, p.start) ? "post" : "planning";
-    return { key: `phase:${p.name}`, label: p.name, view, kind: "primary", phaseName: p.name, date: ev && p.start != null ? addDays(ev, p.start) : null, color: p.color };
-  });
-  if (ev) {
-    // Day-before node is INVENTED only when there's a distinct cluster of final-week / day-before
-    // tasks (offsets inside the last week). Colour it as the phase those tasks officially belong to
-    // (the timeline renders secondary nodes as that phase's lighter halo).
-    const dayBeforeItems = plan.deliverables.filter((d) => d.offsetStart != null && d.offsetStart >= -7 && d.offsetStart < 0);
-    if (dayBeforeItems.length > 0) {
-      const leadUp = phases.filter((p) => !isPostPhase(p.name, p.start) && !dayOfRx.test(p.name));
-      const cover = leadUp.find((p) => p.start != null && -DAY_BEFORE_WINDOW >= p.start && -DAY_BEFORE_WINDOW <= (p.end ?? p.start))
-        ?? [...leadUp].sort((a, b) => (b.end ?? b.start ?? -1e9) - (a.end ?? a.start ?? -1e9))[0];
-      const color = cover?.color ?? NEUTRAL_COLOR;
-      const dayOfIdx = markers.findIndex((m) => m.view === "day-of");
-      markers.splice(dayOfIdx >= 0 ? dayOfIdx : markers.length, 0, { key: "day-before", label: "Day before", view: "day-before", kind: "secondary", phaseName: cover?.name ?? null, date: addDays(ev, -DAY_BEFORE_WINDOW), color });
-    }
-    // Post-event work with no phase tagged "post": rather than spawn a SEPARATE "Post-event" node
-    // beside the final phase (which reads as two distinct end stages), fold post-event INTO the last
-    // phase so the timeline's final node IS the post-event view. Only invent a standalone node when
-    // the last phase is the day-of (post genuinely comes after it).
-    const postItems = plan.deliverables.filter((d) => d.offsetStart != null && d.offsetStart > 0);
-    if (postItems.length > 0 && !markers.some((m) => m.view === "post") && markers.length > 0) {
-      const lastIdx = markers.length - 1;
-      if (markers[lastIdx].view === "planning") {
-        markers[lastIdx] = { ...markers[lastIdx], view: "post" };
-      } else {
-        markers.push({ key: "post", label: "Post-event", view: "post", kind: "secondary", phaseName: null, date: addDays(ev, 1), color: markers[lastIdx].color ?? NEUTRAL_COLOR });
-      }
+  // Fixed colors per canonical phase (matches PHASE_COLORS[0..2]).
+  const PHASE_COLOR_MAP: Record<string, typeof NEUTRAL_COLOR> = {
+    planning: { dot: "bg-blue-500", band: "bg-blue-100", text: "text-blue-700", ring: "ring-blue-200", border: "border-blue-500", fillSoft: "group-hover:bg-blue-100" },
+    "day-of":  { dot: "bg-violet-500", band: "bg-violet-100", text: "text-violet-700", ring: "ring-violet-200", border: "border-violet-500", fillSoft: "group-hover:bg-violet-100" },
+    post:      { dot: "bg-amber-500", band: "bg-amber-100", text: "text-amber-700", ring: "ring-amber-200", border: "border-amber-500", fillSoft: "group-hover:bg-amber-100" },
+  };
+  // Phase → view mode (1-to-1 for the canonical 3).
+  const PHASE_VIEW: Record<string, ViewMode> = { planning: "planning", "day-of": "day-of", post: "post" };
+
+  const markers: OvMarker[] = [];
+  for (const phase of PHASES) {
+    const color = PHASE_COLOR_MAP[phase] ?? NEUTRAL_COLOR;
+    const view = PHASE_VIEW[phase] ?? "planning";
+    markers.push({ key: `phase:${phase}`, label: PHASE_LABEL[phase], view, kind: "primary", phaseName: phase, date: null, color });
+    // Benchmarks for this phase as secondary sub-dots, same color, no date.
+    const bms = (plan.benchmarks ?? []).filter((b) => b.phase === phase).sort((a, b) => a.order - b.order);
+    for (const bm of bms) {
+      markers.push({ key: `bm:${bm.id}`, label: bm.name, view, kind: "secondary", phaseName: phase, date: null, color });
     }
   }
-  // No date → no "you are here" (don't fabricate a position); default view falls to planning.
+
+  // No date → no "you are here"; default view falls to planning.
   let currentKey = "";
   if (ev) {
-    currentKey = markers[0]?.key ?? "";
+    currentKey = `phase:planning`;
     const nowOff = daysBetween(localToday(), ev);
     let cv: ViewMode = "planning";
     if (nowOff > 0) cv = "post";
     else if (nowOff === 0) cv = "day-of";
-    else if (nowOff >= -DAY_BEFORE_WINDOW) cv = "day-before";
-    if (cv === "planning") {
-      const inPhase = phases.find((p) => p.start != null && nowOff >= p.start && nowOff <= (p.end ?? p.start) && !isPostPhase(p.name, p.start));
-      const begun = [...phases].reverse().find((p) => p.start != null && nowOff >= p.start && !isPostPhase(p.name, p.start));
-      currentKey = `phase:${(inPhase ?? begun ?? phases[0])?.name}`;
-    } else {
-      // Resolve to the matching node; if the day-before node wasn't invented, fall to day-of.
-      currentKey = markers.find((m) => m.view === cv)?.key
-        ?? (cv === "day-before" ? markers.find((m) => m.view === "day-of")?.key : undefined)
-        ?? markers[markers.length - 1]?.key
-        ?? currentKey;
+    if (cv !== "planning") {
+      currentKey = markers.find((m) => m.view === cv && m.kind === "primary")?.key ?? `phase:${cv}`;
     }
   }
   return { markers, currentKey };
 }
 
-// Interactive timeline: primary phase nodes (large) + secondary view-moments (small). The
-// date-derived "NOW" marker is fixed; the selected node is what's being previewed.
+// Interactive timeline: primary phase nodes (large) + benchmark sub-dots (small, same-color,
+// indented). The date-derived "NOW" marker is fixed; the selected node is what's being previewed.
+// Clicking a node also scrolls the corresponding deliverables section into view.
 function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }: { markers: OvMarker[]; currentKey: string; selectedKey: string; onSelect: (k: string) => void; locked?: boolean }) {
   if (markers.length === 0) return null;
+
+  function handleSelect(key: string) {
+    if (locked) return;
+    onSelect(key);
+    // Scroll the deliverables section for this marker into view.
+    const anchorId = key.startsWith("bm:") ? `delsec-bm-${key.slice(3)}` : `delsec-${key.replace(/^phase:/, "")}`;
+    document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <div className="bg-white rounded-2xl border border-border p-4">
       <div className="flex items-center justify-between mb-4">
@@ -2164,11 +2148,18 @@ function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }
             // Locked: every phase reads as completed (no selection, no NOW), a static record.
             const isSel = !locked && m.key === selectedKey, isNow = !locked && m.key === currentKey, big = m.kind === "primary";
             return (
-              <button key={m.key} type="button" onClick={() => { if (!locked) onSelect(m.key); }} disabled={locked} title={m.label} className={`group relative flex-1 min-w-[64px] flex flex-col items-center px-1 text-center ${locked ? "cursor-default" : ""}`}>
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => handleSelect(m.key)}
+                disabled={locked}
+                title={m.label}
+                className={`group relative flex flex-col items-center text-center ${big ? "flex-1 min-w-[64px] px-1" : "min-w-[40px] px-0.5"} ${locked ? "cursor-default" : ""}`}
+              >
                 <span className="relative flex h-9 w-full items-center justify-center">
-                  <span className={`rounded-full transition-colors ${big ? "w-5 h-5 border-2 " + m.color.border : "w-3.5 h-3.5"} ${isSel ? `ring-4 ${m.color.ring}` : ""} ${isSel || locked ? m.color.dot : m.kind === "secondary" ? `${m.color.band} ${m.color.fillSoft}` : `bg-white ${m.color.fillSoft}`}`} />
+                  <span className={`rounded-full transition-colors ${big ? "w-5 h-5 border-2 " + m.color.border : "w-2.5 h-2.5"} ${isSel ? `ring-4 ${m.color.ring}` : ""} ${isSel || locked ? m.color.dot : m.kind === "secondary" ? `${m.color.band} ${m.color.fillSoft}` : `bg-white ${m.color.fillSoft}`}`} />
                 </span>
-                <span className={`mt-1.5 text-[13px] leading-tight ${isSel ? `${m.color.text} font-semibold` : m.kind === "secondary" ? "text-gray-400" : "text-gray-600"}`}>{m.label}</span>
+                <span className={`mt-1.5 leading-tight ${big ? "text-[13px]" : "text-[11px]"} ${isSel ? `${m.color.text} font-semibold` : m.kind === "secondary" ? "text-gray-400" : "text-gray-600"}`}>{m.label}</span>
                 {m.date && <span className="mt-0.5 text-[11px] text-gray-400 whitespace-nowrap">{fmtShort(m.date)}</span>}
                 {isNow && <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-gray-900"><span className="w-2 h-2 rounded-full bg-gray-900" /> NOW</span>}
               </button>
