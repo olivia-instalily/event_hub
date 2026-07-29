@@ -3831,37 +3831,62 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
   // A budget capture that matches an existing line is ambiguous — replace the figure, add on top, or
   // keep separate? Rather than guess, we flag it and let the user choose (see the modal below).
-  const [budgetChoice, setBudgetChoice] = useState<{ capture: SlackCapture; amount: number | null; status: BudgetStatus; match: BudgetLineTracker } | null>(null);
+  type BudgetChoice = { capture: SlackCapture; amount: number | null; status: BudgetStatus; match: BudgetLineTracker };
+  const [budgetChoice, setBudgetChoice] = useState<BudgetChoice | null>(null);
+  const [acceptQueue, setAcceptQueue] = useState<BudgetChoice[]>([]); // remaining prompts during Accept-all
 
-  // Confirming promotes a capture into the settled record for its home, then marks it confirmed so it
-  // graduates out of the proposed list: budget → a budget line; person → a staff role + assignment.
-  // open/plan have no structured target yet, so confirm just accepts them.
-  const promoteAndConfirm = async (c: SlackCapture) => {
+  const budgetParams = (c: SlackCapture) => {
+    const text = `${c.summary} ${c.detail ?? ""} ${c.sourceQuote ?? ""}`;
+    return { amount: parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote), status: parseBudgetStatus(text) };
+  };
+
+  // Promote a capture into its home's record, then mark it confirmed. Returns a BudgetChoice (does
+  // NOT settle) when a budget capture matches an existing line — the caller decides how to prompt.
+  const promoteCapture = async (c: SlackCapture): Promise<BudgetChoice | null> => {
     if (c.home === "budget") {
-      // The figure may sit in detail, summary, or (older captures) only the source quote; status
-      // ('paid'/'quoted'/'estimate') is read from the same wording.
-      const text = `${c.summary} ${c.detail ?? ""} ${c.sourceQuote ?? ""}`;
-      const amount = parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote);
-      const status = parseBudgetStatus(text);
+      const { amount, status } = budgetParams(c);
       const match = await findBudgetLineMatch(eventId, c.summary);
-      if (match) { setBudgetChoice({ capture: c, amount, status, match }); return; } // ask, don't settle yet
+      if (match) return { capture: c, amount, status, match };
       await insertBudgetLine(eventId, c.summary, amount, status);
     } else if (c.home === "person") {
       const { name, role } = parsePersonRole(c.summary);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
     } else if (c.home === "vendor") {
-      // External supplier → a real Vendors-tab engagement: category from the role, the name as the
-      // (selected) candidate, any figure as the quote.
+      // External supplier → a real Vendors-tab engagement (category from the role, name as the
+      // selected candidate, any figure as the quote). "confirmed/booked" wording → Contracted.
       const { name, role } = parsePersonRole(c.summary);
-      const amount = parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote);
+      const { amount } = budgetParams(c);
       const eng = await addEngagement(eventId, role || c.summary, amount);
       const cand = await addCandidate(eng.id, name ?? c.summary, amount, "");
       await selectCandidate(eng.id, cand.id);
+      if (/\bconfirm|locked in|\bbooked\b|signed|hired|going with|on board/i.test(`${c.summary} ${c.detail ?? ""} ${c.sourceQuote ?? ""}`)) {
+        await setEngagementStage(eng.id, "Contracted");
+      }
     }
     await confirmSlackCapture(c.id);
+    return null;
+  };
+
+  // Single confirm from a card. Budget match → raise the merge modal; otherwise settle.
+  const promoteAndConfirm = async (c: SlackCapture) => {
+    const choice = await promoteCapture(c);
+    if (choice) { setBudgetChoice(choice); return; }
     reloadCaptures();
     onApplied();
+  };
+
+  // Accept every proposed capture. Non-ambiguous ones settle immediately; budget captures that match
+  // a line are queued and prompted one modal at a time.
+  const acceptAll = async () => {
+    const queue: BudgetChoice[] = [];
+    for (const c of captures) {
+      const choice = await promoteCapture(c);
+      if (choice) queue.push(choice);
+    }
+    reloadCaptures();
+    onApplied();
+    if (queue.length) { setBudgetChoice(queue[0]); setAcceptQueue(queue.slice(1)); }
   };
 
   // Fix a misclassified capture's lane (e.g. a vendor read as a person) before it's settled.
@@ -3870,8 +3895,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     reloadCaptures();
   };
 
-  // Resolve the merge flag: replace the line's figure, add on top of it, or keep the capture as its
-  // own line. Either way the capture is then confirmed (settled).
+  // Resolve the merge flag, then advance the Accept-all queue if one is running.
   const resolveBudgetChoice = async (mode: "replace" | "add" | "separate") => {
     if (!budgetChoice) return;
     const { capture, amount, status, match } = budgetChoice;
@@ -3882,9 +3906,17 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       await setBudgetLineAmountStatus(match.id, nextAmount, maxBudgetStatus(status, match.status));
     }
     await confirmSlackCapture(capture.id);
-    setBudgetChoice(null);
+    const [next, ...rest] = acceptQueue;
+    setBudgetChoice(next ?? null);
+    setAcceptQueue(rest);
     reloadCaptures();
     onApplied();
+  };
+
+  // Clicking a capture in the Slack inbox scrolls to (and rings) the section it affects.
+  const jumpToCapture = (c: SlackCapture) => {
+    const id = c.home === "budget" ? "ov-budget" : (c.home === "person" || c.home === "vendor") ? "ov-staffing" : "ov-open";
+    highlightField(id);
   };
 
   // The active planning home gets the composed layout; the phase views keep the classic body.
@@ -3931,9 +3963,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
   };
   const openFlags = visibleFlags(plan);
-  const openCaptures = capByHome("open");
-  // "Anything open" = a setup gap OR an unresolved decision/to-do. Drives the top-slot choice.
-  const anythingOpen = openFlags.length > 0 || openCaptures.length > 0;
+  // "Anything open" = a setup gap OR any proposed Slack capture (the Open card hosts the From-Slack
+  // inbox of all captures). Drives the top-slot choice.
+  const anythingOpen = openFlags.length > 0 || captures.length > 0;
 
   return (
     <div className="space-y-6">
@@ -4063,7 +4095,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {/* Top slot goes to whatever's most useful now: anything open → Open·next-up leads and the
               summary sits under it; nothing open → the summary takes the slot and Open is not shown. */}
           {anythingOpen && (
-            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={openCaptures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} />
+            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
           )}
 
           <WhereThingsStand bullets={summaryBullets} fallback={synthDigest} onRefresh={resync} refreshing={resyncing} note={resyncMsg} />
@@ -4071,11 +4103,11 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {/* Budget | Staffing — the two current-state cards, side by side. Each carries its own
               proposed Slack captures (budget / person) as engageable violet cards. */}
           <div className="grid grid-cols-2 gap-6 items-start">
-            <div className="space-y-3 min-w-0">
+            <div id="ov-budget" className="space-y-3 min-w-0 rounded-2xl">
               <BudgetCard plan={plan} onOpenBudget={onOpenBudget} onSetTarget={() => { onOpenBudget(); reviewBudgetField(); }} />
               {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
             </div>
-            <div className="space-y-3 min-w-0">
+            <div id="ov-staffing" className="space-y-3 min-w-0 rounded-2xl">
               {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
                   reclassified in place via the card's "move" menu. */}
               {[...capByHome("person"), ...capByHome("vendor")].map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
@@ -4104,9 +4136,10 @@ void [LinearUpdateBox, OverviewDeliverables, AutoUpdates, GlanceTile, CarriedLes
 // "Open" — what EventHub surfaces for you to act on. NOT a task list: only two kinds of thing live
 // here, a field to set or a proposal to confirm. No free-floating to-dos, no checkbox affordance.
 //   Setup — key event fields still unset (date, headcount, owners, budget). 2-col.
-//   Needs confirmation — Slack-captured tentative decisions to resolve (confirm / edit / dismiss).
+//   From Slack — the inbox of ALL proposed captures (each tagged with its category, and also
+//     previewed in its own section). Accept all settles them; each card can jump to its section.
 // Yields the top slot entirely (renders nothing) when both groups are empty.
-function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture, onReclassifyCapture }: {
+function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture, onReclassifyCapture, onAcceptAll, onJumpCapture }: {
   setupFlags: SetupFlagKey[];
   setupMeta: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }>;
   onDismissSetup: (key: SetupFlagKey) => void;
@@ -4114,10 +4147,13 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
   onCaptureChange: () => void;
   onConfirmCapture: (c: SlackCapture) => Promise<void>;
   onReclassifyCapture: (c: SlackCapture, home: CaptureHome) => Promise<void>;
+  onAcceptAll: () => Promise<void>;
+  onJumpCapture: (c: SlackCapture) => void;
 }) {
+  const [acceptingAll, setAcceptingAll] = useState(false);
   if (setupFlags.length === 0 && captures.length === 0) return null;
   return (
-    <div className="bg-white rounded-2xl border border-border p-5">
+    <div id="ov-open" className="bg-white rounded-2xl border border-border p-5">
       <h3 className="font-medium">Open</h3>
       <p className="text-[13px] text-gray-500 mt-0.5 mb-4">Event fields to set and captured proposals to confirm.</p>
 
@@ -4150,9 +4186,20 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
 
       {captures.length > 0 && (
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">Needs confirmation</p>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">From Slack · {captures.length}</p>
+            <button
+              onClick={async () => { setAcceptingAll(true); try { await onAcceptAll(); } finally { setAcceptingAll(false); } }}
+              disabled={acceptingAll}
+              className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-[12px] font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+            >
+              <Check className="w-3.5 h-3.5" /> {acceptingAll ? "accepting…" : "Accept all"}
+            </button>
+          </div>
           <div className="space-y-2">
-            {captures.map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} onReclassify={onReclassifyCapture} />)}
+            {captures.map((c) => (
+              <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} onReclassify={onReclassifyCapture} onJump={onJumpCapture} />
+            ))}
           </div>
         </div>
       )}
