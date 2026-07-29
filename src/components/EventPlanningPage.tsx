@@ -18,7 +18,7 @@ import {
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   ensureVendor, matchVendors, noteVendorOnBudgetLine, coerceStage, type VendorRow, setEventFocus,
   addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
-  addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable,
+  addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable, setEventBenchmarks, setDeliverableBenchmark,
   getPlanningSummary, saveOverviewSummary,
   getEventPeopleStats, listAttendeesForEvent, scheduleDebrief,
   extractDebrief, proposeTagsFromDebrief, upsertBudgetLines, type DebriefExtract,
@@ -44,7 +44,6 @@ import {
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { PHASES, PHASE_LABEL, type Benchmark } from "../lib/phases";
-import { setEventBenchmarks, setDeliverableBenchmark } from "../lib/db";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { Button } from "@instalily/ui/button";
@@ -1238,9 +1237,8 @@ function BudgetTracker({ budget, eventId, eventBudgetTarget = null, engagements 
   );
 }
 
-// ── Phase Editor ────────────────────────────────────────────────────────────
-// Collapsible panel for adding / renaming / removing / reordering an event's phases.
-// Never orphans deliverables: remove reassigns them, rename propagates to all of them.
+// ── Benchmark Editor ────────────────────────────────────────────────────────
+// Collapsible panel for adding / renaming / removing / reordering an event's benchmarks within its fixed phases.
 function BenchmarkEditor({
   eventId,
   benchmarks,
