@@ -2061,33 +2061,41 @@ export async function listSlackCaptures(eventId: string): Promise<SlackCapture[]
   }));
 }
 
-/** Promote a confirmed budget capture into a budget line. If a line for the same item already exists
- *  (fuzzy label match), MERGE into it — set the amount and advance the status — rather than adding a
- *  duplicate. Otherwise add a new line. Status ladder never downgrades (paid > quoted > estimate). */
-export async function addBudgetLineForEvent(eventId: string, label: string, amount: number | null, status: BudgetStatus = 'quoted'): Promise<void> {
+async function ensureBudgetId(eventId: string): Promise<string> {
   const { data } = await supabase.from('budget').select('id').eq('event_id', eventId).limit(1);
-  let budgetId = data?.[0]?.id as string | undefined;
-  if (!budgetId) {
-    budgetId = genId('bud');
-    const { error } = await supabase.from('budget').insert({ id: budgetId, event_id: eventId, currency: 'USD' });
-    if (error) throw new Error(error.message);
-  }
-  const wantStatus = amount != null ? status : 'estimate';
-  const existing = await listBudgetLines(budgetId);
-  const match = existing.find((l) => l.label && labelsMatch(l.label, label));
-  if (match) {
-    // Keep the higher status (a later quote shouldn't undo a 'paid'); take the new amount when given.
-    const nextStatus = BUDGET_RANK[wantStatus] >= BUDGET_RANK[match.status] ? wantStatus : match.status;
-    const { error } = await supabase.from('budget_line')
-      .update({ confirmed_amount: amount ?? match.confirmedAmount, payment_status: nextStatus })
-      .eq('id', match.id);
-    if (error) throw new Error(error.message);
-    return;
-  }
+  let id = data?.[0]?.id as string | undefined;
+  if (!id) { id = genId('bud'); const { error } = await supabase.from('budget').insert({ id, event_id: eventId, currency: 'USD' }); if (error) throw new Error(error.message); }
+  return id;
+}
+
+/** An existing budget line for the event whose label matches this one (fuzzy), or null. Doesn't
+ *  create a budget. Used to decide whether a confirmed budget capture merges or stands alone. */
+export async function findBudgetLineMatch(eventId: string, label: string): Promise<BudgetLineTracker | null> {
+  const { data } = await supabase.from('budget').select('id').eq('event_id', eventId).limit(1);
+  const budgetId = data?.[0]?.id as string | undefined;
+  if (!budgetId) return null;
+  const lines = await listBudgetLines(budgetId);
+  return lines.find((l) => l.label && labelsMatch(l.label, label)) ?? null;
+}
+
+/** Add a brand-new budget line (no merge). */
+export async function insertBudgetLine(eventId: string, label: string, amount: number | null, status: BudgetStatus = 'quoted'): Promise<void> {
+  const budgetId = await ensureBudgetId(eventId);
   const { error } = await supabase.from('budget_line').insert({
-    id: genId('bl'), budget_id: budgetId, label, confirmed_amount: amount, payment_status: wantStatus,
+    id: genId('bl'), budget_id: budgetId, label, confirmed_amount: amount, payment_status: amount != null ? status : 'estimate',
   });
   if (error) throw new Error(error.message);
+}
+
+/** Overwrite a budget line's amount + status (used by Replace / Add merge choices). */
+export async function setBudgetLineAmountStatus(id: string, amount: number | null, status: BudgetStatus): Promise<void> {
+  const { error } = await supabase.from('budget_line').update({ confirmed_amount: amount, payment_status: status }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+/** Higher of two budget statuses (a later quote shouldn't undo a 'paid'). */
+export function maxBudgetStatus(a: BudgetStatus, b: BudgetStatus): BudgetStatus {
+  return BUDGET_RANK[a] >= BUDGET_RANK[b] ? a : b;
 }
 
 /** Accept a proposed capture (it graduates out of the proposed list into its home's settled state). */

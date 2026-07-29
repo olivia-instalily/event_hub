@@ -39,7 +39,7 @@ import {
   getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, confirmSlackCapture, addBudgetLineForEvent, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listSlackCaptures, confirmSlackCapture, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -1954,7 +1954,12 @@ const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${St
 const addDays = (iso: string, n: number) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(a + "T00:00:00") - Date.parse(b + "T00:00:00")) / 86_400_000);
 const fmtShort = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-const isPostPhase = (name: string, start: number | null) => (start != null && start > 0) || /wrap|post|measure|after|recap|reflect|debrief|thank|follow/i.test(name);
+// A phase is "post" if its NAME says so, or it's genuinely after the event (start > 0) — but a
+// planning-named phase (Plan/Prep/Day-of/…) is never post even if its computed start drifts positive,
+// so the Plan node never shows the post-event "How it went" / "Wrap-up" body.
+const isPostPhase = (name: string, start: number | null) =>
+  /wrap|post|measure|after|recap|reflect|debrief|thank|follow/i.test(name) ||
+  (start != null && start > 0 && !/plan|prep|kickoff|lead|scop|brief|setup|day.?of/i.test(name));
 
 // Ordered timeline markers + the date-derived current marker/view ("you are here").
 function deriveMarkers(plan: EventPlanning): { markers: OvMarker[]; currentKey: string } {
@@ -3822,22 +3827,46 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   }, [eventId]);
   const capByHome = (h: CaptureHome) => captures.filter((c) => c.home === h);
 
+  // A budget capture that matches an existing line is ambiguous — replace the figure, add on top, or
+  // keep separate? Rather than guess, we flag it and let the user choose (see the modal below).
+  const [budgetChoice, setBudgetChoice] = useState<{ capture: SlackCapture; amount: number | null; status: BudgetStatus; match: BudgetLineTracker } | null>(null);
+
   // Confirming promotes a capture into the settled record for its home, then marks it confirmed so it
-  // graduates out of the proposed list: budget → a budget line (a captured figure is a quote);
-  // person → a staff role + assignment. open/plan have no structured target yet, so confirm just
-  // accepts them (they clear from the list; wiring open→plan/deliverable is the next pass).
+  // graduates out of the proposed list: budget → a budget line; person → a staff role + assignment.
+  // open/plan have no structured target yet, so confirm just accepts them.
   const promoteAndConfirm = async (c: SlackCapture) => {
     if (c.home === "budget") {
       // The figure may sit in detail, summary, or (older captures) only the source quote; status
-      // ('paid'/'quoted'/'estimate') is read from the same wording. Merge-by-label happens in db.
+      // ('paid'/'quoted'/'estimate') is read from the same wording.
       const text = `${c.summary} ${c.detail ?? ""} ${c.sourceQuote ?? ""}`;
-      await addBudgetLineForEvent(eventId, c.summary, parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote), parseBudgetStatus(text));
+      const amount = parseMoney(c.detail) ?? parseMoney(c.summary) ?? parseMoney(c.sourceQuote);
+      const status = parseBudgetStatus(text);
+      const match = await findBudgetLineMatch(eventId, c.summary);
+      if (match) { setBudgetChoice({ capture: c, amount, status, match }); return; } // ask, don't settle yet
+      await insertBudgetLine(eventId, c.summary, amount, status);
     } else if (c.home === "person") {
       const { name, role } = parsePersonRole(c.summary);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
     }
     await confirmSlackCapture(c.id);
+    reloadCaptures();
+    onApplied();
+  };
+
+  // Resolve the merge flag: replace the line's figure, add on top of it, or keep the capture as its
+  // own line. Either way the capture is then confirmed (settled).
+  const resolveBudgetChoice = async (mode: "replace" | "add" | "separate") => {
+    if (!budgetChoice) return;
+    const { capture, amount, status, match } = budgetChoice;
+    if (mode === "separate") {
+      await insertBudgetLine(eventId, capture.summary, amount, status);
+    } else {
+      const nextAmount = mode === "add" ? (match.confirmedAmount ?? 0) + (amount ?? 0) : amount;
+      await setBudgetLineAmountStatus(match.id, nextAmount, maxBudgetStatus(status, match.status));
+    }
+    await confirmSlackCapture(capture.id);
+    setBudgetChoice(null);
     reloadCaptures();
     onApplied();
   };
@@ -3889,6 +3918,37 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
   return (
     <div className="space-y-6">
+      {/* Budget merge flag: a capture whose label matches an existing line — replace / add / separate. */}
+      {budgetChoice && (() => {
+        const { capture, amount, status, match } = budgetChoice;
+        const newLabel = `${amount != null ? money(amount) : "no amount"} ${BUDGET_STATUS_META[status].label.toLowerCase()}`;
+        const cur = `${match.confirmedAmount != null ? money(match.confirmedAmount) : "no amount"} ${BUDGET_STATUS_META[match.status].label.toLowerCase()}`;
+        const sum = (match.confirmedAmount ?? 0) + (amount ?? 0);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setBudgetChoice(null)}>
+            <div className="bg-white rounded-2xl border border-border shadow-xl max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
+              <h3 className="font-medium mb-1">Same budget line?</h3>
+              <p className="text-[13px] text-gray-600 mb-4">The capture <b>“{capture.summary}”</b> ({newLabel}) matches an existing line <b>“{match.label}”</b> ({cur}).</p>
+              <div className="space-y-2">
+                <button onClick={() => void resolveBudgetChoice("replace")} className="w-full text-left rounded-lg border border-violet-300 bg-violet-50 px-3 py-2.5 hover:bg-violet-100">
+                  <span className="block text-[14px] font-medium text-violet-900">Replace the figure → {amount != null ? money(amount) : "—"}</span>
+                  <span className="block text-[12px] text-violet-700">The new number supersedes the old (a quote became the final).</span>
+                </button>
+                <button onClick={() => void resolveBudgetChoice("add")} className="w-full text-left rounded-lg border border-gray-200 px-3 py-2.5 hover:bg-gray-50">
+                  <span className="block text-[14px] font-medium text-gray-900">Add on top → {money(sum)}</span>
+                  <span className="block text-[12px] text-gray-500">An additional cost on the same line.</span>
+                </button>
+                <button onClick={() => void resolveBudgetChoice("separate")} className="w-full text-left rounded-lg border border-gray-200 px-3 py-2.5 hover:bg-gray-50">
+                  <span className="block text-[14px] font-medium text-gray-900">Keep as a separate line</span>
+                  <span className="block text-[12px] text-gray-500">A different item that just has a similar name.</span>
+                </button>
+              </div>
+              <button onClick={() => setBudgetChoice(null)} className="mt-3 text-[13px] text-gray-400 hover:text-gray-600">Cancel</button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Match-confirmation card: shown when a similar Google Calendar event was found and needs the
           user to decide whether to link to it or create a fresh one. */}
       {gcalMatchCandidates.length > 0 && (
