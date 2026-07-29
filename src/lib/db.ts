@@ -13,6 +13,7 @@ import { vendorStage, type VendorRow as VendorListRow } from './vendorImport';
 import { defaultPhases } from './eventPhases';
 import { type Campaign, type Drive, type CrewRole, emptyCampaign, normalizeCampaign, coerceRole } from "./campaign";
 import { isInternalEmail } from "./people";
+import { type Benchmark } from "./phases";
 
 // A template must be name-free: reduce staff roles to their general form and drop bare names / dups.
 const generalRoles = (roles: string[]): string[] => {
@@ -2683,6 +2684,8 @@ export interface Deliverable {
   id: string;
   title: string;
   phase: string | null;
+  benchmarkId: string | null;
+  tags: string[];
   ownerRole: string | null;
   dueDate: string | null;
   offsetStart: number | null; // days from event date (negative = before)
@@ -2756,6 +2759,7 @@ export interface EventPlanning {
   engagements: EngagementWithCandidates[];
   budget: PlanningBudget | null;
   deliverables: Deliverable[];
+  benchmarks: Benchmark[];
   // Setup walkthrough state.
   setupComplete: boolean;
   headcount: number | null;
@@ -2836,7 +2840,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, doc_link, slack_channel, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, gcal_event_ids, gcal_match_pending, linear_project_id, linear_project_url, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, doc_link, slack_channel, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, gcal_event_ids, gcal_match_pending, linear_project_id, linear_project_url, benchmarks, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -2854,7 +2858,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
       .eq('event_id', eventId),
     supabase
       .from('deliverable')
-      .select('id, title, phase, owner_role, resolved_due_date, offset_start, offset_end, status, linear_issue_id, linear_issue_url, locked')
+      .select('id, title, phase, benchmark_id, tags, owner_role, resolved_due_date, offset_start, offset_end, status, linear_issue_id, linear_issue_url, locked')
       .eq('event_id', eventId)
       .order('resolved_due_date', { nullsFirst: true }),
   ]);
@@ -2894,6 +2898,8 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     id: d.id,
     title: d.title,
     phase: d.phase ?? null,
+    benchmarkId: d.benchmark_id ?? null,
+    tags: Array.isArray(d.tags) ? d.tags : [],
     ownerRole: d.owner_role ?? null,
     dueDate: d.resolved_due_date ?? null,
     offsetStart: d.offset_start ?? null,
@@ -2980,6 +2986,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     engagements,
     budget,
     deliverables,
+    benchmarks: Array.isArray((row as any).benchmarks) ? (row as any).benchmarks as Benchmark[] : [],
     setupComplete: (row as any).setup_complete ?? false,
     headcount: (row as any).headcount ?? null,
     eventBudgetTarget: num((row as any).event_budget_target),
@@ -3537,15 +3544,16 @@ export async function getBudgetProjections(eventId: string, categories: string[]
 }
 
 // ── Deliverables ────────────────────────────────────────────────────────────
-export async function addDeliverable(eventId: string, fields: { title: string; phase: string; ownerRole: string | null; dueDate: string | null; offsetStart?: number | null; offsetEnd?: number | null; locked?: boolean }): Promise<Deliverable> {
+export async function addDeliverable(eventId: string, fields: { title: string; phase: string; ownerRole: string | null; dueDate: string | null; offsetStart?: number | null; offsetEnd?: number | null; locked?: boolean; benchmarkId?: string | null; tags?: string[] }): Promise<Deliverable> {
   const id = genId('del');
   const { error } = await supabase.from('deliverable').insert({
     id, event_id: eventId, title: fields.title, phase: fields.phase, owner_role: fields.ownerRole, resolved_due_date: fields.dueDate, status: 'Todo',
     offset_start: fields.offsetStart ?? null, offset_end: fields.offsetEnd ?? null, locked: fields.locked ?? false,
+    benchmark_id: fields.benchmarkId ?? null, tags: fields.tags ?? [],
   });
   if (error) throw error;
   await graduateFromConcept(eventId);
-  return { id, title: fields.title, phase: fields.phase, ownerRole: fields.ownerRole, dueDate: fields.dueDate, offsetStart: fields.offsetStart ?? null, offsetEnd: fields.offsetEnd ?? null, status: 'Todo', linearIssueId: null, linearIssueUrl: null, locked: fields.locked ?? false };
+  return { id, title: fields.title, phase: fields.phase, benchmarkId: fields.benchmarkId ?? null, tags: fields.tags ?? [], ownerRole: fields.ownerRole, dueDate: fields.dueDate, offsetStart: fields.offsetStart ?? null, offsetEnd: fields.offsetEnd ?? null, status: 'Todo', linearIssueId: null, linearIssueUrl: null, locked: fields.locked ?? false };
 }
 export async function setDeliverableStatus(id: string, status: string): Promise<void> {
   const { error } = await supabase.from('deliverable').update({ status }).eq('id', id);
@@ -3554,6 +3562,19 @@ export async function setDeliverableStatus(id: string, status: string): Promise<
 /** Move a deliverable to a different phase/section (drag-and-drop). Doesn't touch its T-offsets. */
 export async function setDeliverablePhase(id: string, phase: string): Promise<void> {
   const { error } = await supabase.from('deliverable').update({ phase }).eq('id', id);
+  if (error) throw error;
+}
+/** Move a deliverable to a benchmark within its phase (null = directly under the phase). */
+export async function setDeliverableBenchmark(id: string, benchmarkId: string | null): Promise<void> {
+  const { error } = await supabase.from('deliverable').update({ benchmark_id: benchmarkId }).eq('id', id);
+  if (error) throw error;
+}
+export async function setDeliverableTags(id: string, tags: string[]): Promise<void> {
+  const { error } = await supabase.from('deliverable').update({ tags }).eq('id', id);
+  if (error) throw error;
+}
+export async function setEventBenchmarks(eventId: string, benchmarks: Benchmark[]): Promise<void> {
+  const { error } = await supabase.from('event').update({ benchmarks }).eq('id', eventId);
   if (error) throw error;
 }
 /** Count an event's deliverables, total and not-yet-Done — used to phrase a bulk-action confirm. */
