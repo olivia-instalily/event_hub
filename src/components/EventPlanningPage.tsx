@@ -43,7 +43,7 @@ import {
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
-import { PHASES, PHASE_LABEL, type Benchmark } from "../lib/phases";
+import { PHASES, PHASE_LABEL, nextTagSelection, type Benchmark } from "../lib/phases";
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { Button } from "@instalily/ui/button";
@@ -1456,21 +1456,26 @@ function SortableRow({ id, children }: { id: string; children: (h: RowHandle) =>
   return <>{children({ setNodeRef: s.setNodeRef, style, attributes: s.attributes, listeners: s.listeners, isDragging: s.isDragging })}</>;
 }
 
-// Whole-phase drop target — lets a deliverable be dragged INTO a category (incl. an empty one),
-// not just reordered within its own. id is prefixed so onDragEnd can tell it from a row id.
-const PHASE_ZONE = "phaseZone::";
+// Drop zone IDs use the section anchor scheme: "delsec-<phase>" or "delsec-bm-<benchmarkId>".
+// This lets onDragEnd decode them AND the section ids double as click-to-jump anchors (Task 6).
 function PhaseDropZone({ phase, children }: { phase: string; children: React.ReactNode }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `${PHASE_ZONE}${phase}` });
+  const { setNodeRef, isOver } = useDroppable({ id: `delsec-${phase}` });
+  return <div ref={setNodeRef} className={`rounded-lg transition-shadow ${isOver ? "ring-2 ring-primary/50" : ""}`}>{children}</div>;
+}
+function BenchmarkDropZone({ benchmarkId, children }: { benchmarkId: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `delsec-bm-${benchmarkId}` });
   return <div ref={setNodeRef} className={`rounded-lg transition-shadow ${isOver ? "ring-2 ring-primary/50" : ""}`}>{children}</div>;
 }
 
-function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
+function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; benchmarks: Benchmark[]; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
   const [items, setItems] = useState(initial);
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
   const [title, setTitle] = useState("");
   const [owner, setOwner] = useState("");
   const [due, setDueInput] = useState("");
   const [activePhase, setActivePhase] = useState<string | null>(null);
+  // Tag filter — single-select toggle (click same tag to clear).
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   // Deep-link from the Overview: scroll to and highlight a specific deliverable until next click.
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -1523,9 +1528,6 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
   // template) if any, else the default 4-phase scheme. Drives both the rail and the grouping.
   const railPhases = enrichPhases({ phases, walkthrough: [], deliverables: items }, DELIVERABLE_PHASES);
   const colorOf = new Map(railPhases.map((p) => [p.name, p.color])); // phase → its timeline color
-  const baseNames = railPhases.map((p) => p.name);
-  const otherPhases = Array.from(new Set(items.map((d) => d.phase).filter((p): p is string => !!p && !baseNames.includes(p))));
-  const phaseGroups = [...baseNames, ...otherPhases];
   const jumpToGroup = (name: string) => { setActivePhase(name); groupRefs.current[name]?.scrollIntoView({ behavior: "smooth", block: "start" }); };
   // Per-phase completion (done deliverables / total) — drives the rail's segment fills + check-offs.
   const railProgress: Record<string, number> = {};
@@ -1558,38 +1560,111 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
     if (!over) return;
     const a = items.find((d) => d.id === active.id);
     if (!a) return;
-    // Target phase = the phase drop-zone dropped onto, or the phase of the row dropped onto.
     const overId = String(over.id);
-    const targetPhase = overId.startsWith(PHASE_ZONE)
-      ? overId.slice(PHASE_ZONE.length)
-      : items.find((d) => d.id === over.id)?.phase;
+
+    // Decode the drop target: section anchor ids or a peer deliverable row.
+    // "delsec-bm-<id>" → benchmark zone; "delsec-<phase>" → phase zone (null benchmark); else peer row.
+    let targetPhase: string | null = null;
+    let targetBenchmarkId: string | null | undefined = undefined; // undefined = "don't change"
+    if (overId.startsWith("delsec-bm-")) {
+      const bmId = overId.slice("delsec-bm-".length);
+      const bm = benchmarks.find((b) => b.id === bmId);
+      if (!bm) return;
+      targetPhase = bm.phase;
+      targetBenchmarkId = bmId;
+    } else if (overId.startsWith("delsec-")) {
+      targetPhase = overId.slice("delsec-".length);
+      targetBenchmarkId = null; // drop on phase zone → clear benchmark
+    } else {
+      // Dropped on a peer row — inherit that row's phase + benchmark.
+      const overRow = items.find((d) => d.id === overId);
+      if (!overRow) return;
+      targetPhase = overRow.phase;
+      targetBenchmarkId = overRow.benchmarkId; // keep same benchmark as the peer
+    }
     if (targetPhase == null) return;
 
-    if (targetPhase === a.phase) {
-      // Reorder within the same phase (T-offsets don't change — manual arrangement only).
+    const sameGroup = targetPhase === a.phase && targetBenchmarkId === a.benchmarkId;
+
+    if (sameGroup) {
+      // Reorder within the same phase+benchmark group (T-offsets don't change — manual only).
       if (active.id === over.id) return;
       setItems((prev) => {
-        const ids = prev.filter((d) => d.phase === a.phase).map((d) => d.id);
+        const ids = prev.filter((d) => d.phase === a.phase && d.benchmarkId === a.benchmarkId).map((d) => d.id);
         const overIdx = ids.indexOf(overId);
-        if (overIdx === -1) return prev; // dropped on the zone, not a row → no reorder
+        if (overIdx === -1) return prev; // dropped on zone, not a row → no reorder
         const reordered = arrayMove(ids, ids.indexOf(a.id), overIdx);
         const byId = new Map(prev.map((d) => [d.id, d]));
         const q = [...reordered];
-        return prev.map((d) => (d.phase === a.phase ? byId.get(q.shift()!)! : d));
+        return prev.map((d) => (d.phase === a.phase && d.benchmarkId === a.benchmarkId ? byId.get(q.shift()!)! : d));
       });
       return;
     }
 
-    // Cross-phase: move the deliverable into the new category and persist the phase change.
+    // Cross-group: update phase + benchmarkId, optimistic then persist.
+    const newBenchmarkId = targetBenchmarkId !== undefined ? targetBenchmarkId : a.benchmarkId;
     setItems((prev) => {
-      const item = { ...prev.find((d) => d.id === a.id)!, phase: targetPhase };
+      const item = { ...prev.find((d) => d.id === a.id)!, phase: targetPhase!, benchmarkId: newBenchmarkId };
       const rest = prev.filter((d) => d.id !== a.id);
-      const overRowIdx = rest.findIndex((d) => d.id === overId); // dropped onto a row → land before it
+      const overRowIdx = rest.findIndex((d) => d.id === overId);
       if (overRowIdx >= 0) { rest.splice(overRowIdx, 0, item); return rest; }
-      return [...rest, item]; // dropped on the zone / empty group → append to that phase
+      return [...rest, item];
     });
-    setDeliverablePhase(a.id, targetPhase).catch(() => {});
+    if (targetPhase !== a.phase) setDeliverablePhase(a.id, targetPhase).catch(() => {});
+    if (newBenchmarkId !== a.benchmarkId) setDeliverableBenchmark(a.id, newBenchmarkId).catch(() => {});
   };
+
+  // All distinct tags across initial deliverables — drives the filter chip bar.
+  const allTags = Array.from(new Set(initial.flatMap((d) => d.tags)));
+  // Rows visible after applying the tag filter.
+  const visibleItems = tagFilter ? items.filter((d) => d.tags.includes(tagFilter)) : items;
+
+  // Helper: render a list of deliverable rows inside a SortableContext.
+  const renderRows = (group: typeof items) => group.map((d) => {
+    const overdue = d.dueDate && d.dueDate < today() && d.status !== "Done";
+    return (
+      <SortableRow key={d.id} id={d.id}>
+        {({ setNodeRef, style, attributes, listeners, isDragging }) => (
+          <div ref={(el) => { rowRefs.current[d.id] = el; setNodeRef(el); }} style={style} className={`px-3 py-2 flex items-center gap-3 text-sm group scroll-mt-24 transition-colors ${isDragging ? "opacity-60" : ""} ${highlight === d.id ? "bg-amber-50" : selected.has(d.id) ? "bg-gray-50" : ""}`}>
+            <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to reorder or move phase" title="Drag to reorder or move to a different phase/benchmark"><GripVertical className="w-4 h-4" /></button>
+            <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSel(d.id)} className="rounded border-gray-300 shrink-0" aria-label={`Select ${d.title}`} />
+            {/* Content block: title + date on a single flex row so they stay centered with the controls. */}
+            <div className="flex flex-1 items-center gap-2 min-w-0 self-center">
+              <span className={`flex-1 min-w-0 truncate inline-flex items-center gap-1.5 ${d.status === "Done" ? "line-through text-gray-400" : ""}`}>
+                {d.title}
+                {d.linearIssueUrl && (
+                  <a href={d.linearIssueUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open issue in Linear" className="inline-flex text-purple-600 hover:text-purple-800 no-underline"><Activity className="w-3.5 h-3.5" /></a>
+                )}
+                {onOpenReflection && /reflection/i.test(d.title) && (
+                  <button onClick={(e) => { e.stopPropagation(); onOpenReflection(); }} title="Open the post-event reflection" className="inline-flex items-center gap-0.5 text-gray-500 hover:text-gray-900 text-[13px]">
+                    <ExternalLink className="w-3.5 h-3.5" /> Open
+                  </button>
+                )}
+              </span>
+              <span className="shrink-0 inline-flex items-center gap-1.5 text-[13px] text-gray-500">
+                {tOffsetLabel(d.offsetStart, d.offsetEnd) && <span className="text-gray-400 bg-gray-100 rounded px-1">{tOffsetLabel(d.offsetStart, d.offsetEnd)}</span>}
+                {overdue && <span className="text-red-600 font-medium">overdue</span>}
+                <DateEdit value={d.dueDate} onChange={(iso) => setDue(d.id, iso)} placeholder="add due date" emphasize={!!overdue} />
+              </span>
+            </div>
+            {/* People/outreach tag — placeholder for a future outreach page. */}
+            <button title="People & outreach for this task — coming soon" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[13px] border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0">
+              <Users className="w-3 h-3" /> {d.ownerRole ?? "People"}
+            </button>
+            <Select value={d.status ?? "Todo"} onValueChange={(v) => setStatus(d.id, v as string)} items={STATUSES.map((s) => ({ value: s, label: s }))}>
+              <SelectTrigger size="sm" className="shrink-0 text-[13px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {d.locked
+              ? <span title="Required — can't be removed" className="text-gray-300 shrink-0"><Lock className="w-3.5 h-3.5" /></span>
+              : <button onClick={() => remove(d.id)} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100" aria-label="Delete"><Trash2 className="w-3.5 h-3.5" /></button>}
+          </div>
+        )}
+      </SortableRow>
+    );
+  });
 
   return (
     <div className="bg-white rounded-2xl border border-border p-6">
@@ -1609,6 +1684,26 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
       <div className="h-2 bg-gray-100 rounded-full mb-4 overflow-hidden">
         <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-gradient-to-r from-green-400 to-green-600" : "bg-gradient-to-r from-gray-400 to-gray-900"}`} style={{ width: `${pct}%` }} />
       </div>
+
+      {/* Tag filter chip bar — single-select; click same chip to clear. */}
+      {allTags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {allTags.map((chip) => (
+            <button
+              key={chip}
+              onClick={() => setTagFilter((t) => nextTagSelection(t, chip))}
+              className={`px-2.5 py-0.5 rounded-full text-xs border transition-colors ${tagFilter === chip ? "bg-gray-900 text-white border-gray-900" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+            >
+              {chip}
+            </button>
+          ))}
+          {tagFilter && (
+            <button onClick={() => setTagFilter(null)} className="px-2.5 py-0.5 rounded-full text-xs border border-gray-300 text-gray-400 hover:text-gray-700">
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Anchor marking the timeline's natural position — clicking the bar jumps back here. */}
       <div ref={anchorRef} className="h-0 scroll-mt-4" />
@@ -1641,21 +1736,24 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
 
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
       <div className="space-y-5">
-        {phaseGroups.map((phase) => {
-          const group = items.filter((d) => d.phase === phase);
-          const gSelCount = group.filter((d) => selected.has(d.id)).length;
-          const gAll = group.length > 0 && gSelCount === group.length;
+        {PHASES.map((phase) => {
+          // All items in this phase (pre-filter for selection counts; apply tag filter for render).
+          const phaseItems = items.filter((d) => d.phase === phase);
+          const visiblePhaseItems = visibleItems.filter((d) => d.phase === phase);
+          const phaseBenchmarks = benchmarks.filter((b) => b.phase === phase).sort((a, b) => a.order - b.order);
+          const gSelCount = phaseItems.filter((d) => selected.has(d.id)).length;
+          const gAll = phaseItems.length > 0 && gSelCount === phaseItems.length;
           return (
-            <div key={phase} ref={(el) => { groupRefs.current[phase] = el; }} style={{ scrollMarginTop: headerH + 8 }}>
+            <div key={phase} id={`delsec-${phase}`} ref={(el) => { groupRefs.current[phase] = el; }} style={{ scrollMarginTop: headerH + 8 }}>
               <div className="flex items-center justify-between gap-2 mb-2">
                 <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" disabled={group.length === 0} checked={gAll} ref={(el) => { if (el) el.indeterminate = gSelCount > 0 && !gAll; }} onChange={() => toggleMany(group.map((d) => d.id), !gAll)} className="rounded border-gray-300 disabled:opacity-40" aria-label={`Select all in ${phase}`} />
-                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${colorOf.get(phase)?.dot ?? "bg-gray-300"}`} />
-                  <h3 className="text-sm font-medium text-gray-700">{phase}</h3>
+                  <input type="checkbox" disabled={phaseItems.length === 0} checked={gAll} ref={(el) => { if (el) el.indeterminate = gSelCount > 0 && !gAll; }} onChange={() => toggleMany(phaseItems.map((d) => d.id), !gAll)} className="rounded border-gray-300 disabled:opacity-40" aria-label={`Select all in ${PHASE_LABEL[phase]}`} />
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${colorOf.get(phase)?.dot ?? colorOf.get(PHASE_LABEL[phase])?.dot ?? "bg-gray-300"}`} />
+                  <h3 className="text-sm font-medium text-gray-700">{PHASE_LABEL[phase]}</h3>
                 </label>
                 <div className="flex items-center gap-2">
                   {gSelCount > 0 && (
-                    <Select value="" onValueChange={(v) => { if (v) void applyStatus(group.filter((d) => selected.has(d.id)).map((d) => d.id), v as string); }} items={[{ value: "", label: `Set ${gSelCount} to…` }, ...STATUSES.map((s) => ({ value: s, label: s }))]}>
+                    <Select value="" onValueChange={(v) => { if (v) void applyStatus(phaseItems.filter((d) => selected.has(d.id)).map((d) => d.id), v as string); }} items={[{ value: "", label: `Set ${gSelCount} to…` }, ...STATUSES.map((s) => ({ value: s, label: s }))]}>
                       <SelectTrigger size="sm" className="text-[15px]"><SelectValue /></SelectTrigger>
                       <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                     </Select>
@@ -1663,65 +1761,50 @@ function Deliverables({ eventId, initial, phases, jumpId, linearProjectUrl, onLi
                   <button onClick={() => { setAdding(adding === phase ? null : phase); setTitle(""); setOwner(""); setDueInput(""); }} className="text-[15px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
                 </div>
               </div>
+
+              {/* Benchmark sub-sections */}
+              {phaseBenchmarks.map((bm) => {
+                const bmItems = visiblePhaseItems.filter((d) => d.benchmarkId === bm.id);
+                const bmAllItems = phaseItems.filter((d) => d.benchmarkId === bm.id);
+                return (
+                  <div key={bm.id} id={`delsec-bm-${bm.id}`} className="mb-3">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5 px-1">{bm.name}</p>
+                    <BenchmarkDropZone benchmarkId={bm.id}>
+                      <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 min-h-[2.5rem]">
+                        {bmItems.length === 0 && <p className="px-3 py-2 text-sm text-gray-400">None — drag a task here.</p>}
+                        <SortableContext items={bmAllItems.map((d) => d.id)} strategy={verticalListSortingStrategy}>
+                          {renderRows(bmItems)}
+                        </SortableContext>
+                      </div>
+                    </BenchmarkDropZone>
+                  </div>
+                );
+              })}
+
+              {/* Benchmark-less tasks for this phase */}
               <PhaseDropZone phase={phase}>
               <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 min-h-[2.5rem]">
-                {group.length === 0 && adding !== phase && <p className="px-3 py-2 text-sm text-gray-400">None — drag a task here.</p>}
-                <SortableContext items={group.map((d) => d.id)} strategy={verticalListSortingStrategy}>
-                {group.map((d) => {
-                  const overdue = d.dueDate && d.dueDate < today() && d.status !== "Done";
+                {(() => {
+                  const unassigned = visiblePhaseItems.filter((d) => !d.benchmarkId);
+                  const unassignedAll = phaseItems.filter((d) => !d.benchmarkId);
                   return (
-                    <SortableRow key={d.id} id={d.id}>
-                      {({ setNodeRef, style, attributes, listeners, isDragging }) => (
-                    <div ref={(el) => { rowRefs.current[d.id] = el; setNodeRef(el); }} style={style} className={`px-3 py-2 flex items-center gap-3 text-sm group scroll-mt-24 transition-colors ${isDragging ? "opacity-60" : ""} ${highlight === d.id ? "bg-amber-50" : selected.has(d.id) ? "bg-gray-50" : ""}`}>
-                      <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to reorder or move phase" title="Drag to reorder within a phase, or drop on another phase to move it there"><GripVertical className="w-4 h-4" /></button>
-                      <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSel(d.id)} className="rounded border-gray-300 shrink-0" aria-label={`Select ${d.title}`} />
-                      <div className="flex-1 min-w-0">
-                        <p className={`inline-flex items-center gap-1.5 ${d.status === "Done" ? "line-through text-gray-400" : ""}`}>
-                          {d.title}
-                          {d.linearIssueUrl && (
-                            <a href={d.linearIssueUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open issue in Linear" className="inline-flex text-purple-600 hover:text-purple-800 no-underline"><Activity className="w-3.5 h-3.5" /></a>
-                          )}
-                          {/* The post-event reflections task links to its reflection page. */}
-                          {onOpenReflection && /reflection/i.test(d.title) && (
-                            <button onClick={(e) => { e.stopPropagation(); onOpenReflection(); }} title="Open the post-event reflection" className="inline-flex items-center gap-0.5 text-gray-500 hover:text-gray-900 text-[13px]">
-                              <ExternalLink className="w-3.5 h-3.5" /> Open
-                            </button>
-                          )}
-                        </p>
-                        <span className="inline-flex items-center gap-1.5 text-[15px] text-gray-500">
-                          {tOffsetLabel(d.offsetStart, d.offsetEnd) && <span className="text-gray-400 bg-gray-100 rounded px-1">{tOffsetLabel(d.offsetStart, d.offsetEnd)}</span>}
-                          {overdue && <span className="text-red-600 font-medium">overdue</span>}
-                          <DateEdit value={d.dueDate} onChange={(iso) => setDue(d.id, iso)} placeholder="add due date" emphasize={!!overdue} />
-                        </span>
-                      </div>
-                      {/* People/outreach tag — placeholder for a future outreach page. */}
-                      <button title="People & outreach for this task — coming soon" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[15px] border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0">
-                        <Users className="w-3 h-3" /> {d.ownerRole ?? "People"}
-                      </button>
-                      <Select value={d.status ?? "Todo"} onValueChange={(v) => setStatus(d.id, v as string)} items={STATUSES.map((s) => ({ value: s, label: s }))}>
-                        <SelectTrigger size="sm" className="shrink-0 text-[15px]"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      {d.locked
-                        ? <span title="Required — can't be removed" className="text-gray-300 shrink-0"><Lock className="w-3.5 h-3.5" /></span>
-                        : <button onClick={() => remove(d.id)} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100" aria-label="Delete"><Trash2 className="w-3.5 h-3.5" /></button>}
-                    </div>
+                    <>
+                      {unassigned.length === 0 && adding !== phase && <p className="px-3 py-2 text-sm text-gray-400">{phaseBenchmarks.length > 0 ? "No unassigned tasks — drag a task here." : "None — drag a task here."}</p>}
+                      <SortableContext items={unassignedAll.map((d) => d.id)} strategy={verticalListSortingStrategy}>
+                        {renderRows(unassigned)}
+                      </SortableContext>
+                      {adding === phase && (
+                        <div className="px-3 py-2 flex flex-wrap gap-2 items-center bg-gray-50">
+                          <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(phase); }} placeholder="Task" className="flex-1 min-w-[8rem] px-2 py-1 border border-border rounded text-sm focus:outline-none" />
+                          <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Owner role" className="w-28 px-2 py-1 border border-border rounded text-sm focus:outline-none" />
+                          <span className="px-1 border border-border rounded"><DateEdit value={due || null} onChange={(iso) => setDueInput(iso ?? "")} placeholder="due date" /></span>
+                          <button onClick={() => add(phase)} disabled={!title.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add</button>
+                          <button onClick={() => setAdding(null)} className="text-sm text-gray-500 hover:text-gray-900">Cancel</button>
+                        </div>
                       )}
-                    </SortableRow>
+                    </>
                   );
-                })}
-                </SortableContext>
-                {adding === phase && (
-                  <div className="px-3 py-2 flex flex-wrap gap-2 items-center bg-gray-50">
-                    <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(phase); }} placeholder="Task" className="flex-1 min-w-[8rem] px-2 py-1 border border-border rounded text-sm focus:outline-none" />
-                    <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Owner role" className="w-28 px-2 py-1 border border-border rounded text-sm focus:outline-none" />
-                    <span className="px-1 border border-border rounded"><DateEdit value={due || null} onChange={(iso) => setDueInput(iso ?? "")} placeholder="due date" /></span>
-                    <button onClick={() => add(phase)} disabled={!title.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add</button>
-                    <button onClick={() => setAdding(null)} className="text-sm text-gray-500 hover:text-gray-900">Cancel</button>
-                  </div>
-                )}
+                })()}
               </div>
               </PhaseDropZone>
             </div>
@@ -4824,7 +4907,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           <div className="space-y-6">
             <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
             <BenchmarkEditor eventId={eventId} benchmarks={plan.benchmarks} deliverables={plan.deliverables} setPlan={setPlan} />
-            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
+            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
           </div>
         )}
