@@ -1528,7 +1528,15 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
   // template) if any, else the default 4-phase scheme. Drives both the rail and the grouping.
   const railPhases = enrichPhases({ phases, walkthrough: [], deliverables: items }, DELIVERABLE_PHASES);
   const colorOf = new Map(railPhases.map((p) => [p.name, p.color])); // phase → its timeline color
-  const jumpToGroup = (name: string) => { setActivePhase(name); groupRefs.current[name]?.scrollIntoView({ behavior: "smooth", block: "start" }); };
+  const jumpToGroup = (name: string) => {
+    // `name` may arrive as a PHASES key ("planning") or as an enriched/display label ("Planning").
+    // groupRefs is keyed by PHASES keys, so resolve the key first.
+    const phaseKey = (PHASES as readonly string[]).includes(name)
+      ? name
+      : PHASES.find((k) => PHASE_LABEL[k] === name) ?? name;
+    setActivePhase(name);
+    groupRefs.current[phaseKey]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   // Per-phase completion (done deliverables / total) — drives the rail's segment fills + check-offs.
   const railProgress: Record<string, number> = {};
   for (const rp of railPhases) {
@@ -1614,8 +1622,8 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
     if (newBenchmarkId !== a.benchmarkId) setDeliverableBenchmark(a.id, newBenchmarkId).catch(() => {});
   };
 
-  // All distinct tags across initial deliverables — drives the filter chip bar.
-  const allTags = Array.from(new Set(initial.flatMap((d) => d.tags)));
+  // All distinct tags across live items — includes any tags added in-session.
+  const allTags = Array.from(new Set(items.flatMap((d) => d.tags)));
   // Rows visible after applying the tag filter.
   const visibleItems = tagFilter ? items.filter((d) => d.tags.includes(tagFilter)) : items;
 
