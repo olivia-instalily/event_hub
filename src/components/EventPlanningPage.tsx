@@ -13,7 +13,7 @@ import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, resolveGcalMatch, pullEventFromLinear, unlinkLinear, deleteEvent, resetEvent,
+  getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, resolveGcalMatch, pullEventFromLinear, syncEventToLinear, unlinkLinear, deleteEvent, resetEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
   addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
   ensureVendor, matchVendors, noteVendorOnBudgetLine, type VendorRow, setEventFocus,
@@ -495,10 +495,12 @@ function VendorCardModal({ eventId, engagementId, candidate, onClose, onSaved }:
 
 // Per-vendor status display: label, ordering rank (for the derived category badge), and chip style.
 const CAND_STATUS_META: Record<CandidateStatus, { label: string; rank: number; badge: string }> = {
-  sourced:    { label: "Sourced",    rank: 0, badge: "bg-gray-100 text-gray-600" },
-  quoted:     { label: "Quoted",     rank: 1, badge: "bg-blue-100 text-blue-700" },
-  contracted: { label: "Contracted", rank: 2, badge: "bg-green-100 text-green-700" },
+  sourced: { label: "Sourced", rank: 0, badge: "bg-gray-100 text-gray-600" },
+  quoted:  { label: "Quoted",  rank: 1, badge: "bg-blue-100 text-blue-700" },
+  paid:    { label: "Paid",    rank: 2, badge: "bg-green-100 text-green-700" },
 };
+// The internal engagement.stage kept for downstream consumers (chart / facts check === 'Contracted').
+const stageForStatus = (s: CandidateStatus): string => (s === "paid" ? "Contracted" : s === "quoted" ? "Quoted" : "Sourced");
 function DecisionCard({ initial, eventId, location, onDelete, onChange, allCategories = [] }: { initial: EngagementWithCandidates; eventId: string; location?: string | null; onDelete: () => void; onChange?: (e: EngagementWithCandidates) => void; allCategories?: string[] }) {
   const [eng, setEng] = useState(initial);
   const [cardId, setCardId] = useState<string | null>(null); // candidate whose vendor card is open
@@ -518,9 +520,8 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange, allCateg
   // When a typed vendor name is similar (not identical) to directory vendors, confirm before creating.
   const [vendorConfirm, setVendorConfirm] = useState<{ name: string; contract: boolean; near: VendorRow[] } | null>(null);
 
-  const selected = eng.candidates.find((c) => c.isSelected) ?? null;
-  const contracted = eng.candidates.some((c) => c.status === "contracted");
-  // Category status = the furthest-along candidate (contracted > quoted > sourced); null when empty.
+  const paidCands = eng.candidates.filter((c) => c.status === "paid");
+  // Category status = the furthest-along candidate (paid > quoted > sourced); null when empty.
   const categoryStatus: CandidateStatus | null = eng.candidates.length
     ? eng.candidates.reduce<CandidateStatus>((m, c) => (CAND_STATUS_META[c.status].rank > CAND_STATUS_META[m].rank ? c.status : m), "sourced")
     : null;
@@ -540,11 +541,13 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange, allCateg
     setEng((e) => ({ ...e, candidates: [...e.candidates, c] }));
     setCandName(""); setCandQuote(""); setCandLink(""); setAddingCand(false); setVendorConfirm(null);
     if (contract) {
-      await selectCandidate(eng.id, c.id);
-      await setCandidateStatus(c.id, "contracted");
-      await setEngagementStage(eng.id, "Contracted", { confirmedAmount: quote });
+      await setCandidateStatus(c.id, "paid");
       await noteVendorOnBudgetLine(eventId, eng.category ?? null, name, quote);
-      setEng((e) => ({ ...e, stage: "Contracted", confirmedAmount: quote, candidates: e.candidates.map((x) => ({ ...x, isSelected: x.id === c.id, status: x.id === c.id ? "contracted" : x.status })) }));
+      // Sum across all paid vendors (this one plus any already paid).
+      const confirmedAmount = [...eng.candidates, { ...c, status: "paid" as CandidateStatus }]
+        .filter((x) => x.status === "paid").reduce((s, x) => s + (x.quoteAmount ?? 0), 0);
+      await setEngagementStage(eng.id, "Contracted", { confirmedAmount });
+      setEng((e) => ({ ...e, stage: "Contracted", confirmedAmount, candidates: e.candidates.map((x) => (x.id === c.id ? { ...x, status: "paid" as CandidateStatus } : x)) }));
     }
   };
   const addCand = async (contract = false) => {
@@ -572,35 +575,34 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange, allCateg
   // Recompute + persist the engagement's derived stage/confirmed amount from its candidates (the
   // furthest-along one; contracted candidate's quote becomes the confirmed amount).
   const reconcile = async (cands: VendorCandidate[]) => {
-    const anyContracted = cands.find((c) => c.status === "contracted") ?? null;
+    const paid = cands.filter((c) => c.status === "paid");
     const maxStatus = cands.reduce<CandidateStatus>((m, c) => (CAND_STATUS_META[c.status].rank > CAND_STATUS_META[m].rank ? c.status : m), "sourced");
-    const stageLabel = CAND_STATUS_META[maxStatus].label; // "Sourced" | "Quoted" | "Contracted"
-    const confirmedAmount = anyContracted ? anyContracted.quoteAmount : null;
+    // Multiple vendors can be paid → confirmed amount is the SUM of their quotes.
+    const confirmedAmount = paid.length ? paid.reduce((s, c) => s + (c.quoteAmount ?? 0), 0) : null;
+    const stageLabel = stageForStatus(maxStatus);
     await setEngagementStage(eng.id, stageLabel, { confirmedAmount });
     setEng((e) => ({ ...e, stage: stageLabel, confirmedAmount, candidates: cands }));
   };
-  // Change one vendor's status. "contracted" opens the lock prompt (comment/attachment, budget
-  // mirror); "sourced"/"quoted" apply immediately and re-derive the engagement.
+  // Change one vendor's status. "paid" opens the lock prompt (comment/attachment, budget mirror);
+  // "sourced"/"quoted" apply immediately and re-derive the engagement.
   const changeStatus = async (cand: VendorCandidate, status: CandidateStatus) => {
     setNotice(null);
-    if (status === "contracted") { setContractCandId(cand.id); setComment(""); setAttach(""); setPrompt("Contracted"); return; }
+    if (status === "paid") { setContractCandId(cand.id); setComment(""); setAttach(""); setPrompt("Paid"); return; }
     await setCandidateStatus(cand.id, status);
     await reconcile(eng.candidates.map((c) => (c.id === cand.id ? { ...c, status } : c)));
   };
-  const confirmContract = async () => {
+  const confirmPaid = async () => {
     const cand = eng.candidates.find((c) => c.id === contractCandId);
     if (!cand) return;
-    // A blank contract comment must NOT wipe the vendor description (both live in engagement.note).
+    // A blank comment must NOT wipe the vendor description (both live in engagement.note).
     const note = comment.trim() || eng.note;
     const docUrl = attach.trim() || null;
-    await selectCandidate(eng.id, cand.id);           // the contracted vendor becomes the selected one
-    await setCandidateStatus(cand.id, "contracted");
-    await setEngagementStage(eng.id, "Contracted", { note, docUrl, confirmedAmount: cand.quoteAmount });
+    await setCandidateStatus(cand.id, "paid");
     await noteVendorOnBudgetLine(eventId, eng.category ?? null, cand.vendorName ?? "", cand.quoteAmount);
-    setEng((e) => ({
-      ...e, stage: "Contracted", note, confirmedAmount: cand.quoteAmount,
-      candidates: e.candidates.map((c) => ({ ...c, isSelected: c.id === cand.id, status: c.id === cand.id ? "contracted" : c.status })),
-    }));
+    const cands = eng.candidates.map((c) => (c.id === cand.id ? { ...c, status: "paid" as CandidateStatus } : c));
+    const confirmedAmount = cands.filter((c) => c.status === "paid").reduce((s, c) => s + (c.quoteAmount ?? 0), 0);
+    await setEngagementStage(eng.id, "Contracted", { note, docUrl, confirmedAmount });
+    setEng((e) => ({ ...e, stage: "Contracted", note, confirmedAmount, candidates: cands }));
     setContractCandId(null); setPrompt(null); setComment(""); setAttach("");
   };
 
@@ -630,14 +632,21 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange, allCateg
             options={allCategories}
             onCommit={async (c) => { setEng((e) => ({ ...e, category: c })); await setEngagementCategory(eng.id, c); }}
           />
-          {selected && (
-            <p className="text-sm text-gray-600 mt-0.5">
-              {contracted && <>Confirmed: <span className="font-medium">{money(eng.confirmedAmount)}</span> · </>}
-              <SupplierName
-                value={selected.vendorName}
-                onCommit={async (name) => { patchCand(selected.id, { vendorName: name }); await updateCandidate(selected.id, { vendorName: name }); }}
-              />
-            </p>
+          {paidCands.length > 0 && (
+            <div className="text-sm text-gray-600 mt-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Confirmed{paidCands.length > 1 ? ` · ${money(eng.confirmedAmount)} total` : ""}</span>
+              <div className="mt-0.5 space-y-0.5">
+                {paidCands.map((c) => (
+                  <div key={c.id} className="flex items-center gap-1.5">
+                    <SupplierName
+                      value={c.vendorName}
+                      onCommit={async (name) => { patchCand(c.id, { vendorName: name }); await updateCandidate(c.id, { vendorName: name }); }}
+                    />
+                    <span className="text-gray-500">· {c.quoteAmount != null ? money(c.quoteAmount) : "—"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
           <DescriptionLine
             value={eng.note}
@@ -657,14 +666,14 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange, allCateg
         if (!prompt || !cc) return null;
         return (
           <div className="text-sm bg-gray-50 border border-border rounded-lg px-3 py-2 mb-3">
-            Lock <span className="font-medium">{cc.vendorName}</span>’s {money(cc.quoteAmount)} as the confirmed cost. Add a comment or attachment (optional):
+            Mark <span className="font-medium">{cc.vendorName}</span> paid at {money(cc.quoteAmount)}. Add a comment or attachment (optional):
             <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="Comment (why this vendor, terms, next steps…)" className="w-full mt-2 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
             <div className="flex items-center gap-2 mt-2">
               <input value={attach} onChange={(e) => setAttach(e.target.value)} placeholder="Attachment URL (quote, contract…)" className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
               <FileDrop compact label="drop file" onUploaded={(url) => setAttach(url)} />
             </div>
             <div className="flex gap-2 mt-2">
-              <button onClick={confirmContract} className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">Confirm &amp; lock</button>
+              <button onClick={confirmPaid} className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">Confirm</button>
               <button onClick={() => { setPrompt(null); setContractCandId(null); }} className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
             </div>
           </div>
@@ -691,7 +700,7 @@ function DecisionCard({ initial, eventId, location, onDelete, onChange, allCateg
               <tr
                 key={c.id}
                 onClick={() => setCardId(c.id)}
-                className={`border-t border-gray-100 cursor-pointer hover:bg-gray-50 ${c.isSelected ? "bg-green-50 hover:bg-green-50" : ""}`}
+                className={`border-t border-gray-100 cursor-pointer hover:bg-gray-50 ${c.status === "paid" ? "bg-green-50 hover:bg-green-50" : ""}`}
                 title="Open vendor card"
               >
                 <td className="px-3 py-2 text-center">
@@ -4173,6 +4182,20 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // "Anything open" = a setup gap OR any proposed Slack capture (the Open card hosts the From-Slack
   // inbox of all captures). Drives the top-slot choice.
   const anythingOpen = openFlags.length > 0 || captures.length > 0;
+  const [linBusy, setLinBusy] = useState(false);
+  const createLinear = async () => { setLinBusy(true); try { await syncEventToLinear(eventId); onApplied(); } finally { setLinBusy(false); } };
+  // "Create a project in Linear" as an open item (shown until linked) — matches the setup-flag cards.
+  const linearOpenItem = !plan.linearProjectId ? (
+    <div className="flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 pr-2">
+      <button onClick={createLinear} disabled={linBusy} className="group flex-1 min-w-0 flex items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition-colors disabled:opacity-60">
+        {linBusy ? <Loader2 className="w-5 h-5 text-amber-700 shrink-0 animate-spin" /> : <Activity className="w-5 h-5 text-amber-700 shrink-0" />}
+        <span className="flex-1 min-w-0">
+          <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">Create a project in Linear</span>
+          <span className="block text-[13px] text-amber-700">Adds a project in the EventHub Linear team, one issue per deliverable.</span>
+        </span>
+      </button>
+    </div>
+  ) : null;
 
   return (
     <div className="space-y-6">
@@ -4232,6 +4255,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           linearSynced={!!plan.linearProjectId}
           linearProjectUrl={plan.linearProjectUrl}
           onLinearSynced={onApplied}
+          showLinear={false}
         />
       )}
 
@@ -4242,7 +4266,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
       {/* Classic setup-flag cards — kept for the phase views (day-before / day-of / post).
           The planning view folds these into "Open · next up" instead (below). */}
-      {!planningActive && openFlags.length > 0 && (
+      {!planningActive && (openFlags.length > 0 || linearOpenItem) && (
         <div className="space-y-2">
           {openFlags.map((key) => {
             const m = SETUP_META[key];
@@ -4261,6 +4285,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
               </div>
             );
           })}
+          {linearOpenItem}
         </div>
       )}
 
@@ -4303,6 +4328,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {anythingOpen && (
             <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
           )}
+
+          {linearOpenItem}
 
           <WhereThingsStand bullets={summaryBullets} fallback={synthDigest} onRefresh={resync} refreshing={resyncing} note={resyncMsg} />
 

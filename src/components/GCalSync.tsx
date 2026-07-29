@@ -27,6 +27,7 @@ export function GCalSync({
   linearProjectUrl = null,
   onLinearSynced,
   matchPending = null,
+  showLinear = true,
 }: {
   eventId: string;
   synced: boolean;            // already on the calendar (gcalEventId present)
@@ -35,6 +36,7 @@ export function GCalSync({
   onSynced?: () => void;
   gcalAvailable?: boolean;    // event has a date → the Google Calendar line is offered (action variant)
   linearSynced?: boolean;     // already mirrored to Linear (linear_project_id present)
+  showLinear?: boolean;       // render the Linear line in the action card (off when it lives as an open item)
   linearProjectUrl?: string | null; // deep link to the Linear project, if known
   onLinearSynced?: () => void;
   matchPending?: Record<string, { summary: string; reason?: string } | null> | null;
@@ -137,7 +139,7 @@ export function GCalSync({
   // Auto-sync already adds dated events, so there's no manual "add to calendar" prompt here —
   // the GCal line appears only for a this-session confirmation or a collision "needs review".
   const gcalShow = gcalAvailable && (justSynced || pending);
-  const linearShow = !linDone || linJustSynced;
+  const linearShow = showLinear && (!linDone || linJustSynced);
   if (!gcalShow && !linearShow) return null;
 
   return (
