@@ -3543,6 +3543,7 @@ export interface BudgetProjection {
   high: number | null;
   pastEvents: number;       // how many comparable events contributed a value
   lowConfidence: boolean;   // n <= 1
+  sources: { eventId: string; eventName: string; amount: number }[]; // the events this drew from
 }
 
 /** Per-category PROJECTED costs derived from comparable past events (same format).
@@ -3557,12 +3558,13 @@ export async function getBudgetProjections(eventId: string, categories: string[]
   // This event's format → comparable past events of the same format.
   const { data: self } = await supabase.from('event').select('format').eq('id', eventId).maybeSingle();
   const format = (self as any)?.format ?? null;
-  let q = supabase.from('event').select('id').neq('id', eventId);
+  let q = supabase.from('event').select('id, name').neq('id', eventId);
   q = format ? q.eq('format', format) : q.not('event_date', 'is', null);
   const { data: peers } = await q;
   const peerIds = (peers ?? []).map((r: any) => r.id);
+  const peerNames = new Map<string, string>((peers ?? []).map((r: any) => [r.id, r.name ?? r.id]));
   if (peerIds.length === 0) {
-    return [...wanted.values()].map((category) => ({ category, projected: null, low: null, high: null, pastEvents: 0, lowConfidence: true }));
+    return [...wanted.values()].map((category) => ({ category, projected: null, low: null, high: null, pastEvents: 0, lowConfidence: true, sources: [] }));
   }
 
   // amounts[normCategory] = Map<peerEventId, summed amount> — one value per event.
@@ -3583,9 +3585,13 @@ export async function getBudgetProjections(eventId: string, categories: string[]
   for (const b of budgets ?? []) for (const l of (b as any).lines ?? []) add((l as any).label, (b as any).event_id, num((l as any).confirmed_amount));
 
   return [...wanted.entries()].map(([k, category]) => {
-    const vals = [...(amounts.get(k)?.values() ?? [])].sort((a, b) => a - b);
+    const perEvent = amounts.get(k) ?? new Map<string, number>();
+    const vals = [...perEvent.values()].sort((a, b) => a - b);
     const n = vals.length;
     const median = n === 0 ? null : n % 2 ? vals[(n - 1) / 2] : Math.round((vals[n / 2 - 1] + vals[n / 2]) / 2);
+    const sources = [...perEvent.entries()]
+      .map(([eventId, amount]) => ({ eventId, eventName: peerNames.get(eventId) ?? eventId, amount }))
+      .sort((a, b) => b.amount - a.amount);
     return {
       category,
       projected: median,
@@ -3593,6 +3599,7 @@ export async function getBudgetProjections(eventId: string, categories: string[]
       high: n ? vals[n - 1] : null,
       pastEvents: n,
       lowConfidence: n <= 1,
+      sources,
     };
   });
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Check, Sparkles } from "lucide-react";
+import { AlertCircle, Check, Sparkles, ChevronDown, ExternalLink } from "lucide-react";
 import {
   getBudgetProjections, setEventBudgetTarget, setBudgetTarget,
   type EventPlanning, type BudgetProjection,
@@ -26,6 +26,7 @@ export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPla
   const [projections, setProjections] = useState<BudgetProjection[] | null>(null);
   const [amounts, setAmounts] = useState<Record<string, string>>({}); // categoryKey → edited figure (string)
   const [highlight, setHighlight] = useState<string | null>(null);    // categoryKey of the clicked row
+  const [openKey, setOpenKey] = useState<string | null>(null);        // categoryKey whose sources are expanded
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -68,30 +69,54 @@ export function BudgetProjections({ plan, eventId, onApplied }: { plan: EventPla
       <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
         {rows.map((p) => {
           const k = categoryKey(p.category);
+          const open = openKey === k;
           return (
-            <div
-              key={p.category}
-              onClick={() => setHighlight(k)}
-              className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-shadow ${highlight === k ? "ring-2 ring-amber-200 rounded-md" : ""}`}
-            >
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-800 truncate">{p.category}</p>
-                <p className="text-[13px] text-gray-400 inline-flex items-center gap-1.5">
-                  {money(p.low, currency)}–{money(p.high, currency)} · {p.pastEvents} event{p.pastEvents === 1 ? "" : "s"}
-                  {p.lowConfidence && (
-                    <span title="Low confidence — based on one event or less" className="inline-flex items-center gap-0.5 text-amber-600">
-                      <AlertCircle className="w-3.5 h-3.5" /> low
-                    </span>
-                  )}
-                </p>
+            <div key={p.category} className={highlight === k ? "ring-2 ring-amber-200 rounded-md" : ""}>
+              <div onClick={() => setHighlight(k)} className="flex items-center gap-3 px-3 py-2 cursor-pointer">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-800 truncate">{p.category}</p>
+                  <p className="text-[13px] text-gray-400 inline-flex items-center gap-1.5">
+                    {money(p.low, currency)}–{money(p.high, currency)} ·{" "}
+                    {p.sources.length > 0 ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setOpenKey(open ? null : k); }}
+                        className="inline-flex items-center gap-0.5 text-gray-500 hover:text-gray-800 decoration-dotted underline"
+                        title="Show the events this draws from"
+                      >
+                        {p.pastEvents} event{p.pastEvents === 1 ? "" : "s"}
+                        <ChevronDown className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`} />
+                      </button>
+                    ) : <>{p.pastEvents} event{p.pastEvents === 1 ? "" : "s"}</>}
+                    {p.lowConfidence && (
+                      <span title="Low confidence — based on one event or less" className="inline-flex items-center gap-0.5 text-amber-600">
+                        <AlertCircle className="w-3.5 h-3.5" /> low
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <input
+                  type="number"
+                  value={valueFor(p)}
+                  onChange={(e) => setAmount(p.category, e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-28 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                />
               </div>
-              <input
-                type="number"
-                value={valueFor(p)}
-                onChange={(e) => setAmount(p.category, e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                className="w-28 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-              />
+              {open && p.sources.length > 0 && (
+                <div className="px-3 pb-2 space-y-0.5">
+                  {p.sources.map((s) => (
+                    <a
+                      key={s.eventId}
+                      href={`/?event=${encodeURIComponent(s.eventId)}&view=budget`}
+                      className="flex items-center justify-between gap-3 text-[13px] text-gray-600 rounded px-2 py-1 hover:bg-violet-50 hover:text-violet-700"
+                      title={`Open ${s.eventName}'s budget`}
+                    >
+                      <span className="inline-flex items-center gap-1 min-w-0"><ExternalLink className="w-3 h-3 shrink-0" /> <span className="truncate">{s.eventName}</span></span>
+                      <span className="text-gray-400 shrink-0">{money(s.amount, currency)}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}

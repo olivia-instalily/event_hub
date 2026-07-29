@@ -4082,7 +4082,10 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       const { name, role } = parsePersonRole(c.summary);
       const { amount } = budgetParams(c);
       const eng = await addEngagement(eventId, role || c.summary, amount);
-      const cand = await addCandidate(eng.id, name ?? c.summary, amount, "");
+      // Ensure a directory vendor + link the candidate to it (vendor_id) so it shows on the
+      // Vendors page under this event — the Slack path used to leave vendor_id null.
+      const vId = await ensureVendor(name ?? c.summary, role || c.summary);
+      const cand = await addCandidate(eng.id, name ?? c.summary, amount, "", vId);
       await selectCandidate(eng.id, cand.id);
       if (/\bconfirm|locked in|\bbooked\b|signed|hired|going with|on board/i.test(`${c.summary} ${c.detail ?? ""} ${c.sourceQuote ?? ""}`)) {
         await setEngagementStage(eng.id, "Contracted");
