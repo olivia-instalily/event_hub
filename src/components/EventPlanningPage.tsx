@@ -2245,13 +2245,12 @@ function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }
             const isSel = !locked && m.key === selectedKey, isNow = !locked && m.key === currentKey, big = m.kind === "primary";
             // The actual current phase keeps a STRONG highlight (solid + ring-4) even while you preview
             // another; a previewed non-current phase gets a LIGHTER highlight (soft fill + ring-2).
-            // The current phase carries a persistent HALO (ring) marking "you are here"; it fills dark
-            // only while it's the selected view, and goes hollow (halo only) when you preview another.
-            // A previewed non-current phase is lightly shaded, no halo.
+            // Whichever circle is SELECTED fills dark. The current phase also carries a persistent HALO
+            // (ring) marking "you are here" — so it's halo+dark when selected, halo-only (hollow) when
+            // you preview a different phase, which itself fills dark as the selected one.
             const halo = isNow && !locked;
-            const fill = locked ? m.color.dot
-              : isNow ? (isSel ? m.color.dot : `bg-white ${m.color.fillSoft}`)
-              : isSel ? `${m.color.band} ${m.color.fillSoft}`
+            const fill = locked || isSel ? m.color.dot
+              : isNow ? `bg-white ${m.color.fillSoft}`
               : m.kind === "secondary" ? m.color.dot
               : `bg-white ${m.color.fillSoft}`;
             return (
