@@ -9,7 +9,7 @@ import {
   Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
   UserPlus, DollarSign, ClipboardList, Sparkles,
 } from "lucide-react";
-import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, DragOverlay, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -1577,13 +1577,19 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
     return () => ro.disconnect();
   }, [railPhases.length, total]);
 
+  // Tracks which deliverable is currently being dragged, so DragOverlay can render its clone.
+  const [activeId, setActiveId] = useState<string | null>(null);
+
   // Drag-to-reorder deliverables within a phase. T-offsets are predetermined, so reordering is a
   // manual arrangement only — it does NOT change any task's time.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+  const onDragStart = (e: DragStartEvent) => setActiveId(String(e.active.id));
+  const onDragCancel = () => setActiveId(null);
   const onDragEnd = (e: DragEndEvent) => {
+    setActiveId(null);
     const { active, over } = e;
     if (!over) return;
     const a = items.find((d) => d.id === active.id);
@@ -1647,52 +1653,76 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
   // Rows visible after applying the tag filter.
   const visibleItems = tagFilter ? items.filter((d) => d.tags.includes(tagFilter)) : items;
 
-  // Helper: render a list of deliverable rows inside a SortableContext.
-  const renderRows = (group: typeof items) => group.map((d) => {
+  // Shared row content — used both inside SortableRow and inside the DragOverlay clone.
+  // overlay=true: renders with lifted visual (shadow + ring), no ref wiring, full opacity.
+  // isDragging=true (in-place): renders as a faint placeholder so the slot doesn't collapse.
+  const renderRowInner = (
+    d: (typeof items)[number],
+    opts: {
+      attributes?: React.HTMLAttributes<HTMLElement>;
+      listeners?: Record<string, unknown>;
+      isDragging?: boolean;
+      overlay?: boolean;
+    },
+  ) => {
+    const { attributes, listeners, isDragging, overlay } = opts;
     const overdue = d.dueDate && d.dueDate < today() && d.status !== "Done";
+    const rowCls = [
+      "px-3 py-2 flex items-center gap-3 text-sm group scroll-mt-24 transition-colors",
+      overlay ? "shadow-lg ring-1 ring-gray-300 rounded-lg bg-white opacity-100" : "",
+      isDragging && !overlay ? "opacity-40" : "",
+      !overlay && !isDragging ? (highlight === d.id ? "bg-amber-50" : selected.has(d.id) ? "bg-gray-50" : "") : "",
+    ].filter(Boolean).join(" ");
     return (
-      <SortableRow key={d.id} id={d.id}>
-        {({ setNodeRef, style, attributes, listeners, isDragging }) => (
-          <div ref={(el) => { rowRefs.current[d.id] = el; setNodeRef(el); }} style={style} className={`px-3 py-2 flex items-center gap-3 text-sm group scroll-mt-24 transition-colors ${isDragging ? "opacity-60" : ""} ${highlight === d.id ? "bg-amber-50" : selected.has(d.id) ? "bg-gray-50" : ""}`}>
-            <button type="button" {...attributes} {...listeners} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to reorder or move phase" title="Drag to reorder or move to a different phase/benchmark"><GripVertical className="w-4 h-4" /></button>
-            <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSel(d.id)} className="rounded border-gray-300 shrink-0" aria-label={`Select ${d.title}`} />
-            {/* Content block: title + date on a single flex row so they stay centered with the controls. */}
-            <div className="flex flex-1 items-center gap-2 min-w-0 self-center">
-              <span className={`flex-1 min-w-0 truncate inline-flex items-center gap-1.5 ${d.status === "Done" ? "line-through text-gray-400" : ""}`}>
-                {d.title}
-                {d.linearIssueUrl && (
-                  <a href={d.linearIssueUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open issue in Linear" className="inline-flex text-purple-600 hover:text-purple-800 no-underline"><Activity className="w-3.5 h-3.5" /></a>
-                )}
-                {onOpenReflection && /reflection/i.test(d.title) && (
-                  <button onClick={(e) => { e.stopPropagation(); onOpenReflection(); }} title="Open the post-event reflection" className="inline-flex items-center gap-0.5 text-gray-500 hover:text-gray-900 text-[13px]">
-                    <ExternalLink className="w-3.5 h-3.5" /> Open
-                  </button>
-                )}
-              </span>
-              <span className="shrink-0 inline-flex items-center gap-1.5 text-[13px] text-gray-500">
-                {tOffsetLabel(d.offsetStart, d.offsetEnd) && <span className="text-gray-400 bg-gray-100 rounded px-1">{tOffsetLabel(d.offsetStart, d.offsetEnd)}</span>}
-                {overdue && <span className="text-red-600 font-medium">overdue</span>}
-                <DateEdit value={d.dueDate} onChange={(iso) => setDue(d.id, iso)} placeholder="add due date" emphasize={!!overdue} />
-              </span>
-            </div>
-            {/* People/outreach tag — placeholder for a future outreach page. */}
-            <button title="People & outreach for this task — coming soon" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[13px] border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0">
-              <Users className="w-3 h-3" /> {d.ownerRole ?? "People"}
-            </button>
-            <Select value={d.status ?? "Todo"} onValueChange={(v) => setStatus(d.id, v as string)} items={STATUSES.map((s) => ({ value: s, label: s }))}>
-              <SelectTrigger size="sm" className="shrink-0 text-[13px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {d.locked
-              ? <span title="Required — can't be removed" className="text-gray-300 shrink-0"><Lock className="w-3.5 h-3.5" /></span>
-              : <button onClick={() => remove(d.id)} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100" aria-label="Delete"><Trash2 className="w-3.5 h-3.5" /></button>}
-          </div>
-        )}
-      </SortableRow>
+      <div className={rowCls}>
+        <button type="button" {...(attributes ?? {})} {...(listeners ?? {})} className="shrink-0 cursor-grab touch-none text-gray-300 hover:text-gray-500 active:cursor-grabbing" aria-label="Drag to reorder or move phase" title="Drag to reorder or move to a different phase/benchmark"><GripVertical className="w-4 h-4" /></button>
+        <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSel(d.id)} className="rounded border-gray-300 shrink-0" aria-label={`Select ${d.title}`} />
+        {/* Content block: title + date on a single flex row so they stay centered with the controls. */}
+        <div className="flex flex-1 items-center gap-2 min-w-0 self-center">
+          <span className={`flex-1 min-w-0 truncate inline-flex items-center gap-1.5 ${d.status === "Done" ? "line-through text-gray-400" : ""}`}>
+            {d.title}
+            {d.linearIssueUrl && (
+              <a href={d.linearIssueUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open issue in Linear" className="inline-flex text-purple-600 hover:text-purple-800 no-underline"><Activity className="w-3.5 h-3.5" /></a>
+            )}
+            {onOpenReflection && /reflection/i.test(d.title) && (
+              <button onClick={(e) => { e.stopPropagation(); onOpenReflection(); }} title="Open the post-event reflection" className="inline-flex items-center gap-0.5 text-gray-500 hover:text-gray-900 text-[13px]">
+                <ExternalLink className="w-3.5 h-3.5" /> Open
+              </button>
+            )}
+          </span>
+          <span className="shrink-0 inline-flex items-center gap-1.5 text-[13px] text-gray-500">
+            {tOffsetLabel(d.offsetStart, d.offsetEnd) && <span className="text-gray-400 bg-gray-100 rounded px-1">{tOffsetLabel(d.offsetStart, d.offsetEnd)}</span>}
+            {overdue && <span className="text-red-600 font-medium">overdue</span>}
+            <DateEdit value={d.dueDate} onChange={(iso) => setDue(d.id, iso)} placeholder="add due date" emphasize={!!overdue} />
+          </span>
+        </div>
+        {/* People/outreach tag — placeholder for a future outreach page. */}
+        <button title="People & outreach for this task — coming soon" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[13px] border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0">
+          <Users className="w-3 h-3" /> {d.ownerRole ?? "People"}
+        </button>
+        <Select value={d.status ?? "Todo"} onValueChange={(v) => setStatus(d.id, v as string)} items={STATUSES.map((s) => ({ value: s, label: s }))}>
+          <SelectTrigger size="sm" className="shrink-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {d.locked
+          ? <span title="Required — can't be removed" className="text-gray-300 shrink-0"><Lock className="w-3.5 h-3.5" /></span>
+          : <button onClick={() => remove(d.id)} className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100" aria-label="Delete"><Trash2 className="w-3.5 h-3.5" /></button>}
+      </div>
     );
-  });
+  };
+
+  // Helper: render a list of deliverable rows inside a SortableContext.
+  const renderRows = (group: typeof items) => group.map((d) => (
+    <SortableRow key={d.id} id={d.id}>
+      {({ setNodeRef, style, attributes, listeners, isDragging }) => (
+        <div ref={(el) => { rowRefs.current[d.id] = el; setNodeRef(el); }} style={style}>
+          {renderRowInner(d, { attributes, listeners, isDragging })}
+        </div>
+      )}
+    </SortableRow>
+  ));
 
   return (
     <div className="bg-white rounded-2xl border border-border p-6">
@@ -1762,7 +1792,7 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
         )}
       </div>
 
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={onDragCancel}>
       <div className="space-y-5">
         {PHASES.map((phase) => {
           // All items in this phase (pre-filter for selection counts; apply tag filter for render).
@@ -1839,6 +1869,9 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
           );
         })}
       </div>
+      <DragOverlay dropAnimation={null}>
+        {activeId ? (() => { const d = items.find((x) => x.id === activeId); return d ? renderRowInner(d, { overlay: true }) : null; })() : null}
+      </DragOverlay>
       </DndContext>
     </div>
   );
