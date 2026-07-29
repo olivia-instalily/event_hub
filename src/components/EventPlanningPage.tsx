@@ -4209,8 +4209,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
         // then Learnings. Cut vs. the old stack: deliverables preview, at-a-glance, Linear box,
         // auto-updates, carried-learnings card (compounding now permeates the state cards inline).
         <div className="space-y-6">
-          {/* Top slot goes to whatever's most useful now: anything open → Open·next-up leads and the
-              summary sits under it; nothing open → the summary takes the slot and Open is not shown. */}
+          {/* Stable order: Open·next-up (when present) always above Where-things-stand.
+              Open is conditionally rendered; Where-things-stand is always shown below it. */}
           {anythingOpen && (
             <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
           )}
