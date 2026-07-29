@@ -2,17 +2,18 @@ import { useState } from "react";
 import { AlertCircle, Plus } from "lucide-react";
 import { addDeliverable, type EventPlanning, type Deliverable } from "../lib/db";
 import { dueOffsetForTitle } from "../lib/schedule";
+import type { Phase } from "../lib/phases";
 
 // Standard deliverables we can guess for any event — surfaced as tentative suggestions
 // in the deliverables tab (each addable via +). Titles align with the schedule's workstream offsets.
-const TENTATIVE_DELIVERABLES: { title: string; phase: string }[] = [
-  { title: "Book venue & confirm space", phase: "Venue" },
-  { title: "Launch registration page", phase: "Marketing" },
-  { title: "Finalize catering & menu", phase: "Catering" },
-  { title: "Confirm speakers & moderators", phase: "Program" },
-  { title: "Lock A/V & production", phase: "Production" },
-  { title: "Send invites & track RSVPs", phase: "Guests" },
-  { title: "Run-of-show & day-of staffing", phase: "Logistics" },
+const TENTATIVE_DELIVERABLES: { title: string; tag: string; phase: Phase }[] = [
+  { title: "Book venue & confirm space", tag: "Venue", phase: "planning" },
+  { title: "Launch registration page", tag: "Marketing", phase: "planning" },
+  { title: "Finalize catering & menu", tag: "Catering", phase: "planning" },
+  { title: "Confirm speakers & moderators", tag: "Program", phase: "planning" },
+  { title: "Lock A/V & production", tag: "Production", phase: "planning" },
+  { title: "Send invites & track RSVPs", tag: "Guests", phase: "planning" },
+  { title: "Run-of-show & day-of staffing", tag: "Logistics", phase: "day-of" },
 ];
 
 export function SuggestedDeliverables({
@@ -42,13 +43,14 @@ export function SuggestedDeliverables({
     (s) => !present.has(s.title.toLowerCase()),
   );
 
-  const addSuggestion = async (s: { title: string; phase: string }) => {
+  const addSuggestion = async (s: { title: string; tag: string; phase: Phase }) => {
     const due = guessDue(s.title);
     const d = await addDeliverable(eventId, {
       title: s.title,
       phase: s.phase,
       ownerRole: null,
       dueDate: due,
+      tags: [s.tag],
     });
     setItems((p) => [...p, d]);
     onApplied();
@@ -56,7 +58,7 @@ export function SuggestedDeliverables({
 
   const addAll = async () => {
     const created = await Promise.all(
-      suggestions.map((s) => addDeliverable(eventId, { title: s.title, phase: s.phase, ownerRole: null, dueDate: guessDue(s.title) })),
+      suggestions.map((s) => addDeliverable(eventId, { title: s.title, phase: s.phase, ownerRole: null, dueDate: guessDue(s.title), tags: [s.tag] })),
     );
     setItems((p) => [...p, ...created]);
     onApplied();
@@ -96,7 +98,7 @@ export function SuggestedDeliverables({
             <div className="min-w-0">
               <p className="truncate text-gray-500">{s.title}</p>
               <p className="text-[15px] text-gray-400">
-                {s.phase}
+                {s.tag}
                 {plan.date ? ` · ~${guessDue(s.title)}` : ""}
               </p>
             </div>
