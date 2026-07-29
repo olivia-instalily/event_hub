@@ -3039,7 +3039,9 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
   const spent = lines.filter((l) => l.status === "paid").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
   const target = assignedTarget ?? plan.budget?.targetAmount ?? null;
   const overUnder = target != null ? spent - target : null;
-  const perHead = checkedIn ? Math.round(spent / checkedIn) : null;
+  // Cost per head divides by the best turnout count we have: checked-in, else RSVPs, else expected.
+  const turnoutCount = checkedIn ?? rsvp ?? plan.headcount ?? null;
+  const perHead = turnoutCount ? Math.round(spent / turnoutCount) : null;
   const flagged = attendees.filter((a) => a.applicationStatus && a.applicationStatus !== "none").length;
   // What the event is FOR shapes how we measure turnout (candidate vs client signal vs none).
   const focus = eventFocus(plan.tags, plan.format, plan.focusOverride);
@@ -3103,7 +3105,7 @@ function PostEventView({ plan, temporal, onOpenDeliverable, onOpenPeople, assign
           <div className="bg-white rounded-2xl border border-border p-5">
             <p className="text-[13px] text-gray-500 mb-1">Cost per head</p>
             <p className="text-2xl font-semibold text-gray-900">{perHead != null ? money(perHead) : "—"}</p>
-            <p className="text-[11px] text-gray-400">spend ÷ checked in</p>
+            <p className="text-[11px] text-gray-400">spend ÷ {checkedIn != null ? "checked in" : rsvp != null ? "RSVPs" : "expected"}</p>
           </div>
           {/* purpose signal — hiring shows candidates, client shows clients, community shows nothing */}
           {focus === "hiring" && (
@@ -4037,9 +4039,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
       {/* Phase timeline — interactive while live; a static record once settled/locked. Hidden in the
           composed planning view (navigation returns via the phase views' own controls). */}
-      {!planningActive && (
-        <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
-      )}
+      {/* Phase timeline — shown in every view (incl. planning) so the phase nodes are always there to
+          navigate; it self-hides only when there are genuinely no markers. */}
+      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
 
       {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
       {locked ? (
