@@ -1467,7 +1467,7 @@ function BenchmarkDropZone({ benchmarkId, children }: { benchmarkId: string; chi
   return <div ref={setNodeRef} className={`rounded-lg transition-shadow ${isOver ? "ring-2 ring-primary/50" : ""}`}>{children}</div>;
 }
 
-function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; benchmarks: Benchmark[]; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
+function Deliverables({ eventId, initial, phases, benchmarks, jumpId, sectionJump, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; benchmarks: Benchmark[]; jumpId?: string | null; sectionJump?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
   const [items, setItems] = useState(initial);
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
   const [title, setTitle] = useState("");
@@ -1481,6 +1481,12 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [highlight, setHighlight] = useState<string | null>(null);
   useEffect(() => { if (!jumpId) return; const el = rowRefs.current[jumpId]; if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); setHighlight(jumpId); } }, [jumpId, items.length]);
+  // Cross-tab section jump: Overview timeline click → tab switch → scroll to delsec-* anchor once mounted.
+  useEffect(() => {
+    if (!sectionJump) return;
+    const t = setTimeout(() => { document.getElementById(sectionJump)?.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80);
+    return () => clearTimeout(t);
+  }, [sectionJump]);
   useEffect(() => {
     if (!highlight) return;
     const clear = () => setHighlight(null);
@@ -1538,9 +1544,14 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
     groupRefs.current[phaseKey]?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   // Per-phase completion (done deliverables / total) — drives the rail's segment fills + check-offs.
+  // rp.name may be a CAPITALIZED display label ("Planning") while d.phase is a lowercase key
+  // ("planning"). Resolve rp.name to its phase key before comparing so the filter always matches.
   const railProgress: Record<string, number> = {};
   for (const rp of railPhases) {
-    const grp = items.filter((d) => d.phase === rp.name);
+    const phaseKey = (PHASES as readonly string[]).includes(rp.name)
+      ? rp.name
+      : PHASES.find((k) => PHASE_LABEL[k] === rp.name) ?? rp.name;
+    const grp = items.filter((d) => d.phase === phaseKey);
     railProgress[rp.name] = grp.length ? grp.filter((d) => d.status === "Done").length / grp.length : 0;
   }
   const railOffs = railPhases.flatMap((p) => [p.start, p.end]).filter((n): n is number => n != null);
@@ -2124,15 +2135,16 @@ function deriveMarkers(plan: EventPlanning): { markers: OvMarker[]; currentKey: 
 // Interactive timeline: primary phase nodes (large) + benchmark sub-dots (small, same-color,
 // indented). The date-derived "NOW" marker is fixed; the selected node is what's being previewed.
 // Clicking a node also scrolls the corresponding deliverables section into view.
-function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }: { markers: OvMarker[]; currentKey: string; selectedKey: string; onSelect: (k: string) => void; locked?: boolean }) {
+function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, onJumpToSection, locked }: { markers: OvMarker[]; currentKey: string; selectedKey: string; onSelect: (k: string) => void; onJumpToSection: (sectionId: string) => void; locked?: boolean }) {
   if (markers.length === 0) return null;
 
   function handleSelect(key: string) {
     if (locked) return;
     onSelect(key);
-    // Scroll the deliverables section for this marker into view.
+    // Route the section jump through the parent so it can switch to the Deliverables tab first
+    // (the delsec-* anchors only exist while that tab is mounted).
     const anchorId = key.startsWith("bm:") ? `delsec-bm-${key.slice(3)}` : `delsec-${key.replace(/^phase:/, "")}`;
-    document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    onJumpToSection(anchorId);
   }
 
   return (
@@ -3861,7 +3873,7 @@ function GCalMatchConfirmCard({ eventId, candidates, onResolved }: { eventId: st
   );
 }
 
-function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOpenDeliverable, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenTimeline: () => void; onOpenDeliverable: (id: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
+function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOpenDeliverable, onJumpToSection, onOpenPeople, onOpenEvent, reflectionJump, reopened = false, setPlan }: { plan: EventPlanning; eventId: string; onApplied: () => void; onOpenBudget: () => void; onOpenTimeline: () => void; onOpenDeliverable: (id: string) => void; onJumpToSection: (sectionId: string) => void; onOpenPeople: () => void; onOpenEvent?: (id: string) => void; reflectionJump?: number; reopened?: boolean; setPlan: React.Dispatch<React.SetStateAction<EventPlanning | null>> }) {
   const facts = buildFacts(plan);
   // Phase-aware view: the timeline's date-derived "now" sets the default; clicking a node
   // previews another phase's view (Overview-internal state, not tab navigation).
@@ -4193,7 +4205,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           composed planning view (navigation returns via the phase views' own controls). */}
       {/* Phase timeline — shown in every view (incl. planning) so the phase nodes are always there to
           navigate; it self-hides only when there are genuinely no markers. */}
-      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
+      <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} onJumpToSection={onJumpToSection} locked={locked} />
 
       {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
       {locked ? (
@@ -4569,6 +4581,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
   const [eventSubTab, setEventSubTab] = useState<"record" | "deliverables" | "budget" | "people">("record"); // tabs UNDER "This event"
   const [reopened, setReopened] = useState(false); // wrapped event re-opened to the normal workspace
   const [deliverableJump, setDeliverableJump] = useState<string | null>(null); // Overview → a specific deliverable
+  const [sectionJump, setSectionJump] = useState<string | null>(null); // Overview timeline → a deliverables section anchor
   const [reflectionJump, setReflectionJump] = useState(0); // Deliverables → the post-event reflection page
   // People is a tab here (keeps the event header/tabs); links set the status it opens on.
   const [peopleStatus, setPeopleStatus] = useState<'all' | 'registered' | 'checkedIn' | 'waitlisted' | 'speakers'>('all');
@@ -4892,7 +4905,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
 
       <div key={`${tab}-${version}`}>
         {tab === "overview" && (
-          <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenTimeline={() => setTab("deliverables")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} setPlan={setPlan} />
+          <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenTimeline={() => setTab("deliverables")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onJumpToSection={(id) => { setSectionJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} setPlan={setPlan} />
         )}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
         {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
@@ -4906,7 +4919,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           <div className="space-y-6">
             <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
             <BenchmarkEditor eventId={eventId} benchmarks={plan.benchmarks} deliverables={plan.deliverables} setPlan={setPlan} />
-            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
+            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} jumpId={deliverableJump} sectionJump={sectionJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
           </div>
         )}
