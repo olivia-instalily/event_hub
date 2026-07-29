@@ -99,7 +99,7 @@ function money(n: number | null | undefined, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
 }
 
-const DELIVERABLE_PHASES = ["Planning", "Week-of", "Event day", "Wrap"];
+const DELIVERABLE_PHASES = ["Planning", "Day-of", "Post"];
 const STATUSES = ["Todo", "In Progress", "Done"];
 
 // ── Macro-stage stepper ───────────────────────────────────────────────────────
@@ -3901,14 +3901,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     const clear = () => el.classList.remove(...cls);
     setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
   };
+  // Always ring the budget target field once the Budget tab has mounted it — poll for the element so
+  // it works regardless of whether past-event comparables/projections are present.
   const reviewBudgetField = () => {
     let tries = 0;
     const tick = () => {
-      const state = document.getElementById("budget-projections-state")?.getAttribute("data-state");
-      if (state === "ready") return;
-      if (state === "empty") { highlightField("budget-target-field"); return; }
-      if (tries++ < 15) { setTimeout(tick, 100); return; }
-      highlightField("budget-target-field");
+      if (document.getElementById("budget-target-field")) { highlightField("budget-target-field"); return; }
+      if (tries++ < 20) setTimeout(tick, 100);
     };
     setTimeout(tick, 120);
   };

@@ -13,7 +13,7 @@ const ALIASES: { role: PhaseRole; rx: RegExp }[] = [
   { role: "setup", rx: /\b(plan|planning|set[- ]?up|logistics|prep|prepare|scope|scoping)\b/i },
   { role: "promote", rx: /\b(promote|promotion|get people there|outreach|invite|invites|rsvps?|marketing|sign[- ]?ups?)\b/i },
   { role: "thanks", rx: /\b(thanks|thank|follow[- ]?up|follow[- ]?ups|nudge|gratitude)\b/i },
-  { role: "measure", rx: /\b(measure|turnout|debrief|wrap|wrap[- ]?up|recap|retro|retrospective|review|post[- ]?mortem|reflect|reflections?|outcomes?)\b/i },
+  { role: "measure", rx: /\b(measure|turnout|debrief|wrap|wrap[- ]?up|recap|retro|retrospective|review|post|post[- ]?event|post[- ]?mortem|reflect|reflections?|outcomes?)\b/i },
 ];
 
 /** Map a phase name to its role, or null when it doesn't match any known role. */
