@@ -8,7 +8,7 @@ import { CREW_ROLES, ROLE_LABEL, type CrewRole } from "../lib/campaign";
 function Avatar({ p }: { p: Profile | null }) {
   const { cls, style } = avatarColor(p?.color ?? null, p?.name ?? null);
   return (
-    <span style={style} className={`w-7 h-7 rounded-full text-white text-[15px] font-medium flex items-center justify-center shrink-0 ${cls}`}>
+    <span title={p?.name ?? undefined} style={style} className={`w-7 h-7 rounded-full text-white text-[15px] font-medium flex items-center justify-center shrink-0 ${cls}`}>
       {p ? initials(p.name) : "?"}
     </span>
   );

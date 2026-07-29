@@ -33,7 +33,7 @@ function avatarColor(color: string | null): { cls: string; style?: { backgroundC
 function Avatar({ name, color }: { name: string; color: string | null }) {
   const { cls, style } = avatarColor(color);
   return (
-    <span style={style} className={`w-5 h-5 rounded-full text-white text-[13px] font-medium flex items-center justify-center shrink-0 ${cls}`}>
+    <span title={name} style={style} className={`w-5 h-5 rounded-full text-white text-[13px] font-medium flex items-center justify-center shrink-0 ${cls}`}>
       {initials(name)}
     </span>
   );
