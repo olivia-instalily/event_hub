@@ -2628,11 +2628,18 @@ export type EngagementStage = (typeof ENGAGEMENT_STAGES)[number];
 const genId = (prefix: string) => `${prefix}-` + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
 const num = (n: unknown): number | null => (n == null || n === '' ? null : Number(n));
 
+// Per-vendor status ladder (replaces the single engagement-level "decree").
+export const CANDIDATE_STATUSES = ['sourced', 'quoted', 'contracted'] as const;
+export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
+export function normCandidateStatus(s: any): CandidateStatus {
+  return s === 'quoted' || s === 'contracted' ? s : 'sourced';
+}
 export interface VendorCandidate {
   id: string;
   vendorName: string | null;
   quoteAmount: number | null;
   isSelected: boolean;
+  status: CandidateStatus;
   note: string | null;
   link: string | null;
 }
@@ -2833,6 +2840,7 @@ function mapCandidate(c: any): VendorCandidate {
     vendorName: c.vendor?.name ?? c.vendor_name ?? null,
     quoteAmount: num(c.quote_amount),
     isSelected: c.is_selected ?? false,
+    status: normCandidateStatus(c.status),
     note: c.note ?? null,
     link: c.link ?? null,
   };
@@ -2850,7 +2858,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
   const [{ data: engs }, { data: budgets }, { data: dels }] = await Promise.all([
     supabase
       .from('engagement')
-      .select('id, category, stage, confirmed_amount, note, outreach_started, watch_inbox, candidates:engagement_candidate ( id, vendor_id, vendor_name, quote_amount, is_selected, note, link, vendor:vendor ( name ) )')
+      .select('id, category, stage, confirmed_amount, note, outreach_started, watch_inbox, candidates:engagement_candidate ( id, vendor_id, vendor_name, quote_amount, is_selected, status, note, link, vendor:vendor ( name ) )')
       .eq('event_id', eventId)
       .order('id'),
     supabase
@@ -3196,7 +3204,13 @@ export async function addCandidate(engagementId: string, vendorName: string, quo
     .from('engagement_candidate')
     .insert({ id, engagement_id: engagementId, vendor_name: vendorName, quote_amount: quoteAmount, link, vendor_id: vendorId });
   if (error) throw error;
-  return { id, vendorName, quoteAmount, isSelected: false, note: null, link };
+  return { id, vendorName, quoteAmount, isSelected: false, status: 'sourced', note: null, link };
+}
+/** Set one candidate's status (sourced / quoted / contracted). The engagement's overall stage is
+ *  derived from its candidates in the UI, so this only writes the candidate row. */
+export async function setCandidateStatus(id: string, status: CandidateStatus): Promise<void> {
+  const { error } = await supabase.from('engagement_candidate').update({ status }).eq('id', id);
+  if (error) throw error;
 }
 export async function updateCandidate(id: string, fields: { vendorName?: string | null; quoteAmount?: number | null; note?: string | null; link?: string | null }): Promise<void> {
   const patch: Record<string, unknown> = {};
