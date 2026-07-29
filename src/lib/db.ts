@@ -5,6 +5,7 @@ import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
 import { labelsMatch } from './capturePromote';
+import { dedupeCategories } from './vendorCategories';
 import { categoryKey } from './budgetCategories';
 import { eventFocus, type EventFocus } from './eventFocus';
 import type { BackfillExtract, TemplateLite, TemplateAdditions } from './backfill';
@@ -3061,6 +3062,39 @@ export async function addEngagement(eventId: string, category: string, estimate:
 export async function deleteEngagement(id: string): Promise<void> {
   const { error } = await supabase.from('engagement').delete().eq('id', id);
   if (error) throw error;
+}
+/** Distinct vendor categories used across all engagements — feeds the category combobox. */
+export async function listEngagementCategories(): Promise<string[]> {
+  const { data, error } = await supabase.from('engagement').select('category');
+  if (error) { console.warn('listEngagementCategories', error.message); return []; }
+  return dedupeCategories((data ?? []).map((r: any) => r.category));
+}
+
+/** Rename a vendor decision's category (its title). Renames ONLY this engagement; if the event has a
+ *  budget line mirrored under the old category label, re-label it too so Budget stays consistent.
+ *  (Caveat: if several engagements shared that category, they still point at their own labels.) */
+export async function setEngagementCategory(engagementId: string, category: string): Promise<void> {
+  const next = category.trim();
+  if (!next) return;
+  const { data: eng } = await supabase.from('engagement').select('event_id, category').eq('id', engagementId).maybeSingle();
+  const { error } = await supabase.from('engagement').update({ category: next }).eq('id', engagementId);
+  if (error) throw new Error(error.message);
+  const oldCat = (eng as any)?.category as string | null;
+  const eventId = (eng as any)?.event_id as string | null;
+  if (oldCat && eventId && categoryKey(oldCat) !== categoryKey(next)) {
+    const { data: bud } = await supabase.from('budget').select('id').eq('event_id', eventId).maybeSingle();
+    if (bud) {
+      const lines = await listBudgetLines((bud as any).id);
+      const match = lines.find((l) => l.label && categoryKey(l.label) === categoryKey(oldCat));
+      if (match) await updateBudgetLine(match.id, { label: next });
+    }
+  }
+}
+
+/** Set (or clear with null) a vendor decision's description. */
+export async function setEngagementNote(engagementId: string, note: string | null): Promise<void> {
+  const { error } = await supabase.from('engagement').update({ note: note && note.trim() ? note.trim() : null }).eq('id', engagementId);
+  if (error) throw new Error(error.message);
 }
 /** Advance/set a decision's stage. Pass confirmedAmount when locking (→ Contracted);
  *  note/docUrl capture the comment/attachment prompted on Selected/Contracted. */
