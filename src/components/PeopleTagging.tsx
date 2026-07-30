@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Star, Check, X, MessageSquarePlus, Inbox } from "lucide-react";
+import { ChevronDown, ChevronRight, Star, Check, X, MessageSquarePlus, Inbox, UserPlus, ExternalLink } from "lucide-react";
 import {
   listEventTags, listAttendeesForEvent, tagPerson, untagLens, setPersonEventTagFields, confirmTag, dismissTag,
-  type TagLens, type EventPersonTag, type PersonView,
+  listPeopleCaptures, addCandidateFromCapture, dismissSlackCapture,
+  type TagLens, type EventPersonTag, type PersonView, type PeopleCapture,
 } from "../lib/db";
 import { eventFocus } from "../lib/eventFocus";
 
@@ -40,6 +41,10 @@ export function TaggingWorkspace({ eventId, tag, isAdmin, currentProfileId }: {
   const [loading, setLoading] = useState(true);
   const [noteFor, setNoteFor] = useState<string | null>(null); // attendeeId whose note is being edited
   const [noteDraft, setNoteDraft] = useState("");
+  // People the scrape found but couldn't match to the list — "no match" cards with an editable name.
+  const [peopleCaps, setPeopleCaps] = useState<PeopleCapture[]>([]);
+  const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  const [busyCap, setBusyCap] = useState<string | null>(null);
 
   const plan = useMemo(() => lensPlan(tag), [tag]);
   // Candidate lens is access-gated; non-admins don't see/apply it.
@@ -47,12 +52,23 @@ export function TaggingWorkspace({ eventId, tag, isAdmin, currentProfileId }: {
 
   const reload = () => {
     setLoading(true);
-    Promise.all([listEventTags(eventId), listAttendeesForEvent(eventId)])
-      .then(([t, a]) => { setTags(t); setAttendees(a); })
+    Promise.all([listEventTags(eventId), listAttendeesForEvent(eventId), listPeopleCaptures(eventId)])
+      .then(([t, a, pc]) => { setTags(t); setAttendees(a); setPeopleCaps(pc); })
       .catch(() => {})
       .finally(() => setLoading(false));
   };
   useEffect(reload, [eventId]);
+
+  // ── no-match people-card actions ──
+  const addAnyway = async (cap: PeopleCapture) => {
+    if (busyCap) return;
+    setBusyCap(cap.id);
+    const name = (nameDrafts[cap.id] ?? cap.name).trim() || cap.name;
+    try { await addCandidateFromCapture(eventId, { ...cap, name }); reload(); }
+    catch { /* ignore */ }
+    finally { setBusyCap(null); }
+  };
+  const dismissCap = async (id: string) => { await dismissSlackCapture(id).then(reload).catch(() => {}); };
 
   // Group confirmed tags by attendee (for the roster) and split out proposals (for the inbox).
   const confirmed = tags.filter((t) => t.status === "confirmed");
@@ -104,7 +120,7 @@ export function TaggingWorkspace({ eventId, tag, isAdmin, currentProfileId }: {
       <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left">
         {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
         <span className="font-medium">Tag the room</span>
-        <span className="text-[13px] text-gray-500">{taggedCount} tagged · {flaggedCount} starred{proposals.length ? ` · ${proposals.length} to review` : ""}</span>
+        <span className="text-[13px] text-gray-500">{taggedCount} tagged · {flaggedCount} starred{proposals.length ? ` · ${proposals.length} to review` : ""}{isAdmin && peopleCaps.length ? ` · ${peopleCaps.length} from Slack` : ""}</span>
         <span className="ml-auto text-[12px] text-gray-400">early signals · who we think, not results</span>
       </button>
 
@@ -142,6 +158,41 @@ export function TaggingWorkspace({ eventId, tag, isAdmin, currentProfileId }: {
               </ul>
             )}
           </div>
+
+          {/* From Slack — people found in the channel with no clear match in the list. Add anyway
+              (edit the name first if the scrape mis-spelled it) or dismiss. Admin-gated like the candidate lens. */}
+          {isAdmin && peopleCaps.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <UserPlus className="w-4 h-4 text-gray-400" />
+                <h4 className="font-medium text-sm">From Slack — no match found</h4>
+                <span className="text-[12px] text-gray-400">not in the People list · add them (edit the name if needed) or dismiss</span>
+              </div>
+              <ul className="space-y-1.5">
+                {peopleCaps.map((c) => (
+                  <li key={c.id} className="flex items-start gap-2 rounded-lg border border-violet-200 bg-violet-50/40 px-3 py-2">
+                    <span className="flex-1 min-w-0">
+                      <input
+                        value={nameDrafts[c.id] ?? c.name}
+                        onChange={(e) => setNameDrafts((d) => ({ ...d, [c.id]: e.target.value }))}
+                        className="text-sm text-gray-900 font-medium bg-transparent border-b border-transparent hover:border-gray-300 focus:border-violet-400 focus:outline-none w-full max-w-[16rem]"
+                      />
+                      {c.note && <span className="block text-[13px] text-gray-600">{c.note}</span>}
+                      <span className="block text-[11px] text-gray-400">
+                        no match in list
+                        {c.linkedin && <> · <a href={c.linkedin} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-blue-600 hover:underline"><ExternalLink className="w-3 h-3" />profile</a></>}
+                        {c.slackLink && <> · <a href={c.slackLink} target="_blank" rel="noreferrer" className="text-gray-500 hover:underline">Slack message</a></>}
+                      </span>
+                    </span>
+                    <button onClick={() => addAnyway(c)} disabled={busyCap === c.id} className="shrink-0 text-[12px] px-2 py-0.5 rounded-full text-white bg-violet-600 border border-violet-600 hover:bg-violet-700 disabled:opacity-50" title="Add to People as a candidate">
+                      {busyCap === c.id ? "Adding…" : "Add anyway"}
+                    </button>
+                    <button onClick={() => dismissCap(c.id)} className="shrink-0 text-gray-300 hover:text-red-600" title="Dismiss"><X className="w-4 h-4" /></button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Inline quick-tag over all attendees */}
           <div>

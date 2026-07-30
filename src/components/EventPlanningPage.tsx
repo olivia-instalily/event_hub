@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -2935,7 +2935,11 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // (open → Open·next-up, budget → Budget, person → Staffing) as engageable violet cards.
   const [captures, setCaptures] = useState<SlackCapture[]>([]);
   const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); };
-  useEffect(() => { reloadCaptures(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [eventId]);
+  useEffect(() => {
+    reloadCaptures();                                              // show already-stored captures immediately
+    void runSlackScrape(eventId).then((r) => { if (r?.ok) reloadCaptures(); }).catch(() => {}); // then pull new + refetch
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [eventId]);
   // Pins land in Slack while this page may already be open — there's no realtime channel, so refresh
   // captures when the tab regains focus and on a slow poll, so a new proposal appears without a reload.
   useEffect(() => {

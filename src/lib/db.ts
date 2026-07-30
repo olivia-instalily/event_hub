@@ -2050,12 +2050,54 @@ export interface SlackCapture {
 }
 
 /** The event's still-proposed captures, oldest first (so the reader sees them in arrival order). */
+// Scrape-on-open: pull new linked-channel messages into captures (incremental, sticky, freeze-safe on
+// the server). Safe no-op when the event has no linked channel or nothing new. Fire-and-forget from
+// the caller; refetch captures once it resolves.
+export async function runSlackScrape(eventId: string): Promise<{ ok: boolean; processed?: number; stored?: number; tagged?: number; noMatch?: number; dismissed?: number; skipped?: string }> {
+  const { data, error } = await supabase.functions.invoke('slack-scrape', { body: { eventId } });
+  if (error) { console.warn('runSlackScrape', error.message); return { ok: false }; }
+  return (data ?? { ok: false }) as any;
+}
+
+// A person the scrape found but couldn't match to the People list — surfaced on the People page for
+// "add anyway / dismiss". name=summary, note=detail, linkedin/noMatch in flags, slackLink=source_ref.
+export interface PeopleCapture { id: string; name: string; note: string | null; linkedin: string | null; slackLink: string | null; sourceQuote: string | null; createdAt: string }
+
+export async function listPeopleCaptures(eventId: string): Promise<PeopleCapture[]> {
+  const { data, error } = await supabase
+    .from('slack_capture')
+    .select('id, summary, detail, source_ref, source_quote, flags, created_at')
+    .eq('event_id', eventId).eq('home', 'people').eq('status', 'proposed')
+    .order('created_at', { ascending: true });
+  if (error) { console.warn('listPeopleCaptures', error.message); return []; }
+  return (data ?? []).map((r: any) => ({
+    id: r.id, name: r.summary, note: r.detail ?? null,
+    linkedin: (r.flags as any)?.linkedin ?? null, slackLink: r.source_ref ?? null,
+    sourceQuote: r.source_quote ?? null, createdAt: r.created_at,
+  }));
+}
+
+// "Add anyway" from a no-match people card: create the person, link them to the event, apply the
+// candidate lens with a Slack-sourced comment, then dismiss the card. Returns the new attendee id.
+export async function addCandidateFromCapture(
+  eventId: string, cap: PeopleCapture,
+): Promise<string> {
+  const person = await addAttendee(eventId, { name: cap.name });
+  if (cap.linkedin) await updateAttendee(person.id, { linkedinUrl: cap.linkedin });
+  await tagPerson(person.id, eventId, 'candidate', { source: 'slack', sourceRef: cap.slackLink, status: 'confirmed', note: cap.note });
+  const comment = [cap.note, cap.sourceQuote ? `“${cap.sourceQuote}”` : null, cap.slackLink ? `— via Slack: ${cap.slackLink}` : null].filter(Boolean).join('\n');
+  if (comment) await addNote(person.id, comment);
+  await dismissSlackCapture(cap.id);
+  return person.id;
+}
+
 export async function listSlackCaptures(eventId: string): Promise<SlackCapture[]> {
   const { data, error } = await supabase
     .from('slack_capture')
     .select('id, home, summary, detail, status, source_ref, source_quote, flags, created_at')
     .eq('event_id', eventId)
     .eq('status', 'proposed')
+    .neq('home', 'people')   // no-match people render on the People page, not as Overview cards
     .order('created_at', { ascending: true });
   if (error) { console.warn('listSlackCaptures', error.message); return []; }
   return (data ?? []).map((r: any) => ({

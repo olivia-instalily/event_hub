@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { SlackMsg, Proposal, Removal, Home } from './slack-capture-lib.js';
+import type { SlackMsg, Proposal, Removal, Home, ScrapeProposal, ScrapePerson } from './slack-capture-lib.js';
 
 // Anthropic strict json_schema: every object needs additionalProperties:false and all keys required;
 // optionals are nullable / empty-string instead. detail/sourceQuote use "" for none; ambiguity + radiusNote null.
@@ -85,5 +85,89 @@ export async function extractCaptures(pinnedTs: string, msgs: SlackMsg[]): Promi
   } catch {
     console.error(JSON.stringify({ fn: 'slack-extract', error: 'invalid json', raw: textBlock.text }));
     return { captures: [], removals: [] };
+  }
+}
+
+// ── Scrape-everything extraction: NO pin — pulls conservative event facts from a whole (incremental)
+// window of channel messages, citing each fact's SOURCE message ts for idempotency. ──
+const SCRAPE_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    captures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+      home: { enum: ['plan', 'person', 'open', 'budget'] },
+      summary: { type: 'string', description: 'SHORT label ≤8 words, no sentence' },
+      detail: { type: 'string', description: 'ONE short line of context, or ""' },
+      sourceTs: { type: 'string', description: 'the [ts] of the message this fact is from' },
+      sourceQuote: { type: 'string', description: 'the exact phrase, or ""' },
+    }, required: ['home', 'summary', 'detail', 'sourceTs', 'sourceQuote'] } },
+    people: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+      name: { type: 'string', description: 'the person\'s full name' },
+      note: { type: 'string', description: 'why they matter / their interest, in a few words, or ""' },
+      linkedin: { type: 'string', description: 'their LinkedIn URL if one was shared, else ""' },
+      sourceTs: { type: 'string', description: 'the [ts] of the message that mentions them' },
+      sourceQuote: { type: 'string', description: 'the exact phrase about them, or ""' },
+    }, required: ['name', 'note', 'linkedin', 'sourceTs', 'sourceQuote'] } },
+    removals: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' } }, required: ['label'] } },
+  },
+  required: ['captures', 'people', 'removals'],
+};
+
+const SCRAPE_SYSTEM = `You read a Slack channel paired to ONE event in EventHub and pull structured facts. Every message is prefixed with its [ts]. You produce THREE lists: captures (event-planning facts), people (individuals met/discussed), and removals (dropped decisions).
+
+CAPTURES — concrete event-logistics facts, each routed to exactly ONE home:
+- plan   — a DECIDED format/flow/choice ("fireside not a panel", "6pm at Ace Hotel", "merch ordered").
+- open   — a TENTATIVE idea or open to-do ("maybe a mural", "leaning robot dog", "still need quotes"). Tentative wording (maybe / leaning / if / depending / getting a quote) → open, never plan.
+- budget — a stated cost/figure ("$500 dinner", "$1,500 paid"); put the figure (and any vendor name) in summary/detail.
+- person — an INTERNAL TEAMMATE + their event role ("Thurman on bar", "Olivia runs logistics"). Only our own team doing a job for the event.
+
+CAPTURE rules — read carefully, the last run over-produced:
+- summary is a SHORT LABEL: ≤ 8 words, no full sentences, no dumping the whole message. e.g. "Fireside chat format", "Ace Hotel, 6pm", "Merch ordered". Put any extra context in detail as ONE short line. If you're writing a paragraph, you're doing it wrong.
+- ONE fact → ONE home. NEVER emit the same fact under two homes (do not put "Olivia leads logistics" as both plan AND person). If it's a teammate's role, it's person and ONLY person.
+- Conservative: FEWER, higher-confidence facts. Aim for the handful that define the event, not every message.
+- SKIP internal operational logistics that aren't event facts: travel, flights, airbnb/hotel check-in, luggage, "book your flights", who's landing when, ride coordination. These are NOT captures.
+- SKIP small talk, hype, greetings, thanks, "test", and non-event chatter (dev/software, funding/comp).
+- NEVER fabricate unstated details.
+
+PEOPLE — individuals mentioned as MET, RECOMMENDED, or worth remembering (candidates, prospects, contacts), NOT our internal team. e.g. "Kavir Auluck → interested in SWE intern", "met Behzad, said he'd send his resume", "Omar Hayat — Waterloo math masters". Extract:
+- name (full name), note (their interest / why they matter, a few words), linkedin (URL if shared, else ""), sourceTs, sourceQuote.
+- Include someone even if the only signal is "met X / strong profile / good conversation" (note can be brief). Do NOT include our own teammates here (they go to captures/person). Do NOT invent people who weren't named.
+
+REMOVALS — a decision that was dropped/cancelled/superseded ("panel → fireside instead", "rooftop fell through") → a removals[] entry with a short label. When a figure is restated (quote → paid), keep only the LATEST in captures.
+
+sourceTs = the [ts] of the single message a fact/person is most from. No preamble.`;
+
+export async function extractScrape(msgs: SlackMsg[]): Promise<{ captures: ScrapeProposal[]; people: ScrapePerson[]; removals: Removal[] }> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || msgs.length === 0) return { captures: [], people: [], removals: [] };
+  const transcript = msgs.map((m) => `[${m.ts}] ${m.user ?? '?'}: ${m.text}`).join('\n');
+  const client = new Anthropic({ apiKey });
+  const resp = await (client.messages.create as any)({
+    model: 'claude-haiku-4-5', max_tokens: 4000, system: SCRAPE_SYSTEM,
+    messages: [{ role: 'user', content: `Channel conversation:\n${transcript}` }],
+    output_config: { format: { type: 'json_schema', schema: SCRAPE_SCHEMA } },
+  });
+  const textBlock = (resp.content as any[]).find((b: any) => b.type === 'text');
+  if (!textBlock) return { captures: [], people: [], removals: [] };
+  try {
+    const j = JSON.parse(textBlock.text);
+    const captures: ScrapeProposal[] = (j.captures ?? []).map((c: any) => ({
+      home: c.home as Home,
+      summary: String(c.summary ?? '').trim(),
+      detail: c.detail ? String(c.detail) : undefined,
+      sourceQuote: c.sourceQuote ? String(c.sourceQuote) : undefined,
+      sourceTs: String(c.sourceTs ?? ''),
+    })).filter((c: ScrapeProposal) => c.summary && c.sourceTs);
+    const people: ScrapePerson[] = (j.people ?? []).map((p: any) => ({
+      name: String(p.name ?? '').trim(),
+      note: String(p.note ?? '').trim(),
+      linkedin: p.linkedin ? String(p.linkedin).trim() : undefined,
+      sourceQuote: p.sourceQuote ? String(p.sourceQuote) : undefined,
+      sourceTs: String(p.sourceTs ?? ''),
+    })).filter((p: ScrapePerson) => p.name && p.sourceTs);
+    const removals: Removal[] = (j.removals ?? []).map((r: any) => ({ label: String(r.label ?? '').trim() })).filter((r: Removal) => r.label);
+    return { captures, people, removals };
+  } catch {
+    console.error(JSON.stringify({ fn: 'slack-extract', op: 'scrape', error: 'invalid json', raw: textBlock.text }));
+    return { captures: [], people: [], removals: [] };
   }
 }

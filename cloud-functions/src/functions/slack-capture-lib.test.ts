@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { captureId, resolveEvent, contextBounds, buildCaptures, composeEphemeral, matchRemovals,
-  HOME_LABEL, type EventRow, type SlackMsg, type Proposal } from "./slack-capture-lib.js";
+import { captureId, resolveEvent, contextBounds, buildCaptures, buildScrapeCaptures, summarySlug, composeEphemeral, matchRemovals,
+  matchPeople, normalizeName, candidateNote, buildPeopleNoMatch,
+  HOME_LABEL, type EventRow, type SlackMsg, type Proposal, type ScrapeProposal, type ScrapePerson } from "./slack-capture-lib.js";
 
 const ev = (id: string, ch: string | null, date: string | null = null): EventRow => ({ id, slack_channel: ch, event_date: date, name: id });
 
@@ -85,6 +86,98 @@ describe("matchRemovals", () => {
     const existing = [{ id: "a", summary: "live mural on the back wall" }, { id: "b", summary: "pre-pour wine" }];
     expect(matchRemovals(existing, [{ label: "the mural" }])).toEqual(["a"]);
     expect(matchRemovals(existing, [{ label: "fireworks" }])).toEqual([]);
+  });
+});
+
+describe("buildScrapeCaptures", () => {
+  const props = (arr: ScrapeProposal[]) => buildScrapeCaptures({ id: "e1" }, "C1", arr);
+
+  it("gives distinct ids to several same-home captures from ONE message (no collision)", () => {
+    // A brief announcing multiple plan decisions in one message must not collapse to one row.
+    const caps = props([
+      { home: "plan", summary: "jazz set to start", sourceTs: "1.1" },
+      { home: "plan", summary: "band with singer later", sourceTs: "1.1" },
+      { home: "plan", summary: "electro-lounge playlist between sets", sourceTs: "1.1" },
+    ]);
+    const ids = caps.map((c) => c.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids.every((id) => id.startsWith("e1:C1:1.1:plan:"))).toBe(true);
+  });
+
+  it("is deterministic — same message+summary → same id (idempotent re-scrape)", () => {
+    const p: ScrapeProposal[] = [{ home: "budget", summary: "Robot dog rental", detail: "$1,500 paid", sourceTs: "2.2" }];
+    expect(props(p)[0].id).toBe(props(p)[0].id);
+    expect(props(p)[0].id).toBe(`${captureId("e1", "C1", "2.2", "budget")}:${summarySlug("Robot dog rental")}`);
+  });
+
+  it("drops proposals missing a sourceTs or summary", () => {
+    const caps = props([
+      { home: "plan", summary: "", sourceTs: "3.3" },
+      { home: "plan", summary: "valid", sourceTs: "" },
+      { home: "open", summary: "keep me", sourceTs: "4.4" },
+    ]);
+    expect(caps.map((c) => c.summary)).toEqual(["keep me"]);
+  });
+});
+
+describe("summarySlug", () => {
+  it("lowercases, hyphenates, trims, and never returns empty", () => {
+    expect(summarySlug("Robot Dog Rental!")).toBe("robot-dog-rental");
+    expect(summarySlug("  $1,500  ")).toBe("1-500");
+    expect(summarySlug("!!!")).toBe("x");
+  });
+});
+
+describe("matchPeople", () => {
+  const person = (name: string, extra: Partial<ScrapePerson> = {}): ScrapePerson => ({ name, note: "", sourceTs: "1.1", ...extra });
+  const roster = [{ id: "a1", name: "Kavir Auluck" }, { id: "a2", name: "Omar Hayat" }];
+
+  it("splits into clear name-matches (case/space-insensitive) and no-matches", () => {
+    const { matched, unmatched } = matchPeople(
+      [person("kavir  auluck"), person("Nobody New")], roster,
+    );
+    expect(matched.map((m) => [m.person.name, m.attendeeId])).toEqual([["kavir  auluck", "a1"]]);
+    expect(unmatched.map((u) => u.name)).toEqual(["Nobody New"]);
+  });
+
+  it("dedups a person named in several messages within one scrape (first wins)", () => {
+    const { matched, unmatched } = matchPeople(
+      [person("Someone Else", { sourceTs: "1.1" }), person("someone else", { sourceTs: "2.2" })], roster,
+    );
+    expect(matched).toEqual([]);
+    expect(unmatched).toHaveLength(1);
+    expect(unmatched[0].sourceTs).toBe("1.1");
+  });
+});
+
+describe("normalizeName", () => {
+  it("trims, lowercases, and collapses whitespace", () => {
+    expect(normalizeName("  Kavir   Auluck ")).toBe("kavir auluck");
+  });
+});
+
+describe("candidateNote", () => {
+  it("joins interest, quoted message, and a Slack link", () => {
+    const p: ScrapePerson = { name: "Kavir", note: "wants SWE intern", sourceQuote: "interested in SWE intern", sourceTs: "1.1" };
+    expect(candidateNote(p, "https://slack/x")).toBe('wants SWE intern\n“interested in SWE intern”\n— via Slack: https://slack/x');
+  });
+  it("omits missing parts and a null permalink", () => {
+    expect(candidateNote({ name: "X", note: "just met", sourceTs: "1.1" }, null)).toBe("just met");
+  });
+});
+
+describe("buildPeopleNoMatch", () => {
+  it("builds 'people' captures keyed on ts+name slug, carrying linkedin + noMatch flag", () => {
+    const caps = buildPeopleNoMatch({ id: "e1" }, "C1",
+      [{ name: "Adina T.", note: "UX masters", linkedin: "https://li/adina", sourceTs: "9.9" }],
+      { "9.9": "https://slack/p9" });
+    expect(caps).toHaveLength(1);
+    expect(caps[0].home).toBe("people");
+    expect(caps[0].summary).toBe("Adina T.");
+    expect(caps[0].detail).toBe("UX masters");
+    expect(caps[0].source_ref).toBe("https://slack/p9");
+    expect(caps[0].flags).toEqual({ noMatch: true, linkedin: "https://li/adina" });
+    expect(caps[0].id).toBe(`${captureId("e1", "C1", "9.9", "people")}:adina-t`);
   });
 });
 

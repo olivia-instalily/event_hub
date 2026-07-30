@@ -7,17 +7,33 @@ const HOME_ORDER: Home[] = ['plan', 'person', 'open', 'budget'];
 export interface SlackMsg { ts: string; text: string; user?: string; thread_ts?: string }
 export interface EventRow { id: string; name?: string; event_date?: string | null; slack_channel?: string | null }
 export interface Proposal { home: Home; summary: string; detail?: string; sourceQuote?: string; usedContext?: { first: string; last: string }; ambiguity?: string }
+// A scrape proposal carries the SOURCE message ts, so re-scraping the same message is idempotent.
+export interface ScrapeProposal { home: Home; summary: string; detail?: string; sourceQuote?: string; sourceTs: string }
+// A person met at/around the event (candidate/contact) — routed to the People list, not an Overview card.
+// note = why they matter / their interest; linkedin = a profile URL if one was shared; sourceTs → permalink.
+export interface ScrapePerson { name: string; note: string; linkedin?: string; sourceTs: string; sourceQuote?: string }
 export interface Removal { label: string }
+// Storage home widens Home with 'people' (no-match candidates surfaced on the People page) and the
+// legacy 'vendor' value that predates the vendor→budget-field move.
+export type StoredHome = Home | 'people' | 'vendor';
 export interface StoredCapture {
-  id: string; event_id: string; slack_channel: string; slack_ts: string; home: Home;
+  id: string; event_id: string; slack_channel: string; slack_ts: string; home: StoredHome;
   summary: string; detail: string | null; status: 'proposed'; source_ref: string | null;
   source_quote: string | null; context_ts: any; flags: Record<string, unknown>; reactor_user: string | null;
 }
 
 export const CTX_BEFORE = 20, CTX_AFTER = 5, CTX_MAX = 30, CTX_MAX_SPAN_MS = 3 * 60 * 60 * 1000;
 
-export function captureId(eventId: string, channel: string, ts: string, home: Home): string {
+export function captureId(eventId: string, channel: string, ts: string, home: StoredHome): string {
   return `${eventId}:${channel}:${ts}:${home}`;
+}
+
+// A short stable slug of a summary — the discriminator that lets ONE scraped message yield several
+// distinct captures in the SAME home without their ids colliding (a brief announcing 6 plan decisions
+// must not collapse to one row). Re-scraping the same message with the same summaries → same slugs →
+// same ids (still idempotent); the marker makes re-scrape a no-op in the common case regardless.
+export function summarySlug(summary: string): string {
+  return summary.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'x';
 }
 
 // Event linked to this channel; most recent by event_date when several share it.
@@ -56,6 +72,70 @@ export function buildCaptures(
       flags, reactor_user: reactor,
     };
   });
+}
+
+// Build stored captures from a whole-channel scrape. Idempotency keys on each fact's SOURCE message
+// ts (re-scraping the same message → the same id), not a single pin. Always 'proposed'; sticky
+// dismissals/confirmations are enforced by the caller before upsert.
+export function buildScrapeCaptures(event: EventRow, channel: string, proposals: ScrapeProposal[]): StoredCapture[] {
+  return proposals.filter((p) => p.sourceTs && p.summary?.trim()).map((p) => ({
+    id: `${captureId(event.id, channel, p.sourceTs, p.home)}:${summarySlug(p.summary)}`,
+    event_id: event.id, slack_channel: channel, slack_ts: p.sourceTs, home: p.home,
+    summary: p.summary.trim(), detail: p.detail?.trim() || null, status: 'proposed' as const,
+    source_ref: null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
+    flags: {}, reactor_user: null,
+  }));
+}
+
+// Normalize a person name for matching against the People list: trim, lowercase, collapse whitespace.
+export function normalizeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Split extracted people into those with a clear name-match in the People list and those without.
+// Dedups by normalized name (a person named in several messages in one scrape → one entry, first seen).
+// `attendees` is the existing People list (id + name). Match is exact case-insensitive on normalized name.
+export function matchPeople(
+  people: ScrapePerson[], attendees: { id: string; name: string }[],
+): { matched: { person: ScrapePerson; attendeeId: string }[]; unmatched: ScrapePerson[] } {
+  const byName = new Map<string, string>();
+  for (const a of attendees) if (a.name) byName.set(normalizeName(a.name), a.id);
+  const seen = new Set<string>();
+  const matched: { person: ScrapePerson; attendeeId: string }[] = [];
+  const unmatched: ScrapePerson[] = [];
+  for (const p of people) {
+    const key = normalizeName(p.name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const id = byName.get(key);
+    if (id) matched.push({ person: p, attendeeId: id });
+    else unmatched.push(p);
+  }
+  return { matched, unmatched };
+}
+
+// The comment we leave on a matched candidate: their interest, the quoted message, and a link back to it.
+export function candidateNote(person: ScrapePerson, permalink: string | null): string {
+  const parts: string[] = [];
+  if (person.note) parts.push(person.note);
+  if (person.sourceQuote) parts.push(`“${person.sourceQuote}”`);
+  if (permalink) parts.push(`— via Slack: ${permalink}`);
+  return parts.join('\n');
+}
+
+// Unmatched people → stored 'people' captures for the People-page "no match" section. Keyed on the
+// person's source message ts + name slug so re-scraping is idempotent. summary=name, detail=note,
+// flags carries the linkedin + a noMatch marker; source_ref holds the permalink when resolved.
+export function buildPeopleNoMatch(
+  event: EventRow, channel: string, people: ScrapePerson[], permalinks: Record<string, string | null> = {},
+): StoredCapture[] {
+  return people.filter((p) => p.name?.trim() && p.sourceTs).map((p) => ({
+    id: `${captureId(event.id, channel, p.sourceTs, 'people')}:${summarySlug(p.name)}`,
+    event_id: event.id, slack_channel: channel, slack_ts: p.sourceTs, home: 'people',
+    summary: p.name.trim(), detail: p.note?.trim() || null, status: 'proposed' as const,
+    source_ref: permalinks[p.sourceTs] ?? null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
+    flags: { noMatch: true, ...(p.linkedin ? { linkedin: p.linkedin } : {}) }, reactor_user: null,
+  }));
 }
 
 // ≤6-line reactor-only summary, grouped by home so a misroute is spottable at a glance.

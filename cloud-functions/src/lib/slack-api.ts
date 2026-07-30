@@ -19,6 +19,27 @@ export async function fetchContext(channel: string, ts: string, threadTs: string
   return merged.map((m: any) => ({ ts: m.ts, text: m.text ?? '', user: m.user, thread_ts: m.thread_ts }));
 }
 
+// Messages strictly AFTER oldestTs (or the most recent `cap` when no marker yet), chronological.
+// Paginates conversations.history; caps total so a first scrape of a huge channel stays bounded.
+export async function fetchSince(channel: string, oldestTs: string | null, cap = 200): Promise<SlackMsg[]> {
+  const raw: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const params: Record<string, string> = { channel, limit: '200' };
+    if (oldestTs) params.oldest = oldestTs;
+    if (cursor) params.cursor = cursor;
+    const r = await api('conversations.history', params);
+    if (!r.ok) { console.error(JSON.stringify({ fn: 'slack-api', op: 'fetchSince', error: r.error })); break; }
+    raw.push(...(r.messages ?? []));
+    cursor = r.response_metadata?.next_cursor || undefined;
+  } while (cursor && raw.length < cap);
+  return raw
+    .filter((m: any) => m.type === 'message' && !m.subtype && m.text && (!oldestTs || Number(m.ts) > Number(oldestTs)))
+    .map((m: any) => ({ ts: m.ts, text: m.text ?? '', user: m.user, thread_ts: m.thread_ts }))
+    .sort((a, b) => Number(a.ts) - Number(b.ts))
+    .slice(-cap);
+}
+
 export async function getPermalink(channel: string, ts: string): Promise<string | null> {
   const r = await api('chat.getPermalink', { channel, message_ts: ts });
   return r.ok ? r.permalink : null;
