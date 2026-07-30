@@ -3194,24 +3194,11 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
         </>
       )}
 
-      {/* Status digest (classic one-liner) — phase views only; the planning view uses the composed
-          "Where things stand" card below. */}
+      {/* "Where things stand" — shown in EVERY non-planning phase view too (day-before / day-of /
+          post), identical to the planning view's card, so the status section is consistent across
+          all phases (was a different classic one-liner block before). */}
       {!planningActive && (
-        <div className="bg-white rounded-2xl border border-border p-4">
-          <div className="flex items-center justify-between gap-3">
-            {summaryBullets.length > 0 ? (
-              <ul className="flex-1 list-disc pl-5 space-y-1 text-[15px] text-gray-700 leading-relaxed">
-                {summaryBullets.map((b, i) => <li key={i}>{b}</li>)}
-              </ul>
-            ) : (
-              <p className="flex-1 text-[15px] text-gray-700">{synthDigest}</p>
-            )}
-            <button onClick={resync} disabled={resyncing} className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-              <RefreshCw className={`w-3 h-3 ${resyncing ? "animate-spin" : ""}`} /> {resyncing ? "Resyncing…" : "Resync"}
-            </button>
-          </div>
-          {resyncMsg && <p className="text-[15px] text-gray-400 mt-2">{resyncMsg}</p>}
-        </div>
+        <WhereThingsStand bullets={summaryBullets} fallback={synthDigest} onRefresh={resync} refreshing={resyncing} note={resyncMsg} />
       )}
 
       {/* Locked → read-only rundown; otherwise the phase-aware body the selected node chooses. */}
