@@ -6,7 +6,7 @@ import { SlackCaptureCard } from "./SlackCaptureCard";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Lock, LockOpen, ArrowDown, ArrowUp, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
+  Activity, X, Clock, RefreshCw, Link2, Code2, Globe, Lock, LockOpen, ArrowDown, ArrowUp, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
   UserPlus, DollarSign, ClipboardList, Sparkles,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, DragOverlay, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
@@ -14,9 +14,9 @@ import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrate
 import { CSS } from "@dnd-kit/utilities";
 import {
   getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, resolveGcalMatch, pullEventFromLinear, syncEventToLinear, unlinkLinear, deleteEvent, resetEvent,
-  setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
-  addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors,
-  ensureVendor, matchVendors, noteVendorOnBudgetLine, type VendorRow, setEventFocus,
+  setMacroStage, addEngagement, setEngagementStage,
+  addCandidate, selectCandidate,
+  ensureVendor, setEventFocus,
   importVendors,
   addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable, setEventBenchmarks, setDeliverableBenchmark,
   getPlanningSummary, saveOverviewSummary,
@@ -28,20 +28,18 @@ import {
   listEventTags, type EventPersonTag,
   type PersonView, type PeopleStats,
   setEventAgenda, setEventReflections,
-  listEventUpdates, recordEventUpdate, detectUpdate, syncGmail, summarizeCorrespondence,
+  syncGmail,
   ejectPage, regeneratePageDraft, setPageFields, promoteToLive, listDevelopers, addDeveloper, removeDeveloper,
-  type EventUpdate, type DetectedUpdate, type PageState, type Developer,
-  MACRO_STAGES, ENGAGEMENT_STAGES,
-  type EventPlanning, type EngagementWithCandidates, type VendorCandidate,
+  type PageState, type Developer,
+  MACRO_STAGES,
+  type EventPlanning,
   type BudgetLineTracker, type Deliverable, type CarriedLesson,
-  type PlanningFacts, type VendorSuggestion, type BudgetStatus,
+  type PlanningFacts, type BudgetStatus,
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
   listSlackCaptures, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
-  setEngagementCategory, setEngagementNote, setCandidateStatus, type CandidateStatus,
 } from "../lib/db";
-import { VENDOR_CATEGORY_DEFAULTS } from "../lib/vendorCategories";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
 import { PHASES, PHASE_LABEL, nextTagSelection, type Benchmark } from "../lib/phases";
@@ -54,7 +52,6 @@ import { LocationEdit } from "./LocationEdit";
 import { EditableTitle } from "./EditableTitle";
 import { DocLinkControl } from "./DocLinkControl";
 import { StatusControl } from "./StatusControl";
-import { FileDrop } from "./FileDrop";
 import { EventPageBuilder } from "./EventPageBuilder";
 import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
@@ -64,7 +61,6 @@ import { regenerateFromMaterials as runRegenerate } from "../lib/regenerate";
 import { ConfirmModal } from "./Modal";
 import { GCalSync } from "./GCalSync";
 import { GcalLinkControl } from "./GcalLinkControl";
-import { CategoryCombobox, DescriptionLine, SupplierName } from "./vendorFields";
 import { LinearSync } from "./LinearSync";
 import { LinearUpdateBox } from "./LinearUpdateBox";
 import { LinearLauncher } from "./LinearLauncher";
@@ -86,7 +82,6 @@ import { fundingFor } from "../lib/scoping";
 import { eventFocus, FOCUS_LABEL, type EventFocus } from "../lib/eventFocus";
 import { templateAdditions, hasAdditions, matchTemplates, type TemplateMatch } from "../lib/backfill";
 import { canonicalPhaseFor } from "../lib/phaseMerge";
-import { domainFromUrl, isFreeMailDomain } from "../lib/url";
 
 interface Props {
   eventId: string;
@@ -354,554 +349,6 @@ export function MacroStepper({ eventId, initial, eventDate }: { eventId: string;
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// ── One vendor decision (engagement) ───────────────────────────────────────────
-// Vendor card — opened from a candidate row. Edit details, attach a link + notes,
-// and see recent correspondence (auto-updates linked to this decision).
-function VendorCardModal({ eventId, engagementId, candidate, onClose, onSaved }: {
-  eventId: string;
-  engagementId: string;
-  candidate: VendorCandidate;
-  onClose: () => void;
-  onSaved: (f: Partial<VendorCandidate>) => void;
-}) {
-  const [name, setName] = useState(candidate.vendorName ?? "");
-  const [quote, setQuote] = useState(candidate.quoteAmount?.toString() ?? "");
-  const [link, setLink] = useState(candidate.link ?? "");
-  const [note, setNote] = useState(candidate.note ?? "");
-  const [corr, setCorr] = useState<EventUpdate[] | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [digest, setDigest] = useState<string | null>(null);
-  const [digesting, setDigesting] = useState(false);
-
-  const summarize = async () => {
-    setDigesting(true);
-    try {
-      const s = await summarizeCorrespondence(eventId, engagementId);
-      setDigest(s ?? "No summary — set ANTHROPIC_API_KEY to enable Claude digests.");
-    } finally { setDigesting(false); }
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    listEventUpdates(eventId).then((u) => { if (!cancelled) setCorr(u.filter((x) => x.engagementId === engagementId)); }).catch(() => { if (!cancelled) setCorr([]); });
-    return () => { cancelled = true; };
-  }, [eventId, engagementId]);
-
-  const dirty =
-    (name.trim() || null) !== (candidate.vendorName ?? null) ||
-    (quote.trim() === "" ? null : Number(quote)) !== (candidate.quoteAmount ?? null) ||
-    (link.trim() || null) !== (candidate.link ?? null) ||
-    (note.trim() || null) !== (candidate.note ?? null);
-
-  const save = async () => {
-    const fields = {
-      vendorName: name.trim() || null,
-      quoteAmount: quote.trim() === "" ? null : Number(quote),
-      link: link.trim() || null,
-      note: note.trim() || null,
-    };
-    setSaving(true);
-    try { await updateCandidate(candidate.id, fields); onSaved(fields); onClose(); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl border border-border w-full max-w-md max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <p className="text-[15px] text-gray-400 uppercase tracking-wide">Vendor</p>
-            <h3 className="text-xl font-medium">{name || "Unnamed vendor"}</h3>
-          </div>
-          <button onClick={onClose} aria-label="Close" className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
-        </div>
-
-        <div className="space-y-3">
-          <div>
-            <label className="block text-[15px] text-gray-500 mb-1">Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full px-2 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          </div>
-          <div>
-            <label className="block text-[15px] text-gray-500 mb-1">Quote (USD)</label>
-            <input type="number" value={quote} onChange={(e) => setQuote(e.target.value)} placeholder="—" className="w-full px-2 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          </div>
-          <div>
-            <label className="block text-[15px] text-gray-500 mb-1">Link</label>
-            <div className="flex gap-2">
-              <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Site, quote, profile…" className="flex-1 px-2 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-              {link.trim() && <a href={link} target="_blank" rel="noreferrer" className="inline-flex items-center px-2 text-gray-500 hover:text-gray-900"><ExternalLink className="w-4 h-4" /></a>}
-            </div>
-            {(() => {
-              const d = domainFromUrl(link);
-              if (!d) return null;
-              return isFreeMailDomain(d)
-                ? <p className="text-[15px] text-amber-600 mt-1">@{d} is a shared mail provider — can't match a vendor by domain; emails won't auto-link.</p>
-                : <p className="text-[15px] text-gray-400 mt-1">In range: emails from <span className="font-medium">@{d}</span> (any address) link to this decision.</p>;
-            })()}
-          </div>
-          <div>
-            <label className="block text-[15px] text-gray-500 mb-1">Vendor notes</label>
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Terms, contacts, context…" className="w-full px-2 py-1.5 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          </div>
-        </div>
-
-        <div className="mt-5">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-medium">Recent correspondence</p>
-            {corr && corr.length > 0 && (
-              <button onClick={summarize} disabled={digesting} className="text-[15px] text-gray-600 hover:text-gray-900 inline-flex items-center gap-1 disabled:opacity-50">
-                <Lightbulb className="w-3.5 h-3.5" /> {digesting ? "Summarizing…" : "Summarize"}
-              </button>
-            )}
-          </div>
-          {digest && <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 mb-2">{digest}</p>}
-          {corr === null ? (
-            <p className="text-sm text-gray-400">Loading…</p>
-          ) : corr.length === 0 ? (
-            <p className="text-sm text-gray-400">No linked emails or updates yet. Detected email/Linear activity for this decision shows here.</p>
-          ) : (
-            <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
-              {corr.map((u) => {
-                const M = SOURCE_META[u.source] ?? SOURCE_META.manual;
-                return (
-                  <div key={u.id} className="px-3 py-2 flex items-start gap-2 text-sm">
-                    <M.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${M.cls}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-gray-700">{u.summary}</p>
-                      <p className="text-[15px] text-gray-400">{M.label} · {relTime(u.createdAt)}{u.linkUrl && <> · <a href={u.linkUrl} target="_blank" rel="noreferrer" className="hover:text-gray-700 underline">source</a></>}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-gray-100">
-          <button onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
-          <button onClick={save} disabled={!dirty || saving} className="px-4 py-1.5 bg-gray-200 text-black rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50">
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Per-vendor status display: label, ordering rank (for the derived category badge), and chip style.
-const CAND_STATUS_META: Record<CandidateStatus, { label: string; rank: number; badge: string }> = {
-  sourced: { label: "Sourced", rank: 0, badge: "bg-gray-100 text-gray-600" },
-  quoted:  { label: "Quoted",  rank: 1, badge: "bg-blue-100 text-blue-700" },
-  paid:    { label: "Paid",    rank: 2, badge: "bg-green-100 text-green-700" },
-};
-// The internal engagement.stage kept for downstream consumers (chart / facts check === 'Contracted').
-const stageForStatus = (s: CandidateStatus): string => (s === "paid" ? "Contracted" : s === "quoted" ? "Quoted" : "Sourced");
-function DecisionCard({ initial, eventId, location, onDelete, onChange, allCategories = [] }: { initial: EngagementWithCandidates; eventId: string; location?: string | null; onDelete: () => void; onChange?: (e: EngagementWithCandidates) => void; allCategories?: string[] }) {
-  const [eng, setEng] = useState(initial);
-  const [cardId, setCardId] = useState<string | null>(null); // candidate whose vendor card is open
-  // "See suggested" — pulls from the vendor database (not yet populated), ranked by location.
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestions, setSuggestions] = useState<VendorSuggestion[] | null>(null);
-  const [suggesting, setSuggesting] = useState(false);
-  useEffect(() => { onChange?.(eng); /* keep the parent (chart view) in sync */ /* eslint-disable-next-line */ }, [eng]);
-  const [candName, setCandName] = useState("");
-  const [candQuote, setCandQuote] = useState("");
-  const [candLink, setCandLink] = useState("");
-  const [addingCand, setAddingCand] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState<string | null>(null); // stage we're advancing into
-  const [comment, setComment] = useState("");
-  const [attach, setAttach] = useState("");
-  // When a typed vendor name is similar (not identical) to directory vendors, confirm before creating.
-  const [vendorConfirm, setVendorConfirm] = useState<{ name: string; contract: boolean; near: VendorRow[] } | null>(null);
-
-  const paidCands = eng.candidates.filter((c) => c.status === "paid");
-  // Category status = the furthest-along candidate (paid > quoted > sourced); null when empty.
-  const categoryStatus: CandidateStatus | null = eng.candidates.length
-    ? eng.candidates.reduce<CandidateStatus>((m, c) => (CAND_STATUS_META[c.status].rank > CAND_STATUS_META[m].rank ? c.status : m), "sourced")
-    : null;
-  const [contractCandId, setContractCandId] = useState<string | null>(null);
-
-  const patchCand = (id: string, f: Partial<VendorCandidate>) =>
-    setEng((e) => ({ ...e, candidates: e.candidates.map((c) => (c.id === id ? { ...c, ...f } : c)) }));
-
-  // Add a candidate AND ensure it exists in the vendor directory. Exact-name match reuses that
-  // directory vendor; a near match asks first; otherwise a new vendor row is created. `contract`
-  // jumps straight to Contracted (the quick "we already picked them" path).
-  const finalizeAdd = async (name: string, vendorId: string | null, contract: boolean) => {
-    const quote = candQuote.trim() === "" ? null : Number(candQuote);
-    const link = candLink.trim();
-    const vId = vendorId ?? await ensureVendor(name, eng.category ?? null);
-    const c = await addCandidate(eng.id, name, quote, link, vId);
-    setEng((e) => ({ ...e, candidates: [...e.candidates, c] }));
-    setCandName(""); setCandQuote(""); setCandLink(""); setAddingCand(false); setVendorConfirm(null);
-    if (contract) {
-      await setCandidateStatus(c.id, "paid");
-      await noteVendorOnBudgetLine(eventId, eng.category ?? null, name, quote);
-      // Sum across all paid vendors (this one plus any already paid).
-      const confirmedAmount = [...eng.candidates, { ...c, status: "paid" as CandidateStatus }]
-        .filter((x) => x.status === "paid").reduce((s, x) => s + (x.quoteAmount ?? 0), 0);
-      await setEngagementStage(eng.id, "Contracted", { confirmedAmount });
-      setEng((e) => ({ ...e, stage: "Contracted", confirmedAmount, candidates: e.candidates.map((x) => (x.id === c.id ? { ...x, status: "paid" as CandidateStatus } : x)) }));
-    }
-  };
-  const addCand = async (contract = false) => {
-    const name = candName.trim();
-    if (!name) return; // only the name is required now (link/quote optional)
-    const { exact, near } = await matchVendors(name);
-    if (!exact && near.length) { setVendorConfirm({ name, contract, near }); return; }
-    await finalizeAdd(name, exact ? exact.id : null, contract);
-  };
-  const removeCand = async (id: string) => {
-    await deleteCandidate(id);
-    setEng((e) => ({ ...e, candidates: e.candidates.filter((c) => c.id !== id) }));
-  };
-  const pick = async (id: string) => {
-    const wasSelected = eng.candidates.find((c) => c.id === id)?.isSelected;
-    if (wasSelected) {
-      await clearCandidateSelection(eng.id);
-      setEng((e) => ({ ...e, candidates: e.candidates.map((c) => ({ ...c, isSelected: false })) }));
-    } else {
-      await selectCandidate(eng.id, id);
-      setEng((e) => ({ ...e, candidates: e.candidates.map((c) => ({ ...c, isSelected: c.id === id })) }));
-    }
-  };
-
-  // Recompute + persist the engagement's derived stage/confirmed amount from its candidates (the
-  // furthest-along one; contracted candidate's quote becomes the confirmed amount).
-  const reconcile = async (cands: VendorCandidate[]) => {
-    const paid = cands.filter((c) => c.status === "paid");
-    const maxStatus = cands.reduce<CandidateStatus>((m, c) => (CAND_STATUS_META[c.status].rank > CAND_STATUS_META[m].rank ? c.status : m), "sourced");
-    // Multiple vendors can be paid → confirmed amount is the SUM of their quotes.
-    const confirmedAmount = paid.length ? paid.reduce((s, c) => s + (c.quoteAmount ?? 0), 0) : null;
-    const stageLabel = stageForStatus(maxStatus);
-    await setEngagementStage(eng.id, stageLabel, { confirmedAmount });
-    setEng((e) => ({ ...e, stage: stageLabel, confirmedAmount, candidates: cands }));
-  };
-  // Change one vendor's status. "paid" opens the lock prompt (comment/attachment, budget mirror);
-  // "sourced"/"quoted" apply immediately and re-derive the engagement.
-  const changeStatus = async (cand: VendorCandidate, status: CandidateStatus) => {
-    setNotice(null);
-    if (status === "paid") { setContractCandId(cand.id); setComment(""); setAttach(""); setPrompt("Paid"); return; }
-    await setCandidateStatus(cand.id, status);
-    await reconcile(eng.candidates.map((c) => (c.id === cand.id ? { ...c, status } : c)));
-  };
-  const confirmPaid = async () => {
-    const cand = eng.candidates.find((c) => c.id === contractCandId);
-    if (!cand) return;
-    // A blank comment must NOT wipe the vendor description (both live in engagement.note).
-    const note = comment.trim() || eng.note;
-    const docUrl = attach.trim() || null;
-    await setCandidateStatus(cand.id, "paid");
-    await noteVendorOnBudgetLine(eventId, eng.category ?? null, cand.vendorName ?? "", cand.quoteAmount);
-    const cands = eng.candidates.map((c) => (c.id === cand.id ? { ...c, status: "paid" as CandidateStatus } : c));
-    const confirmedAmount = cands.filter((c) => c.status === "paid").reduce((s, c) => s + (c.quoteAmount ?? 0), 0);
-    await setEngagementStage(eng.id, "Contracted", { note, docUrl, confirmedAmount });
-    setEng((e) => ({ ...e, stage: "Contracted", note, confirmedAmount, candidates: cands }));
-    setContractCandId(null); setPrompt(null); setComment(""); setAttach("");
-  };
-
-  const seeSuggested = async () => {
-    const next = !suggestOpen;
-    setSuggestOpen(next);
-    if (next && suggestions === null) {
-      setSuggesting(true);
-      try { setSuggestions(await suggestVendors(eng.category, location ?? null)); }
-      finally { setSuggesting(false); }
-    }
-  };
-  // Add a suggested vendor as a candidate on this decision (also lands it in the directory).
-  const addSuggestion = async (s: VendorSuggestion) => {
-    const vId = await ensureVendor(s.name, eng.category ?? null);
-    const c = await addCandidate(eng.id, s.name, null, s.link ?? s.note ?? s.location ?? "", vId);
-    setEng((e) => ({ ...e, candidates: [...e.candidates, c] }));
-    setSuggestions((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev));
-  };
-
-  return (
-    <div className="bg-white rounded-2xl border border-border p-5">
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <CategoryCombobox
-            value={eng.category}
-            options={allCategories}
-            onCommit={async (c) => { setEng((e) => ({ ...e, category: c })); await setEngagementCategory(eng.id, c); }}
-          />
-          {paidCands.length > 0 && (
-            <div className="text-sm text-gray-600 mt-1">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Confirmed{paidCands.length > 1 ? ` · ${money(eng.confirmedAmount)} total` : ""}</span>
-              <div className="mt-0.5 space-y-0.5">
-                {paidCands.map((c) => (
-                  <div key={c.id} className="flex items-center gap-1.5">
-                    <SupplierName
-                      value={c.vendorName}
-                      onCommit={async (name) => { patchCand(c.id, { vendorName: name }); await updateCandidate(c.id, { vendorName: name }); }}
-                    />
-                    <span className="text-gray-500">· {c.quoteAmount != null ? money(c.quoteAmount) : "—"}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          <DescriptionLine
-            value={eng.note}
-            onCommit={async (n) => { setEng((e) => ({ ...e, note: n })); await setEngagementNote(eng.id, n); }}
-          />
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Derived category status = the furthest-along vendor. Read-only; set it per vendor below. */}
-          {categoryStatus && <span className={`px-2 py-0.5 rounded-full text-[13px] font-medium ${CAND_STATUS_META[categoryStatus].badge}`}>{CAND_STATUS_META[categoryStatus].label}</span>}
-          <button onClick={onDelete} className="text-gray-400 hover:text-red-600" aria-label="Delete decision"><Trash2 className="w-4 h-4" /></button>
-        </div>
-      </div>
-
-      {notice && <p className="text-[15px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">{notice}</p>}
-      {(() => {
-        const cc = eng.candidates.find((c) => c.id === contractCandId);
-        if (!prompt || !cc) return null;
-        return (
-          <div className="text-sm bg-gray-50 border border-border rounded-lg px-3 py-2 mb-3">
-            Mark <span className="font-medium">{cc.vendorName}</span> paid at {money(cc.quoteAmount)}. Add a comment or attachment (optional):
-            <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="Comment (why this vendor, terms, next steps…)" className="w-full mt-2 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-            <div className="flex items-center gap-2 mt-2">
-              <input value={attach} onChange={(e) => setAttach(e.target.value)} placeholder="Attachment URL (quote, contract…)" className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-              <FileDrop compact label="drop file" onUploaded={(url) => setAttach(url)} />
-            </div>
-            <div className="flex gap-2 mt-2">
-              <button onClick={confirmPaid} className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 text-sm">Confirm</button>
-              <button onClick={() => { setPrompt(null); setContractCandId(null); }} className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Candidates */}
-      <div className="rounded-lg border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-gray-500">
-            <tr>
-              <th className="text-left px-3 py-2 font-normal w-8"></th>
-              <th className="text-left px-3 py-2 font-normal">Vendor</th>
-              <th className="text-right px-3 py-2 font-normal">Quote</th>
-              <th className="text-left px-3 py-2 font-normal">Status</th>
-              <th className="px-3 py-2 w-8"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {eng.candidates.length === 0 && (
-              <tr><td colSpan={5} className="px-3 py-2 text-gray-400">No candidates yet.</td></tr>
-            )}
-            {eng.candidates.map((c) => (
-              <tr
-                key={c.id}
-                onClick={() => setCardId(c.id)}
-                className={`border-t border-gray-100 cursor-pointer hover:bg-gray-50 ${c.status === "paid" ? "bg-green-50 hover:bg-green-50" : ""}`}
-                title="Open vendor card"
-              >
-                <td className="px-3 py-2 text-center">
-                  <button onClick={(e) => { e.stopPropagation(); pick(c.id); }} aria-label="Select candidate" className={`w-4 h-4 rounded-full border flex items-center justify-center ${c.isSelected ? "bg-green-600 border-green-600" : "border-gray-300 hover:border-gray-500"}`}>
-                    {c.isSelected && <Check className="w-3 h-3 text-white" />}
-                  </button>
-                </td>
-                <td className="px-3 py-2">
-                  <span className="inline-flex items-center gap-1.5">
-                    {c.vendorName ?? <span className="text-gray-400">Unnamed</span>}
-                    {c.link && <ExternalLink className="w-3 h-3 text-gray-400" />}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-right">{c.quoteAmount != null ? money(c.quoteAmount) : <span className="text-gray-300">—</span>}</td>
-                <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                  <select
-                    value={c.status}
-                    onChange={(e) => void changeStatus(c, e.target.value as CandidateStatus)}
-                    className={`text-[12px] font-medium rounded-full pl-2 pr-1 py-0.5 border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-gray-300 ${CAND_STATUS_META[c.status].badge}`}
-                    title="Vendor status"
-                  >
-                    <option value="sourced">Sourced</option>
-                    <option value="quoted">Quoted</option>
-                    <option value="contracted">Contracted</option>
-                  </select>
-                </td>
-                <td className="px-3 py-2 text-center">
-                  <button onClick={(e) => { e.stopPropagation(); removeCand(c.id); }} className="text-gray-300 hover:text-red-600" aria-label="Remove candidate"><Trash2 className="w-3.5 h-3.5" /></button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Add candidate — fields appear only after clicking; only the name is required. "Add & contract"
-          is the shortcut when you've already decided on them. */}
-      {addingCand ? (
-        <div className="mt-3 space-y-2 bg-gray-50 border border-gray-200 rounded-lg p-2">
-          <div className="flex gap-2">
-            <input autoFocus value={candName} onChange={(e) => setCandName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addCand(); }} placeholder="Vendor name" className="flex-1 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-            <input value={candQuote} onChange={(e) => setCandQuote(e.target.value)} type="number" placeholder="Quote" className="w-24 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          </div>
-          <input value={candLink} onChange={(e) => setCandLink(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addCand(); }} placeholder="Link / info (optional) — site, quote, profile…" className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          {/* Near-match confirm: the typed name resembles existing directory vendors. */}
-          {vendorConfirm ? (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-sm">
-              <p className="mb-1.5">“{vendorConfirm.name}” looks similar to {vendorConfirm.near.length === 1 ? "an existing vendor" : "existing vendors"}. Use one, or create new?</p>
-              <div className="flex flex-wrap gap-1.5">
-                {vendorConfirm.near.map((v) => (
-                  <button key={v.id} onClick={() => void finalizeAdd(vendorConfirm.name, v.id, vendorConfirm.contract)} className="px-2.5 py-1 rounded-full border border-gray-300 bg-white text-[13px] hover:bg-gray-50">Use “{v.name}”</button>
-                ))}
-                <button onClick={() => void finalizeAdd(vendorConfirm.name, null, vendorConfirm.contract)} className="px-2.5 py-1 rounded-full bg-gray-900 text-white text-[13px] hover:bg-black">Create new</button>
-                <button onClick={() => setVendorConfirm(null)} className="px-2.5 py-1 text-[13px] text-gray-600 hover:text-gray-900">Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => void addCand(false)} disabled={!candName.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add vendor</button>
-              <button onClick={() => void addCand(true)} disabled={!candName.trim()} className="px-3 py-1 bg-gray-900 text-white rounded text-sm hover:bg-black disabled:opacity-50">Add &amp; contract</button>
-              <button onClick={() => { setAddingCand(false); setCandName(""); setCandQuote(""); setCandLink(""); setVendorConfirm(null); }} className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="mt-3 flex items-center gap-4">
-          <button onClick={() => setAddingCand(true)} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
-            <Plus className="w-4 h-4" /> Add vendor
-          </button>
-          <button onClick={seeSuggested} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900">
-            <Lightbulb className="w-4 h-4" /> {suggestOpen ? "Hide suggested" : "See suggested"}
-          </button>
-        </div>
-      )}
-
-      {suggestOpen && (
-        <div className="mt-2 bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm">
-          {suggesting ? (
-            <p className="text-gray-400">Finding {eng.category ?? "vendors"}{location ? ` near ${location}` : ""}…</p>
-          ) : suggestions && suggestions.length > 0 ? (
-            <ul className="divide-y divide-gray-200">
-              {suggestions.map((s) => (
-                <li key={s.id} className="flex items-center justify-between gap-2 py-1.5">
-                  <span className="min-w-0">
-                    <span className="font-medium">{s.name}</span>
-                    {s.location && <span className="text-gray-400"> · {s.location}</span>}
-                  </span>
-                  <button onClick={() => addSuggestion(s)} className="shrink-0 inline-flex items-center gap-1 text-gray-600 hover:text-gray-900"><Plus className="w-3.5 h-3.5" /> Add</button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-gray-400">
-              No vendor suggestions{location ? ` for ${location}` : ""} yet — our vendor database isn’t set up.
-            </p>
-          )}
-        </div>
-      )}
-
-      {cardId && (() => {
-        const c = eng.candidates.find((x) => x.id === cardId);
-        return c ? (
-          <VendorCardModal eventId={eventId} engagementId={eng.id} candidate={c} onClose={() => setCardId(null)} onSaved={(f) => patchCand(c.id, f)} />
-        ) : null;
-      })()}
-    </div>
-  );
-}
-
-function VendorDecisions({ eventId, location, initial }: { eventId: string; location?: string | null; initial: EngagementWithCandidates[] }) {
-  const [engs, setEngs] = useState(initial);
-  const [newCat, setNewCat] = useState("");
-  const [view, setView] = useState<"cards" | "chart">("cards");
-  // Curated defaults only — don't scrape random existing categories. (User-added persistence: later.)
-  const allCategories = VENDOR_CATEGORY_DEFAULTS;
-
-  const addCat = async (cat: string) => {
-    const e = await addEngagement(eventId, cat);
-    setEngs((p) => [...p, e]);
-  };
-  const add = async () => {
-    const cat = newCat.trim();
-    if (!cat) return;
-    await addCat(cat);
-    setNewCat("");
-  };
-  // Default category chips still available to create (a category disappears once a decision uses it).
-  // Custom categories can be typed too, but they never join the fixed default list.
-  const usedKeys = new Set(engs.map((e) => (e.category ?? "").trim().toLowerCase()).filter(Boolean));
-  const availableCats = allCategories.filter((c) => !usedKeys.has(c.toLowerCase()));
-  const remove = async (id: string) => {
-    await deleteEngagement(id);
-    setEngs((p) => p.filter((e) => e.id !== id));
-  };
-  const updateEng = (u: EngagementWithCandidates) => setEngs((p) => p.map((e) => (e.id === u.id ? u : e)));
-
-  const stageIdx = (s: string | null) => ENGAGEMENT_STAGES.indexOf((s ?? "") as any);
-
-  return (
-    <div className="space-y-4">
-      {/* Add-a-decision row sits in line with the grid/lines view toggle. */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
-          <span className="text-[13px] text-gray-500 mr-0.5">Add a decision:</span>
-          {availableCats.map((cat) => (
-            <button key={cat} onClick={() => void addCat(cat)} className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-2.5 py-1 text-[13px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700">
-              <Plus className="w-3 h-3" /> {cat}
-            </button>
-          ))}
-          <span className="inline-flex items-center gap-1">
-            <input value={newCat} onChange={(e) => setNewCat(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void add(); }} placeholder="custom…" className="w-28 px-2 py-1 border border-gray-200 rounded-md text-[13px] focus:outline-none focus:ring-1 focus:ring-gray-300" />
-            {newCat.trim() && <button onClick={() => void add()} className="text-[13px] font-medium text-violet-700 hover:underline">add</button>}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-lg p-1 shrink-0">
-          <button onClick={() => setView("cards")} className={`p-1.5 rounded ${view === "cards" ? "bg-gray-100" : "hover:bg-gray-50"}`} title="Cards"><LayoutGrid className="w-4 h-4" /></button>
-          <button onClick={() => setView("chart")} className={`p-1.5 rounded ${view === "chart" ? "bg-gray-100" : "hover:bg-gray-50"}`} title="Chart"><List className="w-4 h-4" /></button>
-        </div>
-      </div>
-      {engs.length === 0 && <p className="text-sm text-gray-400">No vendors yet — add one above.</p>}
-
-      {view === "cards" ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {engs.map((e) => <DecisionCard key={e.id} initial={e} eventId={eventId} location={location} onDelete={() => remove(e.id)} onChange={updateEng} allCategories={allCategories} />)}
-        </div>
-      ) : engs.length > 0 && (
-        <div className="bg-white rounded-2xl border border-border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-500 border-b border-border">
-              <tr>
-                <th className="text-left px-4 py-2 font-normal">Decision</th>
-                <th className="text-left px-4 py-2 font-normal">Stage</th>
-                <th className="text-left px-4 py-2 font-normal">Candidates</th>
-                <th className="text-left px-4 py-2 font-normal">Selected</th>
-                <th className="text-right px-4 py-2 font-normal">Amount</th>
-                <th className="px-4 py-2 w-8"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {engs.map((e) => {
-                const sel = e.candidates.find((c) => c.isSelected);
-                const amount = e.stage === "Contracted" ? e.confirmedAmount : sel?.quoteAmount ?? null;
-                const idx = stageIdx(e.stage);
-                return (
-                  <tr key={e.id} className="border-b border-gray-100">
-                    <td className="px-4 py-2 font-medium">{e.category ?? "—"}</td>
-                    <td className="px-4 py-2">
-                      <span className={`px-2 py-0.5 rounded-full text-[15px] ${e.stage === "Contracted" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>{e.stage ?? "—"}</span>
-                      {idx >= 0 && <span className="text-[15px] text-gray-400 ml-2">{idx + 1}/{ENGAGEMENT_STAGES.length}</span>}
-                    </td>
-                    <td className="px-4 py-2 text-gray-600">{e.candidates.length}</td>
-                    <td className="px-4 py-2">{sel?.vendorName ?? <span className="text-gray-300">—</span>}</td>
-                    <td className="px-4 py-2 text-right">{amount != null ? money(amount) : <span className="text-gray-300">—</span>}</td>
-                    <td className="px-4 py-2 text-center"><button onClick={() => remove(e.id)} className="text-gray-300 hover:text-red-600" aria-label="Delete"><Trash2 className="w-3.5 h-3.5" /></button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <p className="px-4 py-2 text-[15px] text-gray-400">Switch to Cards to edit a decision, advance stages, or add candidates.</p>
-        </div>
-      )}
     </div>
   );
 }
@@ -1567,196 +1014,6 @@ function CarriedLessons({ eventId, onOpenEvent }: { eventId: string; onOpenEvent
   );
 }
 
-// ── Auto-updates feed (email / Linear detection) ─────────────────────────────
-const SOURCE_META: Record<string, { Icon: typeof Mail; label: string; cls: string }> = {
-  email: { Icon: Mail, label: "Email", cls: "text-blue-600" },
-  linear: { Icon: Activity, label: "Linear", cls: "text-purple-600" },
-  manual: { Icon: Pencil, label: "Manual", cls: "text-gray-500" },
-};
-function relTime(iso: string): string {
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-function AutoUpdates({ eventId, engagements, onApplied }: { eventId: string; engagements: EngagementWithCandidates[]; onApplied: () => void }) {
-  const [updates, setUpdates] = useState<EventUpdate[]>([]);
-  const [source, setSource] = useState<"email" | "linear">("email");
-  const [from, setFrom] = useState("");
-  const [text, setText] = useState("");
-  const [link, setLink] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [proposal, setProposal] = useState<DetectedUpdate | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
-  const [digests, setDigests] = useState<Record<string, string>>({});
-  const [digestingKey, setDigestingKey] = useState<string | null>(null);
-
-  const engLabel = (id: string) => {
-    const e = engagements.find((x) => x.id === id);
-    if (!e) return "Other updates";
-    const sel = e.candidates.find((c) => c.isSelected)?.vendorName;
-    return e.category ? (sel ? `${e.category} · ${sel}` : e.category) : (sel ?? "Vendor");
-  };
-  const toggleGroup = (k: string) => setOpenGroups((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const summarizeGroup = async (engId: string) => {
-    setDigestingKey(engId);
-    try {
-      const s = await summarizeCorrespondence(eventId, engId);
-      setDigests((p) => ({ ...p, [engId]: s ?? "No summary — set ANTHROPIC_API_KEY to enable Claude digests." }));
-    } finally { setDigestingKey(null); }
-  };
-
-  const load = () => listEventUpdates(eventId).then(setUpdates).catch(() => {});
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [eventId]);
-
-  const runSync = async () => {
-    setSyncing(true); setErr(null); setSyncMsg(null);
-    try {
-      const r = await syncGmail(eventId);
-      setSyncMsg(r.note ?? `Synced — ${r.recorded} new email${r.recorded === 1 ? "" : "s"} matched across ${r.scannedDomains} vendor domain${r.scannedDomains === 1 ? "" : "s"}.`);
-      if (r.recorded > 0) onApplied();
-      await load();
-    } catch (e: any) { setErr(e?.message ?? String(e)); }
-    finally { setSyncing(false); }
-  };
-
-  const reset = () => { setText(""); setLink(""); setFrom(""); setProposal(null); };
-  const detect = async () => {
-    if (!text.trim()) return;
-    setBusy(true); setErr(null); setProposal(null);
-    try {
-      const p = await detectUpdate(eventId, text, source, source === "email" ? from || null : null);
-      const targetStatus = p.kind === "complete" ? "Done" : p.kind === "status" ? (p.status || null) : null;
-      if (targetStatus && p.deliverableId) {
-        await setDeliverableStatus(p.deliverableId, targetStatus);
-        await recordEventUpdate(eventId, { source, summary: p.summary, detail: text, linkUrl: link || null, deliverableId: p.deliverableId });
-        reset(); onApplied(); await load();
-      } else if (p.kind === "contract" && p.engagementId) {
-        setProposal(p); // money change → confirm before applying
-      } else {
-        // Notes from a matched vendor domain file as correspondence on that decision.
-        await recordEventUpdate(eventId, { source, summary: p.summary, detail: text, linkUrl: link || null, engagementId: p.engagementId });
-        reset(); await load();
-      }
-    } catch (e: any) { setErr(e?.message ?? String(e)); }
-    finally { setBusy(false); }
-  };
-  const applyContract = async () => {
-    if (!proposal?.engagementId) return;
-    setBusy(true);
-    try {
-      await setEngagementStage(proposal.engagementId, "Contracted", { docUrl: link || null, note: text || null });
-      await recordEventUpdate(eventId, { source, summary: proposal.summary, detail: text, linkUrl: link || null, engagementId: proposal.engagementId });
-      reset(); onApplied(); await load();
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="bg-white rounded-2xl border border-border p-5">
-      {/* Composer — manual entry; "Sync inbox" pulls real Gmail from vendor domains. */}
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-1">
-          {(["email", "linear"] as const).map((s) => {
-            const M = SOURCE_META[s];
-            return (
-              <button key={s} onClick={() => setSource(s)} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border ${source === s ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"}`}>
-                <M.Icon className="w-3 h-3" /> {M.label}
-              </button>
-            );
-          })}
-        </div>
-        <button onClick={runSync} disabled={syncing} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[15px] border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-          <Mail className="w-3 h-3" /> {syncing ? "Syncing…" : "Sync inbox"}
-        </button>
-      </div>
-      {syncMsg && <p className="text-[15px] text-gray-500 mb-2">{syncMsg}</p>}
-      {source === "email" && (
-        <input value={from} onChange={(e) => setFrom(e.target.value)} placeholder="From (e.g. sales@maplecatering.com) — matched to a vendor by domain" className="w-full mb-2 px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-      )}
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} placeholder={source === "email" ? "Paste an email (e.g. “Countersigned contract attached”)…" : "Linear update (e.g. “Sign with caterer — moved to Done”)…"} className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-      <div className="flex gap-2 mt-2">
-        <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Link to the email / contract / Linear post (optional)" className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-        <button onClick={detect} disabled={busy || !text.trim()} className="inline-flex items-center gap-1 px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">
-          <Send className="w-3.5 h-3.5" /> {busy ? "Detecting…" : "Detect & link"}
-        </button>
-      </div>
-      {err && <p className="text-[15px] text-red-600 mt-2">{err}</p>}
-      {proposal && (
-        <div className="text-sm bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 mt-2">
-          Detected a signed contract for <span className="font-medium">{proposal.matchedName}</span>. Apply <span className="font-medium">→ Contracted</span> and link the source?
-          <div className="flex gap-2 mt-2">
-            <button onClick={applyContract} disabled={busy} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Confirm &amp; apply</button>
-            <button onClick={() => setProposal(null)} className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900">Discard</button>
-          </div>
-        </div>
-      )}
-
-      {/* Feed — grouped by vendor decision; click a group to expand the thread. */}
-      <div className="mt-4 space-y-2">
-        {updates.length === 0 && <p className="text-sm text-gray-400 py-2">No auto-updates yet. Connected email/Linear changes will land here.</p>}
-        {(() => {
-          // Group updates (already newest-first) by their engagement; null → "Other".
-          const groups = new Map<string, EventUpdate[]>();
-          for (const u of updates) {
-            const k = u.engagementId ?? "__none__";
-            if (!groups.has(k)) groups.set(k, []);
-            groups.get(k)!.push(u);
-          }
-          return Array.from(groups.entries()).map(([k, items]) => {
-            const isOpen = openGroups.has(k);
-            const label = k === "__none__" ? "Other updates" : engLabel(k);
-            const brief = digests[k] ?? items[0]?.summary ?? "";
-            const canSummarize = k !== "__none__";
-            return (
-              <div key={k} className="border border-gray-200 rounded-lg overflow-hidden">
-                <button onClick={() => toggleGroup(k)} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50">
-                  <ChevronRight className={`w-4 h-4 shrink-0 text-gray-400 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-                  <span className="font-medium text-sm shrink-0">{label}</span>
-                  <span className="text-[15px] bg-gray-100 text-gray-600 rounded-full px-1.5 py-0.5 shrink-0">{items.length} email{items.length === 1 ? "" : "s"}</span>
-                  <span className="text-[15px] text-gray-400 truncate flex-1">{brief}</span>
-                </button>
-                {isOpen && (
-                  <div className="border-t border-gray-100">
-                    {canSummarize && (
-                      <div className="px-3 py-2 bg-gray-50/70 border-b border-gray-100">
-                        {digests[k]
-                          ? <p className="text-sm text-gray-700">{digests[k]}</p>
-                          : <button onClick={() => summarizeGroup(k)} disabled={digestingKey === k} className="text-[15px] text-gray-600 hover:text-gray-900 inline-flex items-center gap-1 disabled:opacity-50"><Lightbulb className="w-3.5 h-3.5" /> {digestingKey === k ? "Summarizing…" : "Summarize interaction"}</button>}
-                      </div>
-                    )}
-                    <div className="divide-y divide-gray-100">
-                      {items.map((u) => {
-                        const M = SOURCE_META[u.source] ?? SOURCE_META.manual;
-                        return (
-                          <div key={u.id} className="px-3 py-2.5 flex items-start gap-2.5 text-sm">
-                            <M.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${M.cls}`} />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-gray-700">{u.summary}</p>
-                              <p className="text-[15px] text-gray-400 mt-0.5">
-                                {M.label} · {relTime(u.createdAt)}
-                                {u.linkUrl && <> · <a href={u.linkUrl} target="_blank" rel="noreferrer" className="text-gray-500 hover:text-gray-800 inline-flex items-center gap-0.5">source <ExternalLink className="w-3 h-3" /></a></>}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          });
-        })()}
-      </div>
-    </div>
-  );
-}
-
 // ── Overview (at-a-glance home) ───────────────────────────────────────────────
 function buildFacts(plan: EventPlanning): PlanningFacts {
   const t = today();
@@ -1993,7 +1250,7 @@ export function completenessFields(plan: EventPlanning): { key: string; label: s
     { key: "budget", label: "Final spend / actuals", present: (plan.budget?.lines ?? []).some((l) => l.status !== "estimate" && (l.confirmedAmount ?? 0) > 0) },
     { key: "outcome", label: "Outcome / verdict", present: !!plan.verdict?.trim() },
     { key: "agenda", label: "Run of show", present: plan.agenda.length > 0 },
-    { key: "vendors", label: "Vendors", present: plan.engagements.length > 0, skip: focus === "neither" },
+    { key: "vendors", label: "Vendors", present: (plan.budget?.lines.some((l) => l.vendorName || l.vendorId) ?? false), skip: focus === "neither" },
     { key: "roles", label: "Staffing / roles", present: plan.staffRoles.length > 0 },
   ] as { key: string; label: string; present: boolean; skip?: boolean }[]).filter((f) => !f.skip);
 }
@@ -4012,7 +3269,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 // box, auto-updates, and the carried-learnings card. Kept in the file because the forthcoming
 // Activity summary + inline compounding hints will reuse parts (AutoUpdates → Activity feed,
 // CarriedLessons → in-card hints). Referenced here so the compiler doesn't flag them dead meanwhile.
-void [LinearUpdateBox, OverviewDeliverables, AutoUpdates, GlanceTile, CarriedLessons];
+void [LinearUpdateBox, OverviewDeliverables, GlanceTile, CarriedLessons];
 
 // "Open" — what EventHub surfaces for you to act on. NOT a task list: only two kinds of thing live
 // here, a field to set or a proposal to confirm. No free-floating to-dos, no checkbox affordance.
@@ -4252,11 +3509,10 @@ function PageOwnership({ eventId, initial }: { eventId: string; initial: PageSta
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
-type Tab = "overview" | "people" | "vendors" | "budget" | "deliverables" | "page";
+type Tab = "overview" | "people" | "budget" | "deliverables" | "page";
 const TABS: { key: Tab; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "deliverables", label: "Deliverables" },
-  { key: "vendors", label: "Vendors" },
   { key: "people", label: "People" },
   { key: "budget", label: "Budget" },
   { key: "page", label: "Page" },
@@ -4663,7 +3919,6 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           <Overview plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onOpenBudget={() => setTab("budget")} onOpenTimeline={() => setTab("deliverables")} onOpenDeliverable={(id) => { setDeliverableJump(id); setTab("deliverables"); }} onOpenPeople={() => setTab("people")} onOpenEvent={onOpenEvent} reflectionJump={reflectionJump} reopened={reopened} setPlan={setPlan} />
         )}
         {tab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
-        {tab === "vendors" && <VendorDecisions eventId={eventId} location={plan.location} initial={plan.engagements} />}
         {tab === "budget" && (plan.budget
           ? <div className="space-y-6">
               <BudgetProjections plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />

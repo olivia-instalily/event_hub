@@ -2205,7 +2205,7 @@ export async function slackSend(channel: string, text: string): Promise<{ channe
 }
 
 const EVENT_LIST_SELECT =
-  'id, name, tag, tags, format, focus_override, location, office, event_date, end_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, is_external, quarter, why, info_url, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, slack_channel, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status ) ), engagement ( id )';
+  'id, name, tag, tags, format, focus_override, location, office, event_date, end_date, start_time, end_time, rsvp, capacity, checked_in, headcount, verdict, agenda, staff_roles, macro_stage, settle_state, owning_team, status, is_template, is_external, quarter, why, info_url, owners:event_owner ( profile:profile ( id, name, color ) ), series_id, luma_event_id, luma_url, luma_name, gcal_event_id, gcal_html_link, slack_channel, cover_image_url, luma_cover_url, custom_cover_url, cover_position, event_label ( label_id ), series:event_series ( id, name, type, status, owning_team ), budget ( lines:budget_line ( confirmed_amount, payment_status, vendor_id, vendor_name ) )';
 
 export async function listEvents(): Promise<EventListItem[]> {
   const { data, error } = await supabase
@@ -2240,7 +2240,7 @@ export async function listEvents(): Promise<EventListItem[]> {
     const hasActual = budgetLines.some((l) => normBudgetStatus(l.payment_status) !== 'estimate' && (Number(l.confirmed_amount) || 0) > 0);
     const agenda = Array.isArray(row.agenda) ? row.agenda : [];
     const roles = Array.isArray(row.staff_roles) ? row.staff_roles : [];
-    const vendors = Array.isArray(row.engagement) ? row.engagement.length : 0;
+    const vendors = budgetLines.filter((l) => l.vendor_id || l.vendor_name).length;
     const noGaps = !!row.event_date && !!row.location
       && (row.rsvp != null || row.headcount != null || row.checked_in != null)
       && hasActual
