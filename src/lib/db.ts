@@ -3232,24 +3232,35 @@ export interface VendorUsage {
   engagementId: string; category: string | null; stage: string | null; contracted: boolean;
   eventId: string | null; eventName: string | null; date: string | null; seriesName: string | null;
 }
+// "Used at" now derives from budget rows tagged with this vendor (the engagement store is gone).
+// One entry per event, contracted = any of the vendor's rows on that event is paid.
 export async function getVendorUsage(vendorId: string): Promise<VendorUsage[]> {
   const { data, error } = await supabase
-    .from('engagement_candidate')
-    .select('engagement:engagement ( id, category, stage, event:event ( id, name, event_date ), series:event_series ( id, name ) )')
+    .from('budget_line')
+    .select('id, category_id, payment_status, budget:budget ( categories, event:event ( id, name, event_date ), series:event_series ( id, name ) )')
     .eq('vendor_id', vendorId);
   if (error) throw error;
-  const seen = new Set<string>();
-  const out: VendorUsage[] = [];
+  const byEvent = new Map<string, VendorUsage>();
   for (const row of (data ?? []) as any[]) {
-    const e = row.engagement;
-    if (!e || seen.has(e.id)) continue;
-    seen.add(e.id);
-    out.push({
-      engagementId: e.id, category: e.category ?? null, stage: e.stage ?? null, contracted: e.stage === 'Contracted',
-      eventId: e.event?.id ?? null, eventName: e.event?.name ?? null, date: e.event?.event_date ?? null, seriesName: e.series?.name ?? null,
-    });
+    const b = Array.isArray(row.budget) ? row.budget[0] : row.budget;
+    const ev = b?.event ? (Array.isArray(b.event) ? b.event[0] : b.event) : null;
+    const series = b?.series ? (Array.isArray(b.series) ? b.series[0] : b.series) : null;
+    const key = ev?.id ?? series?.id ?? row.id;
+    const cats = Array.isArray(b?.categories) ? b.categories : [];
+    const catName = row.category_id ? (cats.find((c: any) => c.id === row.category_id)?.name ?? null) : null;
+    const paid = normBudgetStatus(row.payment_status) === 'paid';
+    const existing = byEvent.get(key);
+    if (existing) {
+      existing.contracted = existing.contracted || paid;
+      if (!existing.category && catName) existing.category = catName;
+    } else {
+      byEvent.set(key, {
+        engagementId: key, category: catName, stage: row.payment_status ?? null, contracted: paid,
+        eventId: ev?.id ?? null, eventName: ev?.name ?? null, date: ev?.event_date ?? null, seriesName: series?.name ?? null,
+      });
+    }
   }
-  return out;
+  return [...byEvent.values()];
 }
 
 /** On Contracted: append "Vendor: <name>" to the event's budget line for that category, creating
