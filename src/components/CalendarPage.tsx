@@ -139,7 +139,9 @@ export function CalendarPage({ onOpenEvent, onOpenEventsPage }: { onOpenEvent: (
         </button>
       </div>
 
-      {loading ? (
+      {/* Only show the placeholder on the FIRST load (no data yet). Refetches after create/edit/
+          delete keep CalendarView mounted, so the month you're viewing isn't reset to today. */}
+      {loading && merged.length === 0 ? (
         <p className="text-gray-400 py-12 text-center">Loading…</p>
       ) : (
         <CalendarView
