@@ -214,11 +214,13 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
           <div className="space-y-4">
             {categories.map((cat) => {
               const rows = rowsIn(cat.id);
-              const h = categoryHeader(rows.map((l) => ({ status: l.status, amount: l.confirmedAmount })), cat.estimate);
+              const h = categoryHeader(rows.map((l) => ({ status: l.status, amount: l.confirmedAmount })));
               const headerText =
                 h.kind === "empty" ? "—"
                 : h.kind === "range" ? (h.value === h.rangeHigh ? money(h.value, cur) : `${money(h.value, cur)}–${money(h.rangeHigh, cur)}`)
                 : money(h.value, cur);
+              // Estimate is a goal — when there's an actual, show it measured against the est (mini vs-target).
+              const vsEst = cat.estimate != null && h.kind === "actual" && h.value != null ? h.value - cat.estimate : null;
               return (
                 <SortableCat key={cat.id} id={"cat:" + cat.id}>
                   {(handle) => (
@@ -232,10 +234,10 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
                           onBlur={(e) => editCategory(cat.id, { name: e.target.value.trim() || "Category" })}
                           className="flex-1 min-w-0 bg-transparent font-medium text-gray-900 focus:outline-none"
                         />
-                        {/* One editable estimate. When a category has gone actual it reads "est was" (the
-                            original estimate stays editable) — no separate fill-in area. */}
+                        {/* Estimate = the goal for this category. Always an editable "est ___"; the
+                            actual number to its right is measured against it (mini vs-target). */}
                         <span className="inline-flex items-center gap-1.5 text-sm text-gray-400">
-                          {h.kind === "actual" ? "est was" : "est"}
+                          est
                           <input
                             key={`${cat.id}-est`}
                             type="number"
@@ -249,6 +251,11 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
                           {headerText}
                           {h.pendingCount > 0 && <span className="ml-1 font-normal text-amber-600">· +{h.pendingCount} still quoting</span>}
                         </span>
+                        {vsEst != null && (
+                          <span className={`text-[13px] shrink-0 ${vsEst > 0 ? "text-red-600" : vsEst < 0 ? "text-green-600" : "text-gray-400"}`}>
+                            {vsEst > 0 ? `${money(vsEst, cur)} over est` : vsEst < 0 ? `${money(-vsEst, cur)} under est` : "on est"}
+                          </span>
+                        )}
                         <button onClick={() => removeCategory(cat.id)} title="Remove category (rows move to loose)" className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
                       </div>
                       {/* Rows */}
@@ -316,7 +323,7 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
   dragHandle?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2 px-4 py-2">
+    <div className="flex items-center gap-3 px-4 py-2">
       {dragHandle}
       {/* Status dot — same color as the status tile (green paid · blue quoted · gray estimate). */}
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[line.status]}`} title={STATUS_LABEL[line.status]} />
@@ -324,7 +331,7 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
         defaultValue={line.label ?? ""}
         onBlur={(e) => e.target.value !== (line.label ?? "") && onEdit(line.id, { label: e.target.value })}
         placeholder="What is it?"
-        className="flex-1 min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
+        className="basis-40 shrink min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
       />
       <VendorField line={line} category={category} location={location} onEdit={onEdit} />
       <select
@@ -350,7 +357,7 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
         defaultValue={line.confirmedAmount ?? ""}
         onBlur={(e) => { const v = e.target.value.trim() === "" ? null : Number(e.target.value); if (v !== line.confirmedAmount) onEdit(line.id, { confirmedAmount: v }); }}
         placeholder={money(0, cur)}
-        className="w-24 text-right text-sm border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-2 focus:ring-gray-300"
+        className="w-16 shrink-0 text-right text-sm border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-2 focus:ring-gray-300"
       />
       <button onClick={() => onRemove(line.id)} title="Remove" className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
     </div>
@@ -384,7 +391,7 @@ function VendorField({ line, category, location, onEdit }: {
   const createNew = async () => { const v = await createVendor(name.trim(), category); setNear(null); onEdit(line.id, { vendorId: v.id, vendorName: v.name }); };
 
   return (
-    <div className="relative w-32">
+    <div className="relative flex-1 min-w-0">
       <input
         value={name}
         list={listId}
