@@ -5,8 +5,8 @@ import { SourceMaterials } from "./SourceMaterials";
 import { SlackCaptureCard } from "./SlackCaptureCard";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
-  AlertCircle, Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
-  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Lock, LockOpen, ArrowDown, ArrowUp, MessageSquare, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
+  Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
+  Mail, Activity, Send, Pencil, X, Clock, RefreshCw, Link2, Code2, Globe, LayoutGrid, List, Lock, LockOpen, ArrowDown, ArrowUp, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
   UserPlus, DollarSign, ClipboardList, Sparkles,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, DragOverlay, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
@@ -15,9 +15,9 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, resolveGcalMatch, pullEventFromLinear, syncEventToLinear, unlinkLinear, deleteEvent, resetEvent,
   setMacroStage, addEngagement, deleteEngagement, setEngagementStage,
-  addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors, listBudgetLines,
+  addCandidate, updateCandidate, deleteCandidate, selectCandidate, clearCandidateSelection, suggestVendors,
   ensureVendor, matchVendors, noteVendorOnBudgetLine, type VendorRow, setEventFocus,
-  addTrackerLine, deleteBudgetLine, setBudgetStatus, setBudgetSyncUrl, attachLineDoc, setBudgetLineEngagement, setBudgetTarget, updateBudgetLine, importVendors,
+  importVendors,
   addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable, setEventBenchmarks, setDeliverableBenchmark,
   getPlanningSummary, saveOverviewSummary,
   getEventPeopleStats, listAttendeesForEvent, scheduleDebrief,
@@ -33,10 +33,9 @@ import {
   type EventUpdate, type DetectedUpdate, type PageState, type Developer,
   MACRO_STAGES, ENGAGEMENT_STAGES,
   type EventPlanning, type EngagementWithCandidates, type VendorCandidate,
-  type PlanningBudget, type BudgetLineTracker, type Deliverable, type CarriedLesson,
-  type PlanningFacts, type VendorSuggestion, type BudgetStatus, BUDGET_STATUSES,
+  type BudgetLineTracker, type Deliverable, type CarriedLesson,
+  type PlanningFacts, type VendorSuggestion, type BudgetStatus,
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
-  getBudgetApproval, type BudgetApproval,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
   listSlackCaptures, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
@@ -49,7 +48,6 @@ import { PHASES, PHASE_LABEL, nextTagSelection, type Benchmark } from "../lib/ph
 import { TagStack } from "./TagStack";
 import { FormatPicker, parseFormats, joinFormats } from "./FormatPicker";
 import { Button } from "@instalily/ui/button";
-import { StatCard } from "./StatCard";
 import { Tabs, TabsList, TabsTrigger } from "@instalily/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import { LocationEdit } from "./LocationEdit";
@@ -74,7 +72,8 @@ import { OpenInLinear } from "./OpenInLinear";
 import { SeriesAttach } from "./SeriesAttach";
 import { SlackChannelControl } from "./SlackChannelControl";
 import { DateEdit } from "./DateEdit";
-import { BudgetDropZone, BudgetDropArea, BudgetImportModal, parseBudgetText } from "./BudgetImport";
+import { parseBudgetText } from "./BudgetImport";
+import { BudgetTracker } from "./BudgetTracker";
 import { parseVendors } from "../lib/vendorImport";
 import { unsupportedFileMessage, isWorkbookFile } from "../lib/fileSupport";
 import { BackfillModal } from "./BackfillModal";
@@ -914,381 +913,6 @@ const BUDGET_STATUS_META: Record<BudgetStatus, { label: string; badge: string; r
   paid:      { label: "Paid",      badge: "bg-green-100 text-green-700", ring: "ring-green-400" },
 };
 
-/** Click-into-category detail: edit label/amount, move status, attach material, and add a
- *  web address whose email updates feed the general updates + progress areas. */
-// A concise label for a vendor engagement: "Category · Selected vendor" (falls back gracefully).
-const engagementLabel = (e: EngagementWithCandidates): string => {
-  const sel = e.candidates.find((c) => c.isSelected)?.vendorName?.trim();
-  if (e.category && sel) return `${e.category} · ${sel}`;
-  return e.category || sel || "Vendor";
-};
-function BudgetLineModal({ eventId, line, engagements, onClose, onChange }: {
-  eventId: string;
-  line: BudgetLineTracker;
-  engagements: EngagementWithCandidates[];
-  onClose: () => void;
-  onChange: (f: Partial<BudgetLineTracker>) => void;
-}) {
-  const setEngagement = async (id: string | null) => { onChange({ linkedEngagement: id }); await setBudgetLineEngagement(line.id, id).catch(() => {}); };
-  const [label, setLabel] = useState(line.label ?? "");
-  const [amount, setAmount] = useState(line.confirmedAmount != null ? String(line.confirmedAmount) : "");
-  const [note, setNote] = useState(line.note ?? "");
-  const [editingNote, setEditingNote] = useState(false);
-  const [sync, setSync] = useState(line.syncUrl ?? "");
-  const [savingSync, setSavingSync] = useState(false);
-  const hasNote = !!(line.note && line.note.trim());
-  const postNote = async () => { const n = note.trim() || null; onChange({ note: n }); setEditingNote(false); await updateBudgetLine(line.id, { note: n }); };
-  const deleteNote = async () => { setNote(""); setEditingNote(false); onChange({ note: null }); await updateBudgetLine(line.id, { note: null }); };
-
-  const saveMeta = async () => {
-    const amt = amount.trim() === "" ? null : Number(amount);
-    onChange({ label: label.trim() || null, confirmedAmount: amt });
-    await updateBudgetLine(line.id, { label: label.trim(), amount: amt });
-  };
-  const setStatus = async (s: BudgetStatus) => { onChange({ status: s }); await setBudgetStatus(line.id, s); };
-  const setDoc = async (url: string | null) => { onChange({ docUrl: url }); await attachLineDoc(line.id, url); };
-  const saveSync = async () => {
-    const url = sync.trim() || null;
-    setSavingSync(true);
-    try {
-      onChange({ syncUrl: url });
-      await setBudgetSyncUrl(line.id, url);
-      // Surface in the general updates feed (and, once email sync ships, auto-updates land here).
-      if (url) await recordEventUpdate(eventId, { source: "manual", summary: `Budget · ${label.trim() || "line"}: linked for email updates`, detail: null, linkUrl: url });
-    } finally { setSavingSync(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl border border-border max-w-lg w-full max-h-[85vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl">Budget line</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-900" aria-label="Close"><X className="w-5 h-5" /></button>
-        </div>
-
-        <div className="space-y-4">
-          <div className="flex gap-2">
-            <input value={label} onChange={(e) => setLabel(e.target.value)} onBlur={saveMeta} placeholder="Category" className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-            <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} onBlur={saveMeta} placeholder="Amount" className="w-32 px-3 py-2 text-right border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-          </div>
-
-          <div>
-            <p className="text-sm font-medium mb-1.5">Status</p>
-            <div className="flex flex-wrap gap-1.5">
-              {BUDGET_STATUSES.map((s) => (
-                <button key={s} onClick={() => setStatus(s)} className={`px-3 py-1 rounded-full text-sm border ${line.status === s ? "bg-gray-900 text-white border-gray-900" : `border-gray-200 hover:border-gray-400 ${BUDGET_STATUS_META[s].badge}`}`}>
-                  {BUDGET_STATUS_META[s].label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <p className="text-sm font-medium mb-1.5">Vendor</p>
-            {engagements.length === 0 ? (
-              <p className="text-[13px] text-gray-400">No vendors on this event yet — add one on the Vendors tab, then tag it here.</p>
-            ) : (
-              <Select
-                value={line.linkedEngagement ?? "none"}
-                onValueChange={(v) => setEngagement(v === "none" ? null : v)}
-                items={[{ value: "none", label: "Not linked to a vendor" }, ...engagements.map((e) => ({ value: e.id, label: engagementLabel(e) }))]}
-              >
-                <SelectTrigger size="sm" className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Not linked to a vendor</SelectItem>
-                  {engagements.map((e) => <SelectItem key={e.id} value={e.id}>{engagementLabel(e)}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-
-          <div>
-            <p className="text-sm font-medium mb-1.5">Update / comment</p>
-            {hasNote && !editingNote ? (
-              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
-                <p className="inline-flex items-start gap-1.5 text-gray-700"><MessageSquare className="w-3.5 h-3.5 mt-0.5 text-gray-400 shrink-0" /> {line.note}</p>
-                <div className="flex gap-3 mt-1.5 text-[15px]">
-                  <button onClick={() => { setNote(line.note ?? ""); setEditingNote(true); }} className="text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Pencil className="w-3 h-3" /> Edit</button>
-                  <button onClick={deleteNote} className="text-gray-500 hover:text-red-600 inline-flex items-center gap-1"><Trash2 className="w-3 h-3" /> Delete</button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="e.g. Venue sent contract, waiting on signed copy…" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-gray-300" />
-                <div className="flex justify-end gap-2 mt-1.5">
-                  {editingNote && <button onClick={() => { setNote(line.note ?? ""); setEditingNote(false); }} className="text-[15px] text-gray-500 hover:text-gray-900">Cancel</button>}
-                  <button onClick={postNote} disabled={!note.trim()} className="px-3 py-1 bg-gray-900 text-white rounded text-[15px] hover:bg-gray-800 disabled:opacity-40">{editingNote ? "Save" : "Post update"}</button>
-                </div>
-              </>
-            )}
-          </div>
-
-          <div>
-            <p className="text-sm font-medium mb-1.5">Material</p>
-            {line.docUrl ? (
-              <span className="inline-flex items-center gap-3 text-sm">
-                <a href={line.docUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-gray-700 hover:text-gray-900"><Paperclip className="w-4 h-4" /> View attachment</a>
-                <button onClick={() => setDoc(null)} className="text-gray-400 hover:text-red-600 text-[15px]">remove</button>
-              </span>
-            ) : (
-              <FileDrop label="Attach a quote / invoice / contract" onUploaded={(url) => setDoc(url)} />
-            )}
-          </div>
-
-          <div>
-            <p className="text-sm font-medium mb-1.5">Sync from email</p>
-            <div className="flex gap-2">
-              <input value={sync} onChange={(e) => setSync(e.target.value)} placeholder="Vendor portal / quote thread URL" className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-              <button onClick={saveSync} disabled={savingSync || sync.trim() === (line.syncUrl ?? "")} className="px-3 py-2 bg-gray-200 rounded-lg text-sm hover:bg-gray-300 disabled:opacity-50">{savingSync ? "Saving…" : "Save"}</button>
-            </div>
-            <p className="text-[15px] text-gray-400 mt-1.5 inline-flex items-start gap-1"><Mail className="w-3.5 h-3.5 mt-0.5 shrink-0" /> Replies on this thread will auto-log to this line and flow into the event's updates & progress (once email sync ships).</p>
-          </div>
-        </div>
-
-        <div className="flex justify-end mt-6 pt-4 border-t border-gray-100">
-          <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded-lg text-sm hover:bg-gray-300">Done</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BudgetTracker({ budget, eventId, eventBudgetTarget = null, engagements = [] }: { budget: PlanningBudget; eventId: string; eventBudgetTarget?: number | null; engagements?: EngagementWithCandidates[] }) {
-  const engById = new Map(engagements.map((e) => [e.id, e]));
-  // A confirmed (assigned) approval budget seeds the target when none is set yet.
-  const [approval, setApproval] = useState<BudgetApproval | null>(null);
-  useEffect(() => { void getBudgetApproval(eventId).then(setApproval); }, [eventId]);
-  const assignedBudget = approval?.status === "assigned" ? eventBudgetTarget : null;
-  const seedTarget = budget.targetAmount ?? assignedBudget;
-  const [lines, setLines] = useState(budget.lines);
-  const [target, setTarget] = useState<number | null>(seedTarget);
-  const [targetInput, setTargetInput] = useState(seedTarget != null ? String(seedTarget) : "");
-  const [filter, setFilter] = useState<"all" | BudgetStatus>("all");
-
-  // The approval (and thus the assigned budget) loads async, so `seedTarget` can become non-null
-  // AFTER mount. useState only seeds once, so sync the local target when the seed arrives — but
-  // never clobber a value the user has already typed here.
-  useEffect(() => {
-    if (seedTarget == null) return;
-    setTarget((cur) => (cur == null ? seedTarget : cur));
-    setTargetInput((cur) => (cur === "" ? String(seedTarget) : cur));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seedTarget]);
-
-  // Persist the assigned-budget seed so the rest of the app sees the same target (fires once the
-  // approval loads, not only at mount).
-  useEffect(() => {
-    if (budget.targetAmount == null && assignedBudget != null) void setBudgetTarget(budget.id, assignedBudget);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignedBudget, budget.targetAmount, budget.id]);
-  const [newLabel, setNewLabel] = useState("");
-  const [newAmount, setNewAmount] = useState("");
-  const [dropFile, setDropFile] = useState<File | null>(null);
-  const [importNote, setImportNote] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null); // budget line whose detail card is open
-  const cur = budget.currency;
-
-  // "committed" = anything past a raw estimate; used against the target.
-  const committed = lines.filter((l) => l.status !== "estimate").reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
-  const sumFor = (st: BudgetStatus) => lines.filter((l) => l.status === st).reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
-
-  const shown = lines.filter((l) => filter === "all" || l.status === filter);
-
-  const patch = (id: string, f: Partial<BudgetLineTracker>) => setLines((p) => p.map((l) => (l.id === id ? { ...l, ...f } : l)));
-  const setStatus = async (id: string, s: BudgetStatus) => {
-    const prev = lines.find((l) => l.id === id)?.status;
-    patch(id, { status: s });
-    await setBudgetStatus(id, s);
-    // Moving a line off a raw estimate into "quoted" → open its detail to log the update.
-    if (prev === "estimate" && s === "quoted") setOpenId(id);
-  };
-  const [pendingLine, setPendingLine] = useState<{ label: string; amount: number | null } | null>(null); // awaiting "is this a vendor?" answer
-  const askAddLine = () => {
-    const label = newLabel.trim();
-    if (!label) return;
-    setPendingLine({ label, amount: newAmount.trim() === "" ? null : Number(newAmount) });
-  };
-  // "No" → just a budget line. "Yes" → also create a vendor decision (which itself creates the linked line).
-  const confirmAddLine = async (asVendor: boolean) => {
-    if (!pendingLine) return;
-    const { label, amount } = pendingLine;
-    setPendingLine(null); setNewLabel(""); setNewAmount("");
-    if (asVendor) {
-      await addEngagement(eventId, label, amount); // creates engagement + linked budget line
-      setLines(await listBudgetLines(budget.id));
-    } else {
-      const l = await addTrackerLine(budget.id, label, amount);
-      setLines((p) => [...p, l]);
-    }
-  };
-  const removeLine = async (id: string) => {
-    setLines((p) => p.filter((l) => l.id !== id)); // optimistic
-    if (openId === id) setOpenId(null);
-    await deleteBudgetLine(id).catch(() => {});
-  };
-  const saveTarget = async (v: string) => { const n = v.trim() === "" ? null : Number(v); setTarget(n); await setBudgetTarget(budget.id, n); };
-
-  const tiles = BUDGET_STATUSES.map((st) => ({ label: BUDGET_STATUS_META[st].label, value: sumFor(st), ring: BUDGET_STATUS_META[st].ring }));
-  const openLine = lines.find((l) => l.id === openId) ?? null;
-
-  // Variance: total amount put down vs the target. Green while comfortably under, yellow
-  // within 10% of target, red once 10%+ over.
-  const total = lines.reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
-  const varState: "none" | "under" | "near" | "over" =
-    target == null ? "none" : total >= target * 1.1 ? "over" : total >= target * 0.9 ? "near" : "under";
-  const varText = { none: "text-gray-300", under: "text-green-600", near: "text-yellow-600", over: "text-red-500" }[varState];
-  const overTarget = target != null && total > target;
-
-  return (
-    <BudgetDropArea onFile={setDropFile} className="bg-white rounded-2xl border border-border p-6">
-      {importNote && <p className="text-[15px] text-gray-500 inline-flex items-center gap-1 mb-3"><Check className="w-3.5 h-3.5 text-green-600" /> {importNote}</p>}
-      {lines.length === 0 ? (
-        <BudgetDropZone label="Drop a budget breakdown (CSV) here, or click to choose" onFile={setDropFile} className="w-full min-h-[5rem] mb-5" />
-      ) : (
-        <div className="flex justify-end mb-4">
-          <BudgetDropZone label="Drop or choose a breakdown" onFile={setDropFile} className="shrink-0" />
-        </div>
-      )}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-5">
-        {tiles.map((t) => (
-          <StatCard key={t.label} label={t.label} value={money(t.value, cur)} />
-        ))}
-        {/* vs target — variance of total put down against the set target; keeps the
-            green/yellow/red ring + over/below sublabel as the variance signal. */}
-        <StatCard
-          label="vs target"
-          value={target == null ? <span className="text-gray-300">—</span> : <>{money(total, cur)} <span className="text-sm text-muted-foreground">total</span></>}
-          sub={target != null && (
-            <span className={`inline-flex items-center gap-0.5 ${varText}`}>
-              {overTarget ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />}
-              {money(Math.abs(target - total), cur)} {overTarget ? "over budget" : "below budget"}
-            </span>
-          )}
-        />
-      </div>
-
-      {dropFile && (
-        <BudgetImportModal
-          budget={{ ...budget, lines }}
-          currency={cur}
-          file={dropFile}
-          onClose={() => setDropFile(null)}
-          onApplied={async (note) => {
-            const f = dropFile;
-            setDropFile(null); setImportNote(note);
-            // Tag the imported sheet as a source material so it shows under the event's files
-            // (dedupes by name, so re-importing the same file won't duplicate it).
-            if (f) { try { const url = await uploadDocument(f); await addSourceMaterial(eventId, { name: f.name, url, type: f.type || "text/csv" }); } catch { /* non-fatal */ } }
-            setLines(await listBudgetLines(budget.id));
-          }}
-        />
-      )}
-
-      {openLine && (
-        <BudgetLineModal
-          eventId={eventId}
-          line={openLine}
-          engagements={engagements}
-          onClose={() => setOpenId(null)}
-          onChange={(f) => patch(openLine.id, f)}
-        />
-      )}
-
-      <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
-        <div className="flex items-center gap-1 flex-wrap">
-          {(["all", ...BUDGET_STATUSES] as const).map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1 rounded-full text-sm border ${filter === f ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"}`}>
-              {f === "all" ? "All" : BUDGET_STATUS_META[f].label}
-            </button>
-          ))}
-        </div>
-        <div id="budget-target-field" className="flex items-center gap-2 text-sm">
-          <span className="text-gray-500">Target</span>
-          <input
-            type="number"
-            value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
-            onBlur={(e) => saveTarget(e.target.value)}
-            placeholder="—"
-            style={{ width: `${Math.max(9, targetInput.length + 4)}ch` }}
-            className="px-2 py-1 border border-border rounded text-right focus:outline-none focus:ring-2 focus:ring-gray-300"
-          />
-          {target != null && (
-            <span className={committed > target ? "text-red-600" : "text-gray-500"}>
-              {committed > target ? `${money(committed - target, cur)} over` : `${money(target - committed, cur)} left`}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-gray-500">
-            <tr>
-              <th className="text-left px-3 py-2 font-normal">Line</th>
-              <th className="text-right px-3 py-2 font-normal">Amount</th>
-              <th className="text-left px-3 py-2 font-normal">Status</th>
-              <th className="px-3 py-2 font-normal text-right">Links</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.length === 0 && <tr><td colSpan={4} className="px-3 py-3 text-gray-400">No lines.</td></tr>}
-            {shown.map((l) => (
-              <tr key={l.id} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => setOpenId(l.id)} title="Open details">
-                <td className="px-3 py-2">
-                  {l.label}
-                  {l.linkedEngagement && engById.get(l.linkedEngagement) && (
-                    <span className="ml-2 text-[12px] text-gray-400">· {engagementLabel(engById.get(l.linkedEngagement)!)}</span>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-right">{money(l.confirmedAmount, cur)}</td>
-                <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                  <Select value={l.status} onValueChange={(v) => setStatus(l.id, v as BudgetStatus)} items={BUDGET_STATUSES.map((s) => ({ value: s, label: BUDGET_STATUS_META[s].label }))}>
-                    <SelectTrigger size="sm" className={`border-0 ${BUDGET_STATUS_META[l.status].badge}`}><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {BUDGET_STATUSES.map((s) => <SelectItem key={s} value={s}>{BUDGET_STATUS_META[s].label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </td>
-                <td className="px-3 py-2 text-right whitespace-nowrap text-gray-400">
-                  <span className="inline-flex items-center gap-2 justify-end group/row">
-                    {l.note && l.note.trim() && <MessageSquare className="w-3.5 h-3.5 text-gray-500" />}
-                    {l.docUrl && <Paperclip className="w-3.5 h-3.5" />}
-                    {l.syncUrl && <Link2 className="w-3.5 h-3.5" />}
-                    <button onClick={(e) => { e.stopPropagation(); removeLine(l.id); }} className="text-gray-300 hover:text-red-600" aria-label="Delete line"><Trash2 className="w-3.5 h-3.5" /></button>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex gap-2 mt-3">
-        <input value={newLabel} onChange={(e) => setNewLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") askAddLine(); }} placeholder="Add line (e.g. Marketing)" className="flex-1 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-        <input value={newAmount} onChange={(e) => setNewAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") askAddLine(); }} type="number" placeholder="Amount" className="w-28 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-        <button onClick={askAddLine} disabled={!newLabel.trim()} className="px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">Add line</button>
-      </div>
-      {pendingLine && (
-        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
-          <span className="text-gray-700">Is <span className="font-medium">{pendingLine.label}</span> an external vendor cost?</span>
-          <span className="flex items-center gap-2 ml-auto">
-            <button onClick={() => confirmAddLine(true)} className="px-2.5 py-1 bg-gray-900 text-white rounded text-[15px] hover:bg-gray-800">Yes — add a vendor</button>
-            <button onClick={() => confirmAddLine(false)} className="px-2.5 py-1 bg-white border border-gray-300 rounded text-[15px] hover:bg-gray-50">No — just a budget line</button>
-            <button onClick={() => setPendingLine(null)} className="text-gray-400 hover:text-gray-700" aria-label="Cancel"><X className="w-4 h-4" /></button>
-          </span>
-        </div>
-      )}
-      {pendingLine && <p className="text-[15px] text-gray-400 mt-1">“Yes” also adds it to the Vendors tab (track quotes &amp; outreach there); “No” keeps it budget-only.</p>}
-
-      <p className="text-[15px] text-gray-400 mt-4 flex items-start gap-1">
-        <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-        Projected view (predicted cost per category from comparable past events) needs more budget history — coming later.
-      </p>
-    </BudgetDropArea>
-  );
-}
 
 // ── Benchmark Editor ────────────────────────────────────────────────────────
 // Collapsible panel for adding / renaming / removing / reordering an event's benchmarks within its fixed phases.
@@ -5007,7 +4631,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 )}
                 {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}
                 {eventSubTab === "budget" && (plan.budget
-                  ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} engagements={plan.engagements} />
+                  ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} />
                   : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
                 {eventSubTab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
               </div>
@@ -5043,7 +4667,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         {tab === "budget" && (plan.budget
           ? <div className="space-y-6">
               <BudgetProjections plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
-              <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} engagements={plan.engagements} />
+              <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} />
             </div>
           : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && (
