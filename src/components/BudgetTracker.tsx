@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
-import { Plus, Trash2, ArrowUp, ArrowDown, Check, ExternalLink } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Plus, Trash2, ArrowUp, ArrowDown, Check, ExternalLink, GripVertical } from "lucide-react";
+import { DndContext, PointerSensor, useSensor, useSensors, closestCorners, useDroppable, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   type PlanningBudget, type BudgetLineTracker, type BudgetStatus, type BudgetApproval,
   type VendorRow, type VendorSuggestion,
@@ -56,7 +59,8 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
   }, [assignedBudget, budget.targetAmount, budget.id]);
 
   // ── row helpers ────────────────────────────────────────────────────────────
-  const rowsIn = (cid: string | null) => lines.filter((l) => l.categoryId === cid);
+  const rowsIn = (cid: string | null) =>
+    lines.filter((l) => l.categoryId === cid).sort((a, b) => (a.sortOrder ?? 1e9) - (b.sortOrder ?? 1e9));
   const patchRow = (id: string, f: Partial<BudgetLineTracker>) =>
     setLines((p) => p.map((l) => (l.id === id ? { ...l, ...f } : l)));
   const editRow = async (id: string, f: Partial<BudgetLineTracker>) => {
@@ -72,7 +76,8 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
     }).catch(() => {});
   };
   const addRow = async (categoryId: string | null) => {
-    const row = await addBudgetRow(budget.id, { label: "", amount: null, status: "estimate", categoryId });
+    const nextOrder = Math.max(0, ...rowsIn(categoryId).map((l) => (l.sortOrder ?? 0) + 1));
+    const row = await addBudgetRow(budget.id, { label: "", amount: null, status: "estimate", categoryId, sortOrder: nextOrder });
     setLines((p) => [...p, row]);
   };
   const removeRow = async (id: string) => {
@@ -97,6 +102,56 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
     setTarget(n);
     await setBudgetTarget(budget.id, n).catch(() => {});
     await setEventBudgetTarget(eventId, n).catch(() => {});
+  };
+
+  // ── drag: reorder categories, and reorder/move rows across groups ────────────
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const onDragEnd = async (e: DragEndEvent) => {
+    const activeId = String(e.active.id);
+    const overId = e.over ? String(e.over.id) : null;
+    if (!overId || activeId === overId) return;
+
+    // Category reorder → reassign order, persist.
+    if (activeId.startsWith("cat:") && overId.startsWith("cat:")) {
+      const from = categories.findIndex((c) => "cat:" + c.id === activeId);
+      const to = categories.findIndex((c) => "cat:" + c.id === overId);
+      if (from < 0 || to < 0) return;
+      await persistCats(arrayMove(categories, from, to).map((c, i) => ({ ...c, order: i })));
+      return;
+    }
+
+    // Row move/reorder. Resolve the target group (category id, or null for loose) from what we're over.
+    if (!activeId.startsWith("row:")) return;
+    const rowId = activeId.slice(4);
+    const active = lines.find((l) => l.id === rowId);
+    if (!active) return;
+    let targetCat: string | null;
+    if (overId.startsWith("group:")) targetCat = overId.slice(6) === "loose" ? null : overId.slice(6);
+    else if (overId.startsWith("cat:")) targetCat = overId.slice(4);
+    else if (overId.startsWith("row:")) targetCat = lines.find((l) => l.id === overId.slice(4))?.categoryId ?? active.categoryId;
+    else return;
+
+    const targetRows = lines.filter((l) => l.categoryId === targetCat && l.id !== rowId)
+      .sort((a, b) => (a.sortOrder ?? 1e9) - (b.sortOrder ?? 1e9));
+    let insertAt = targetRows.length;
+    if (overId.startsWith("row:")) {
+      const idx = targetRows.findIndex((l) => l.id === overId.slice(4));
+      if (idx >= 0) insertAt = idx;
+    }
+    const orderedIds = targetRows.map((l) => l.id);
+    orderedIds.splice(insertAt, 0, rowId);
+
+    // Optimistic: active row joins the target group; every row in that group gets its new index.
+    setLines((prev) => prev.map((l) => {
+      const oi = orderedIds.indexOf(l.id);
+      if (l.id === rowId) return { ...l, categoryId: targetCat, sortOrder: oi };
+      return oi >= 0 ? { ...l, sortOrder: oi } : l;
+    }));
+    await updateBudgetRow(rowId, { categoryId: targetCat, sortOrder: orderedIds.indexOf(rowId) }).catch(() => {});
+    for (const id of orderedIds) {
+      if (id === rowId) continue;
+      await updateBudgetRow(id, { sortOrder: orderedIds.indexOf(id) }).catch(() => {});
+    }
   };
 
   // ── rollup / tiles ─────────────────────────────────────────────────────────
@@ -152,64 +207,82 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
         <p className="text-sm text-gray-400 mb-4">No budget yet. Add a category or a loose line below, or drop a breakdown (CSV) to import lines.</p>
       )}
 
-      {/* Categories */}
-      <div className="space-y-4">
-        {categories.map((cat) => {
-          const rows = rowsIn(cat.id);
-          const h = categoryHeader(rows.map((l) => ({ status: l.status, amount: l.confirmedAmount })), cat.estimate);
-          const headerText =
-            h.kind === "empty" ? "—"
-            : h.kind === "range" ? (h.value === h.rangeHigh ? money(h.value, cur) : `${money(h.value, cur)}–${money(h.rangeHigh, cur)}`)
-            : money(h.value, cur);
-          return (
-            <div key={cat.id} className="rounded-xl border border-gray-200">
-              {/* Category header */}
-              <div className="flex items-center gap-3 px-4 py-2.5 bg-gray-50 rounded-t-xl">
-                <input
-                  value={cat.name}
-                  onChange={(e) => setCategories((p) => p.map((c) => (c.id === cat.id ? { ...c, name: e.target.value } : c)))}
-                  onBlur={(e) => editCategory(cat.id, { name: e.target.value.trim() || "Category" })}
-                  className="flex-1 min-w-0 bg-transparent font-medium text-gray-900 focus:outline-none"
-                />
-                {/* One editable estimate. When a category has gone actual it reads "est was" (the
-                    original estimate stays editable) — no separate fill-in area. */}
-                <span className="inline-flex items-center gap-1.5 text-sm text-gray-400">
-                  {h.kind === "actual" ? "est was" : "est"}
-                  <input
-                    key={`${cat.id}-est`}
-                    type="number"
-                    defaultValue={cat.estimate ?? ""}
-                    onBlur={(e) => editCategory(cat.id, { estimate: e.target.value.trim() === "" ? null : Number(e.target.value) })}
-                    placeholder="—"
-                    className="w-20 text-right border border-gray-200 rounded px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-300"
-                  />
-                </span>
-                <span className={`text-sm font-semibold tabular-nums ${HEADER_COLOR[h.kind]}`}>
-                  {headerText}
-                  {h.pendingCount > 0 && <span className="ml-1 font-normal text-amber-600">· +{h.pendingCount} still quoting</span>}
-                </span>
-                <button onClick={() => removeCategory(cat.id)} title="Remove category (rows move to loose)" className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
-              </div>
-              {/* Rows */}
-              <div className="divide-y divide-gray-100">
-                {rows.map((l) => <Row key={l.id} line={l} cur={cur} category={cat.name} location={location} onEdit={editRow} onRemove={removeRow} />)}
-              </div>
-              <button onClick={() => addRow(cat.id)} className="w-full text-left px-4 py-2 text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> add vendor row</button>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Loose lines */}
-      {(rowsIn(null).length > 0 || categories.length > 0) && (
-        <div className="mt-5">
-          <p className="text-[13px] font-medium text-gray-400 mb-1.5">Loose lines</p>
-          <div className="rounded-xl border border-gray-200 divide-y divide-gray-100">
-            {rowsIn(null).map((l) => <Row key={l.id} line={l} cur={cur} category={null} location={location} onEdit={editRow} onRemove={removeRow} />)}
-            <button onClick={() => addRow(null)} className="w-full text-left px-4 py-2 text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> add line</button>
+      {/* Categories + loose lines — one DndContext so rows can be dragged between groups and
+          categories reordered. */}
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
+        <SortableContext items={categories.map((c) => "cat:" + c.id)} strategy={verticalListSortingStrategy}>
+          <div className="space-y-4">
+            {categories.map((cat) => {
+              const rows = rowsIn(cat.id);
+              const h = categoryHeader(rows.map((l) => ({ status: l.status, amount: l.confirmedAmount })), cat.estimate);
+              const headerText =
+                h.kind === "empty" ? "—"
+                : h.kind === "range" ? (h.value === h.rangeHigh ? money(h.value, cur) : `${money(h.value, cur)}–${money(h.rangeHigh, cur)}`)
+                : money(h.value, cur);
+              return (
+                <SortableCat key={cat.id} id={"cat:" + cat.id}>
+                  {(handle) => (
+                    <div className="rounded-xl border border-gray-200">
+                      {/* Category header */}
+                      <div className="flex items-center gap-3 px-4 py-2.5 bg-gray-50 rounded-t-xl">
+                        <button {...handle} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 shrink-0" title="Drag to reorder"><GripVertical className="w-4 h-4" /></button>
+                        <input
+                          value={cat.name}
+                          onChange={(e) => setCategories((p) => p.map((c) => (c.id === cat.id ? { ...c, name: e.target.value } : c)))}
+                          onBlur={(e) => editCategory(cat.id, { name: e.target.value.trim() || "Category" })}
+                          className="flex-1 min-w-0 bg-transparent font-medium text-gray-900 focus:outline-none"
+                        />
+                        {/* One editable estimate. When a category has gone actual it reads "est was" (the
+                            original estimate stays editable) — no separate fill-in area. */}
+                        <span className="inline-flex items-center gap-1.5 text-sm text-gray-400">
+                          {h.kind === "actual" ? "est was" : "est"}
+                          <input
+                            key={`${cat.id}-est`}
+                            type="number"
+                            defaultValue={cat.estimate ?? ""}
+                            onBlur={(e) => editCategory(cat.id, { estimate: e.target.value.trim() === "" ? null : Number(e.target.value) })}
+                            placeholder="—"
+                            className="w-20 text-right border border-gray-200 rounded px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                          />
+                        </span>
+                        <span className={`text-sm font-semibold tabular-nums ${HEADER_COLOR[h.kind]}`}>
+                          {headerText}
+                          {h.pendingCount > 0 && <span className="ml-1 font-normal text-amber-600">· +{h.pendingCount} still quoting</span>}
+                        </span>
+                        <button onClick={() => removeCategory(cat.id)} title="Remove category (rows move to loose)" className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                      {/* Rows */}
+                      <GroupDroppable id={"group:" + cat.id}>
+                        <SortableContext items={rows.map((l) => "row:" + l.id)} strategy={verticalListSortingStrategy}>
+                          <div className="divide-y divide-gray-100 min-h-[10px]">
+                            {rows.map((l) => <SortableRow key={l.id} line={l} cur={cur} category={cat.name} location={location} onEdit={editRow} onRemove={removeRow} />)}
+                          </div>
+                        </SortableContext>
+                      </GroupDroppable>
+                      <button onClick={() => addRow(cat.id)} className="w-full text-left px-4 py-2 text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> add vendor row</button>
+                    </div>
+                  )}
+                </SortableCat>
+              );
+            })}
           </div>
-        </div>
-      )}
+        </SortableContext>
+
+        {/* Loose lines */}
+        {(rowsIn(null).length > 0 || categories.length > 0) && (
+          <div className="mt-5">
+            <p className="text-[13px] font-medium text-gray-400 mb-1.5">Loose lines</p>
+            <GroupDroppable id="group:loose">
+              <div className="rounded-xl border border-gray-200 divide-y divide-gray-100">
+                <SortableContext items={rowsIn(null).map((l) => "row:" + l.id)} strategy={verticalListSortingStrategy}>
+                  {rowsIn(null).map((l) => <SortableRow key={l.id} line={l} cur={cur} category={null} location={location} onEdit={editRow} onRemove={removeRow} />)}
+                </SortableContext>
+                <button onClick={() => addRow(null)} className="w-full text-left px-4 py-2 text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> add line</button>
+              </div>
+            </GroupDroppable>
+          </div>
+        )}
+      </DndContext>
 
       <div className="mt-4 flex items-center gap-4">
         <button onClick={addCategory} className="text-[13px] text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> add category</button>
@@ -237,12 +310,14 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
 
 // One budget row: label · optional vendor · status · optional link · amount. The vendor field feeds
 // the global directory (autocomplete + near-match dedup) via VendorField.
-function Row({ line, cur, category, location, onEdit, onRemove }: {
+function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
   line: BudgetLineTracker; cur: string; category: string | null; location: string | null;
   onEdit: (id: string, f: Partial<BudgetLineTracker>) => void; onRemove: (id: string) => void;
+  dragHandle?: ReactNode;
 }) {
   return (
     <div className="flex items-center gap-2 px-4 py-2">
+      {dragHandle}
       {/* Status dot — same color as the status tile (green paid · blue quoted · gray estimate). */}
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[line.status]}`} title={STATUS_LABEL[line.status]} />
       <input
@@ -332,4 +407,36 @@ function VendorField({ line, category, location, onEdit }: {
       )}
     </div>
   );
+}
+
+// ── drag primitives (dnd-kit) ────────────────────────────────────────────────
+// A sortable category card. Passes its drag-handle props to the render child so only the grip
+// starts a drag (the header's inputs stay editable).
+function SortableCat({ id, children }: { id: string; children: (handle: Record<string, any>) => ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 10 : undefined };
+  return <div ref={setNodeRef} style={style}>{children({ ...listeners, ...attributes })}</div>;
+}
+
+// A sortable budget row — the grip handle starts the drag; the row's fields stay editable.
+function SortableRow(props: {
+  line: BudgetLineTracker; cur: string; category: string | null; location: string | null;
+  onEdit: (id: string, f: Partial<BudgetLineTracker>) => void; onRemove: (id: string) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: "row:" + props.line.id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+  return (
+    <div ref={setNodeRef} style={style}>
+      <Row {...props} dragHandle={
+        <button {...listeners} {...attributes} className="cursor-grab active:cursor-grabbing text-gray-200 hover:text-gray-500 shrink-0" title="Drag"><GripVertical className="w-3.5 h-3.5" /></button>
+      } />
+    </div>
+  );
+}
+
+// A drop target for a group (a category body, or the loose group) so a row can be dropped into an
+// empty group, not only onto another row.
+function GroupDroppable({ id, children }: { id: string; children: ReactNode }) {
+  const { setNodeRef } = useDroppable({ id });
+  return <div ref={setNodeRef}>{children}</div>;
 }

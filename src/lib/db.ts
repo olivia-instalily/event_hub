@@ -2112,27 +2112,28 @@ export async function setBudgetCategories(budgetId: string, categories: import("
 /** Add a budget row (a cost). categoryId null => a loose line; vendor is optional. */
 export async function addBudgetRow(budgetId: string, input: {
   label: string; amount: number | null; status: BudgetStatus; categoryId: string | null;
-  vendorId?: string | null; vendorName?: string | null; link?: string | null;
+  vendorId?: string | null; vendorName?: string | null; link?: string | null; sortOrder?: number | null;
 }): Promise<BudgetLineTracker> {
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({
     id, budget_id: budgetId, label: input.label,
     confirmed_amount: input.amount, payment_status: input.status,
     category_id: input.categoryId, vendor_id: input.vendorId ?? null,
-    vendor_name: input.vendorName ?? null, doc_url: input.link ?? null,
+    vendor_name: input.vendorName ?? null, doc_url: input.link ?? null, sort_order: input.sortOrder ?? null,
   });
   if (error) throw new Error(error.message);
   return {
     id, label: input.label, confirmedAmount: input.amount, target: null, status: input.status,
     syncUrl: null, docUrl: input.link ?? null, note: null, linkedEngagement: null,
     categoryId: input.categoryId, vendorId: input.vendorId ?? null, vendorName: input.vendorName ?? null,
+    sortOrder: input.sortOrder ?? null,
   };
 }
 
 /** Patch any subset of a budget row's fields. */
 export async function updateBudgetRow(id: string, fields: {
   label?: string; amount?: number | null; status?: BudgetStatus; categoryId?: string | null;
-  vendorId?: string | null; vendorName?: string | null; link?: string | null; note?: string | null;
+  vendorId?: string | null; vendorName?: string | null; link?: string | null; note?: string | null; sortOrder?: number | null;
 }): Promise<void> {
   const patch: Record<string, any> = {};
   if ('label' in fields) patch.label = fields.label;
@@ -2143,6 +2144,7 @@ export async function updateBudgetRow(id: string, fields: {
   if ('vendorName' in fields) patch.vendor_name = fields.vendorName;
   if ('link' in fields) patch.doc_url = fields.link;
   if ('note' in fields) patch.note = fields.note;
+  if ('sortOrder' in fields) patch.sort_order = fields.sortOrder;
   const { error } = await supabase.from('budget_line').update(patch).eq('id', id);
   if (error) throw new Error(error.message);
 }
@@ -2728,6 +2730,7 @@ export interface BudgetLineTracker {
   categoryId: string | null;   // null => a loose line (no category)
   vendorId: string | null;     // linked global vendor directory row
   vendorName: string | null;   // denormalized display when there's no vendor row yet
+  sortOrder: number | null;    // manual drag order within its group
 }
 export interface PlanningBudget {
   id: string;
@@ -2917,7 +2920,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
       .order('id'),
     supabase
       .from('budget')
-      .select('id, currency, target_amount, categories, lines:budget_line ( id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement, category_id, vendor_id, vendor_name )')
+      .select('id, currency, target_amount, categories, lines:budget_line ( id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement, category_id, vendor_id, vendor_name, sort_order )')
       .eq('event_id', eventId),
     supabase
       .from('deliverable')
@@ -2957,7 +2960,8 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
           categoryId: l.category_id ?? null,
           vendorId: l.vendor_id ?? null,
           vendorName: l.vendor_name ?? null,
-        })),
+          sortOrder: l.sort_order ?? null,
+        })).sort((a: BudgetLineTracker, b: BudgetLineTracker) => (a.sortOrder ?? 1e9) - (b.sortOrder ?? 1e9)),
       }
     : null;
 
@@ -3411,7 +3415,7 @@ export async function addTrackerLine(budgetId: string, label: string, amount: nu
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, confirmed_amount: amount });
   if (error) throw error;
-  return { id, label, confirmedAmount: amount, target: null, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null };
+  return { id, label, confirmedAmount: amount, target: null, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null, sortOrder: null };
 }
 export async function setBudgetStatus(id: string, status: BudgetStatus): Promise<void> {
   const { error } = await supabase.from('budget_line').update({ payment_status: status }).eq('id', id);
@@ -3444,19 +3448,19 @@ export async function addBudgetCategoryTarget(budgetId: string, label: string, t
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, target });
   if (error) throw error;
-  return { id, label, confirmedAmount: null, target, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null };
+  return { id, label, confirmedAmount: null, target, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null, sortOrder: null };
 }
 /** Re-read a budget's lines (used to refresh in place after a drop-import). */
 export async function listBudgetLines(budgetId: string): Promise<BudgetLineTracker[]> {
   const { data, error } = await supabase
     .from('budget_line')
-    .select('id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement, category_id, vendor_id, vendor_name')
+    .select('id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement, category_id, vendor_id, vendor_name, sort_order')
     .eq('budget_id', budgetId);
   if (error) throw error;
   return (data ?? []).map((l: any) => ({
     id: l.id, label: l.label, confirmedAmount: l.confirmed_amount ?? null, target: l.target ?? null,
     status: normBudgetStatus(l.payment_status), syncUrl: l.sync_url ?? null, docUrl: l.doc_url ?? null, note: l.note ?? null, linkedEngagement: l.linked_engagement ?? null,
-    categoryId: l.category_id ?? null, vendorId: l.vendor_id ?? null, vendorName: l.vendor_name ?? null,
+    categoryId: l.category_id ?? null, vendorId: l.vendor_id ?? null, vendorName: l.vendor_name ?? null, sortOrder: l.sort_order ?? null,
   }));
 }
 /** Bulk-insert budget lines (from a dropped breakdown). Amount → confirmed_amount. */
