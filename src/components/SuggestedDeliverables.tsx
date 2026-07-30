@@ -37,6 +37,23 @@ export function SuggestedDeliverables({
     return d.toISOString().slice(0, 10);
   };
 
+  // Scroll to + briefly ring the header date field (inline styles survive re-renders).
+  const highlightDateField = () => {
+    const el = document.getElementById("hlf-date");
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.style.outline = "2px solid rgb(252 211 77)"; // amber-300
+    el.style.outlineOffset = "2px";
+    el.style.borderRadius = "6px";
+    const clear = () => { el.style.outline = ""; el.style.outlineOffset = ""; el.style.borderRadius = ""; };
+    setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
+  };
+  // "Set date" → highlight the field AND pop its calendar open (click the DateEdit's calendar button).
+  const openDatePicker = () => {
+    highlightDateField();
+    setTimeout(() => document.querySelector<HTMLButtonElement>('#hlf-date button[aria-label="Open calendar"]')?.click(), 350);
+  };
+
   // Tentative deliverables not yet added — each addable via +.
   const present = new Set(items.map((d) => d.title.toLowerCase().trim()));
   const suggestions = TENTATIVE_DELIVERABLES.filter(
@@ -79,14 +96,16 @@ export function SuggestedDeliverables({
       </div>
 
       {!plan.date && (
-        <button
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="w-full text-left mb-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 inline-flex items-center gap-2 hover:bg-amber-100"
+        <div
+          onClick={highlightDateField}
+          className="w-full text-left mb-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 flex items-center gap-2 hover:bg-amber-100 cursor-pointer"
         >
-          <AlertCircle className="w-4 h-4 shrink-0" /> Set the event date to
-          auto-schedule these — or set any date manually below.{" "}
-          <span className="underline">Set date</span>
-        </button>
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span className="flex-1">
+            Set the event date to auto-schedule these — or set any date manually below.{" "}
+            <button onClick={(e) => { e.stopPropagation(); openDatePicker(); }} className="underline font-medium hover:text-amber-900">Set date</button>
+          </span>
+        </div>
       )}
 
       <div className="rounded-lg border border-dashed border-gray-200 divide-y divide-gray-100">
