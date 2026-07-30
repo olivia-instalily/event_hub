@@ -3229,6 +3229,18 @@ export async function createVendor(name: string, category: string | null): Promi
   return { id, name: name.trim() };
 }
 
+/** Delete a directory vendor. Budget rows keep their denormalized vendor_name but unlink (vendor_id
+ *  → null); legacy engagement refs unlink; contracts/contacts for it are dropped (FKs). */
+export async function deleteVendor(id: string): Promise<void> {
+  await supabase.from('budget_line').update({ vendor_id: null }).eq('vendor_id', id);
+  await supabase.from('engagement').update({ vendor_id: null }).eq('vendor_id', id).then(() => {}, () => {});
+  await supabase.from('engagement_candidate').update({ vendor_id: null }).eq('vendor_id', id).then(() => {}, () => {});
+  await supabase.from('contract').delete().eq('vendor_id', id).then(() => {}, () => {});
+  await supabase.from('vendor_contact').delete().eq('vendor_id', id).then(() => {}, () => {});
+  const { error } = await supabase.from('vendor').delete().eq('id', id);
+  if (error) throw error;
+}
+
 // Events / series a vendor has been engaged on — for the directory's "used at" detail.
 export interface VendorUsage {
   engagementId: string; category: string | null; stage: string | null; contracted: boolean;

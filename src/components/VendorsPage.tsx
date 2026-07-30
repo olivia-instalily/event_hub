@@ -1,7 +1,7 @@
-import { Bookmark, LayoutGrid, List, Search, Star, Calendar as CalendarIcon, CheckCircle2 } from "lucide-react";
+import { Bookmark, LayoutGrid, List, Search, Star, Calendar as CalendarIcon, CheckCircle2, Trash2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@instalily/ui/select";
 import { useEffect, useState } from "react";
-import { listVendors, getVendorUsage, type VendorRow, type VendorUsage } from "../lib/db";
+import { listVendors, getVendorUsage, deleteVendor, type VendorRow, type VendorUsage } from "../lib/db";
 import { tagBadgeVariant } from "../lib/tags";
 import { Badge } from "@instalily/ui/badge";
 import { Input } from "@instalily/ui/input";
@@ -46,6 +46,13 @@ export function VendorsPage() {
     return next;
   });
 
+  const [confirmDelete, setConfirmDelete] = useState<VendorRow | null>(null);
+  const removeVendor = async (v: VendorRow) => {
+    setVendors((prev) => prev.filter((x) => x.id !== v.id));
+    setConfirmDelete(null);
+    await deleteVendor(v.id).catch(() => {});
+  };
+
   const categories = Array.from(new Set(vendors.map((v) => v.category).filter(Boolean))) as string[];
 
   const filtered = vendors.filter((v) => {
@@ -69,9 +76,14 @@ export function VendorsPage() {
     {
       id: "actions", header: "", enableSorting: false,
       cell: ({ row }) => (
-        <button onClick={() => toggleBookmark(row.original.id)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors" aria-label="Bookmark vendor">
-          <Bookmark className={`w-4 h-4 ${bookmarked.has(row.original.id) ? "fill-current text-gray-900" : "text-gray-400"}`} />
-        </button>
+        <div className="flex items-center justify-end">
+          <button onClick={() => toggleBookmark(row.original.id)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors" aria-label="Bookmark vendor">
+            <Bookmark className={`w-4 h-4 ${bookmarked.has(row.original.id) ? "fill-current text-gray-900" : "text-gray-400"}`} />
+          </button>
+          <button onClick={() => setConfirmDelete(row.original)} className="p-2 hover:bg-red-50 rounded-lg transition-colors text-gray-300 hover:text-red-500" aria-label="Delete vendor">
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       ),
     },
   ];
@@ -125,9 +137,14 @@ export function VendorsPage() {
             <div key={v.id} onClick={() => openVendor(v.id)} className={`bg-white rounded-2xl border p-6 hover:shadow-md transition-shadow cursor-pointer ${openId === v.id ? "border-gray-400 shadow-sm" : "border-border"}`}>
               <div className="flex items-start justify-between mb-3">
                 <Badge variant={tagBadgeVariant(v.category)}>{v.category ?? 'Uncategorized'}</Badge>
-                <button onClick={(e) => { e.stopPropagation(); toggleBookmark(v.id); }} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Bookmark vendor">
-                  <Bookmark className={`w-5 h-5 ${bookmarked.has(v.id) ? 'fill-current text-gray-900' : 'text-gray-400'}`} />
-                </button>
+                <div className="flex items-center">
+                  <button onClick={(e) => { e.stopPropagation(); toggleBookmark(v.id); }} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Bookmark vendor">
+                    <Bookmark className={`w-5 h-5 ${bookmarked.has(v.id) ? 'fill-current text-gray-900' : 'text-gray-400'}`} />
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(v); }} className="p-2 hover:bg-red-50 rounded-lg transition-colors text-gray-300 hover:text-red-500" aria-label="Delete vendor">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
               <h2 className="text-xl mb-1">{v.name ?? <span className="text-gray-400">Unnamed vendor</span>}</h2>
               {v.preferredList && (
@@ -160,6 +177,19 @@ export function VendorsPage() {
             enableColumnHiding={false}
             enableRowSelection={false}
           />
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" onClick={() => setConfirmDelete(null)}>
+          <div className="bg-white rounded-2xl border border-gray-200 max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg mb-1">Delete “{confirmDelete.name ?? "vendor"}”?</h3>
+            <p className="text-sm text-gray-600 mb-5">Removes it from the directory. Budget rows that used it keep the name but unlink — nothing about their cost changes.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmDelete(null)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+              <button onClick={() => removeVendor(confirmDelete)} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700">Delete</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
