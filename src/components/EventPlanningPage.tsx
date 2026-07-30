@@ -14,9 +14,8 @@ import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrate
 import { CSS } from "@dnd-kit/utilities";
 import {
   getEventPlanning, getCarriedLessons, updateEventTags, updateEvent, setEventDate, setEventFormat, attachLuma, unlinkLuma, createLumaEvent, resyncLumaEvent, resolveGcalMatch, pullEventFromLinear, syncEventToLinear, unlinkLinear, deleteEvent, resetEvent,
-  setMacroStage, addEngagement, setEngagementStage,
-  addCandidate, selectCandidate,
-  ensureVendor, setEventFocus,
+  setMacroStage,
+  setEventFocus,
   importVendors,
   addDeliverable, setDeliverableStatus, setDeliverableDueDate, setDeliverablePhase, deleteDeliverable, setEventBenchmarks, setDeliverableBenchmark,
   getPlanningSummary, saveOverviewSummary,
@@ -2972,21 +2971,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       const { name, role } = parsePersonRole(c.summary);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
-    } else if (c.home === "vendor") {
-      // External supplier → a real Vendors-tab engagement (category from the role, name as the
-      // selected candidate, any figure as the quote). "confirmed/booked" wording → Contracted.
-      const { name, role } = parsePersonRole(c.summary);
-      const { amount } = budgetParams(c);
-      const eng = await addEngagement(eventId, role || c.summary, amount);
-      // Ensure a directory vendor + link the candidate to it (vendor_id) so it shows on the
-      // Vendors page under this event — the Slack path used to leave vendor_id null.
-      const vId = await ensureVendor(name ?? c.summary, role || c.summary);
-      const cand = await addCandidate(eng.id, name ?? c.summary, amount, "", vId);
-      await selectCandidate(eng.id, cand.id);
-      if (/\bconfirm|locked in|\bbooked\b|signed|hired|going with|on board/i.test(`${c.summary} ${c.detail ?? ""} ${c.sourceQuote ?? ""}`)) {
-        await setEngagementStage(eng.id, "Contracted");
-      }
     }
+    // Vendors are no longer a capture home — a cost capture is home 'budget' and lands as a budget
+    // row above (loose line); the user can tag its optional vendor in place afterward.
     await confirmSlackCapture(c.id);
     return null;
   };
@@ -3038,7 +3025,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
   // Clicking a capture in the Slack inbox scrolls to (and rings) the section it affects.
   const jumpToCapture = (c: SlackCapture) => {
-    const id = c.home === "budget" ? "ov-budget" : (c.home === "person" || c.home === "vendor") ? "ov-staffing" : "ov-open";
+    const id = c.home === "budget" ? "ov-budget" : c.home === "person" ? "ov-staffing" : "ov-open";
     highlightField(id);
   };
 
@@ -3235,7 +3222,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
             <div id="ov-staffing" className="space-y-3 min-w-0 rounded-2xl">
               {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
                   reclassified in place via the card's "move" menu. */}
-              {[...capByHome("person"), ...capByHome("vendor")].map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
+              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
               <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} />
             </div>
           </div>

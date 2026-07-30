@@ -11,7 +11,7 @@ const SCHEMA = {
       items: {
         type: 'object', additionalProperties: false,
         properties: {
-          home: { enum: ['plan', 'person', 'vendor', 'open', 'budget'] },
+          home: { enum: ['plan', 'person', 'open', 'budget'] },
           summary: { type: 'string', description: 'short human label, e.g. "pre-pour wine", "Thurman (bar)"' },
           detail: { type: 'string', description: 'a bit more context, or "" ' },
           sourceQuote: { type: 'string', description: 'the exact phrase from the message, or ""' },
@@ -36,14 +36,13 @@ Read the surrounding messages to interpret the pin, but only treat messages that
 Route each thing you find into exactly ONE home:
 - plan   — a DECIDED flow/format/choice ("jazz then a singer", "playlist not a DJ", "pre-pour wine").
 - person — an INTERNAL team member filling a role ("Doug performs", "Olivia runs check-in"). A named colleague on the team.
-- vendor — an EXTERNAL supplier/service being engaged ("Thurman for the bar", "Acme Catering", "the AV company"). A hired provider, not a teammate. When unsure whether someone is staff or a hired vendor, prefer "vendor" if they provide a paid service (bar, catering, AV, photography, entertainment).
 - open   — a TENTATIVE/undecided CHOICE that still needs confirming ("maybe a mural", "robot dog if cost works", "leaning fortune teller over the robot dog"). A proposal to resolve, not an errand.
-- budget — a stated cost figure or budget decision ("$1,200", "aiming ~$14k").
+- budget — a cost figure/decision OR an EXTERNAL supplier we're engaging ("$1,200", "aiming ~$14k", "Thurman for the bar", "Acme Catering", "the AV company"). A paid provider (bar, catering, AV, photography, entertainment) is a budget item, not a teammate — name the supplier in the summary when there is one.
 
 Hard rules:
 - Tentative/undecided language (maybe / if / depending / might / leaning toward) → home "open", never plan/person/budget.
 - EventHub surfaces fields and decisions to confirm, NOT a personal task list. Do NOT capture bare errands or to-dos ("get quotes", "email the vendor", "follow up", "line up a bar hand", "chase the cost package"). If a message is purely an action item with nothing to confirm, skip it. Only capture the underlying decision when one is actually being made.
-- A hired external supplier we're going with → "vendor". Something still being decided (which supplier, whether to) → "open".
+- A hired external supplier we're going with → "budget" (name the supplier in the summary). Something still being decided (which supplier, whether to) → "open".
 - Prefer FEWER real captures over enumerating every mention. Skip small talk.
 - NEVER fabricate a value/name/cost/role that wasn't stated (don't turn "work the crowd" into "magician").
 - When a later message supersedes an earlier one, capture only the latest state.

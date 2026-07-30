@@ -6,7 +6,6 @@ import { confirmSlackCapture, dismissSlackCapture, editSlackCapture, type SlackC
 // person). Order mirrors the sections; label reads plainly in the menu.
 const HOME_MOVE: { home: CaptureHome; label: string }[] = [
   { home: "person", label: "Staffing" },
-  { home: "vendor", label: "Vendor" },
   { home: "budget", label: "Budget" },
   { home: "open", label: "Still open" },
   { home: "plan", label: "Plan" },
@@ -14,7 +13,6 @@ const HOME_MOVE: { home: CaptureHome; label: string }[] = [
 // How each home reads as a category chip on the card.
 const HOME_TAG: Record<CaptureHome, { label: string; cls: string }> = {
   person: { label: "Staffing", cls: "bg-blue-100 text-blue-700" },
-  vendor: { label: "Vendor", cls: "bg-amber-100 text-amber-700" },
   budget: { label: "Budget", cls: "bg-emerald-100 text-emerald-700" },
   open: { label: "Still open", cls: "bg-violet-100 text-violet-700" },
   plan: { label: "Plan", cls: "bg-gray-100 text-gray-600" },

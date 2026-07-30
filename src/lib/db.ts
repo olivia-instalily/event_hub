@@ -2034,7 +2034,9 @@ export async function unlinkSlackChannel(eventId: string): Promise<void> {
 // A capture is one extracted planning fact routed to a "home". The Slack pin pipeline writes them
 // as `proposed`; the Overview surfaces the proposed ones for confirm/edit/dismiss. Homes:
 //   plan → run-of-show (Deliverables), person → Staffing/People, open → Open·next-up, budget → Budget.
-export type CaptureHome = 'plan' | 'person' | 'vendor' | 'open' | 'budget';
+// Vendors are no longer a routing target — a cost capture lands as a budget row (with an optional
+// vendor field). Any legacy 'vendor' home normalizes to 'budget' at read time.
+export type CaptureHome = 'plan' | 'person' | 'open' | 'budget';
 export interface SlackCapture {
   id: string;
   home: CaptureHome;
@@ -2057,7 +2059,7 @@ export async function listSlackCaptures(eventId: string): Promise<SlackCapture[]
     .order('created_at', { ascending: true });
   if (error) { console.warn('listSlackCaptures', error.message); return []; }
   return (data ?? []).map((r: any) => ({
-    id: r.id, home: r.home, summary: r.summary, detail: r.detail ?? null, status: r.status,
+    id: r.id, home: (r.home === 'vendor' ? 'budget' : r.home) as CaptureHome, summary: r.summary, detail: r.detail ?? null, status: r.status,
     sourceRef: r.source_ref ?? null, sourceQuote: r.source_quote ?? null,
     flags: (r.flags as Record<string, unknown>) ?? {}, createdAt: r.created_at,
   }));

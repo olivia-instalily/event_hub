@@ -1,8 +1,8 @@
 // One extracted planning fact routed to a single "home" on the event page.
-export type Home = 'plan' | 'person' | 'vendor' | 'open' | 'budget';
-export const HOME_LABEL: Record<Home, string> = { plan: 'Plan', person: 'Who', vendor: 'Vendor', open: 'Still open', budget: 'Budget' };
+export type Home = 'plan' | 'person' | 'open' | 'budget';
+export const HOME_LABEL: Record<Home, string> = { plan: 'Plan', person: 'Who', open: 'Still open', budget: 'Budget' };
 // Order homes read in the ephemeral.
-const HOME_ORDER: Home[] = ['plan', 'person', 'vendor', 'open', 'budget'];
+const HOME_ORDER: Home[] = ['plan', 'person', 'open', 'budget'];
 
 export interface SlackMsg { ts: string; text: string; user?: string; thread_ts?: string }
 export interface EventRow { id: string; name?: string; event_date?: string | null; slack_channel?: string | null }
