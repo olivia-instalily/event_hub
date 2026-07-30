@@ -20,7 +20,7 @@ function money(n: number | null | undefined, currency = "USD"): string {
 
 const STATUS_LABEL: Record<BudgetStatus, string> = { estimate: "Estimate", quoted: "Quoted", paid: "Paid" };
 const HEADER_COLOR: Record<string, string> = {
-  actual: "text-green-700", estimate: "text-gray-500", range: "text-amber-600", empty: "text-gray-300",
+  paid: "text-green-700", quoted: "text-blue-600", estimate: "text-gray-500", empty: "text-gray-300",
 };
 // Per-row status color — the left-edge dot on each row matches its status tile's color.
 const STATUS_DOT: Record<BudgetStatus, string> = { estimate: "bg-gray-400", quoted: "bg-blue-400", paid: "bg-green-500" };
@@ -87,7 +87,7 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
 
   // ── category helpers ───────────────────────────────────────────────────────
   const persistCats = async (next: BudgetCategory[]) => { setCategories(next); await setBudgetCategories(budget.id, next).catch(() => {}); };
-  const addCategory = () => persistCats([...categories, { id: newCatId(), name: "New category", estimate: null, order: categories.length }]);
+  const addCategory = () => persistCats([...categories, { id: newCatId(), name: "New category", order: categories.length }]);
   const editCategory = (id: string, f: Partial<BudgetCategory>) => persistCats(categories.map((c) => (c.id === id ? { ...c, ...f } : c)));
   const removeCategory = async (id: string) => {
     // Never orphan rows: reassign this category's rows to loose (no category) first.
@@ -215,12 +215,7 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
             {categories.map((cat) => {
               const rows = rowsIn(cat.id);
               const h = categoryHeader(rows.map((l) => ({ status: l.status, amount: l.confirmedAmount })));
-              const headerText =
-                h.kind === "empty" ? "—"
-                : h.kind === "range" ? (h.value === h.rangeHigh ? money(h.value, cur) : `${money(h.value, cur)}–${money(h.rangeHigh, cur)}`)
-                : money(h.value, cur);
-              // Estimate is a goal — when there's an actual, show it measured against the est (mini vs-target).
-              const vsEst = cat.estimate != null && h.kind === "actual" && h.value != null ? h.value - cat.estimate : null;
+              const headerText = h.value == null ? "—" : money(h.value, cur);
               return (
                 <SortableCat key={cat.id} id={"cat:" + cat.id}>
                   {(handle) => (
@@ -234,28 +229,8 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
                           onBlur={(e) => editCategory(cat.id, { name: e.target.value.trim() || "Category" })}
                           className="flex-1 min-w-0 bg-transparent font-medium text-gray-900 focus:outline-none"
                         />
-                        {/* Estimate = the goal for this category. Always an editable "est ___"; the
-                            actual number to its right is measured against it (mini vs-target). */}
-                        <span className="inline-flex items-center gap-1.5 text-sm text-gray-400">
-                          est
-                          <input
-                            key={`${cat.id}-est`}
-                            type="number"
-                            defaultValue={cat.estimate ?? ""}
-                            onBlur={(e) => editCategory(cat.id, { estimate: e.target.value.trim() === "" ? null : Number(e.target.value) })}
-                            placeholder="—"
-                            className="w-20 text-right border border-gray-200 rounded px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-300"
-                          />
-                        </span>
-                        <span className={`text-sm font-semibold tabular-nums ${HEADER_COLOR[h.kind]}`}>
-                          {headerText}
-                          {h.pendingCount > 0 && <span className="ml-1 font-normal text-amber-600">· +{h.pendingCount} still quoting</span>}
-                        </span>
-                        {vsEst != null && (
-                          <span className={`text-[13px] shrink-0 ${vsEst > 0 ? "text-red-600" : vsEst < 0 ? "text-green-600" : "text-gray-400"}`}>
-                            {vsEst > 0 ? `${money(vsEst, cur)} over est` : vsEst < 0 ? `${money(-vsEst, cur)} under est` : "on est"}
-                          </span>
-                        )}
+                        {/* The category number: sum of its rows at the most advanced stage, colored by stage. */}
+                        <span className={`text-sm font-semibold tabular-nums ${HEADER_COLOR[h.kind]}`}>{headerText}</span>
                         <button onClick={() => removeCategory(cat.id)} title="Remove category (rows move to loose)" className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
                       </div>
                       {/* Rows */}
