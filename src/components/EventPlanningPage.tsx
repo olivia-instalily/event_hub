@@ -3887,7 +3887,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 )}
                 {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}
                 {eventSubTab === "budget" && (plan.budget
-                  ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} />
+                  ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} location={plan.location} />
                   : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
                 {eventSubTab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
               </div>
@@ -3922,7 +3922,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
         {tab === "budget" && (plan.budget
           ? <div className="space-y-6">
               <BudgetProjections plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
-              <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} />
+              <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} location={plan.location} />
             </div>
           : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
         {tab === "deliverables" && (

@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { Plus, Trash2, ArrowUp, ArrowDown, Check } from "lucide-react";
 import {
   type PlanningBudget, type BudgetLineTracker, type BudgetStatus, type BudgetApproval,
+  type VendorRow, type VendorSuggestion,
   BUDGET_STATUSES, getBudgetApproval, setBudgetTarget, setEventBudgetTarget,
   setBudgetCategories, addBudgetRow, updateBudgetRow, deleteBudgetLine,
+  suggestVendors, resolveVendor, createVendor,
 } from "../lib/db";
 import { categoryHeader, budgetRollup, type BudgetCategory } from "../lib/budgetModel";
 import { StatCard } from "./StatCard";
@@ -22,8 +24,8 @@ const newCatId = () => "cat-" + (globalThis.crypto?.randomUUID?.() ?? Math.rando
 // The single cost store for an event: optional categories (each with an optional estimate) grouping
 // vendor rows, plus loose lines with no category. Category headers resolve via the ladder
 // (categoryHeader); the top tiles roll up per-status across everything (budgetRollup).
-export function BudgetTracker({ budget, eventId, eventBudgetTarget = null }: {
-  budget: PlanningBudget; eventId: string; eventBudgetTarget?: number | null;
+export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, location = null }: {
+  budget: PlanningBudget; eventId: string; eventBudgetTarget?: number | null; location?: string | null;
 }) {
   const cur = budget.currency;
   const [categories, setCategories] = useState<BudgetCategory[]>(
@@ -62,6 +64,7 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null }: {
       ...(f.confirmedAmount !== undefined ? { amount: f.confirmedAmount } : {}),
       ...(f.status !== undefined ? { status: f.status } : {}),
       ...(f.categoryId !== undefined ? { categoryId: f.categoryId } : {}),
+      ...(f.vendorId !== undefined ? { vendorId: f.vendorId } : {}),
       ...(f.vendorName !== undefined ? { vendorName: f.vendorName } : {}),
       ...(f.docUrl !== undefined ? { link: f.docUrl } : {}),
     }).catch(() => {});
@@ -181,7 +184,7 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null }: {
               </div>
               {/* Rows */}
               <div className="divide-y divide-gray-100">
-                {rows.map((l) => <Row key={l.id} line={l} cur={cur} onEdit={editRow} onRemove={removeRow} />)}
+                {rows.map((l) => <Row key={l.id} line={l} cur={cur} category={cat.name} location={location} onEdit={editRow} onRemove={removeRow} />)}
               </div>
               <button onClick={() => addRow(cat.id)} className="w-full text-left px-4 py-2 text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> add vendor row</button>
             </div>
@@ -194,7 +197,7 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null }: {
         <div className="mt-5">
           <p className="text-[13px] font-medium text-gray-400 mb-1.5">Loose lines</p>
           <div className="rounded-xl border border-gray-200 divide-y divide-gray-100">
-            {rowsIn(null).map((l) => <Row key={l.id} line={l} cur={cur} onEdit={editRow} onRemove={removeRow} />)}
+            {rowsIn(null).map((l) => <Row key={l.id} line={l} cur={cur} category={null} location={location} onEdit={editRow} onRemove={removeRow} />)}
             <button onClick={() => addRow(null)} className="w-full text-left px-4 py-2 text-[13px] text-gray-500 hover:text-gray-900 inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> add line</button>
           </div>
         </div>
@@ -224,10 +227,10 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null }: {
   }
 }
 
-// One budget row: label · optional vendor · status · optional link · amount. Vendor is a plain field
-// here; Task 6 upgrades it to a directory-backed combobox.
-function Row({ line, cur, onEdit, onRemove }: {
-  line: BudgetLineTracker; cur: string;
+// One budget row: label · optional vendor · status · optional link · amount. The vendor field feeds
+// the global directory (autocomplete + near-match dedup) via VendorField.
+function Row({ line, cur, category, location, onEdit, onRemove }: {
+  line: BudgetLineTracker; cur: string; category: string | null; location: string | null;
   onEdit: (id: string, f: Partial<BudgetLineTracker>) => void; onRemove: (id: string) => void;
 }) {
   return (
@@ -238,12 +241,7 @@ function Row({ line, cur, onEdit, onRemove }: {
         placeholder="What is it?"
         className="flex-1 min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
       />
-      <input
-        defaultValue={line.vendorName ?? ""}
-        onBlur={(e) => e.target.value !== (line.vendorName ?? "") && onEdit(line.id, { vendorName: e.target.value.trim() || null })}
-        placeholder="vendor (optional)"
-        className="w-32 bg-transparent text-[13px] text-gray-500 focus:outline-none"
-      />
+      <VendorField line={line} category={category} location={location} onEdit={onEdit} />
       <select
         value={line.status}
         onChange={(e) => onEdit(line.id, { status: e.target.value as BudgetStatus })}
@@ -265,6 +263,58 @@ function Row({ line, cur, onEdit, onRemove }: {
         className="w-24 text-right text-sm border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-2 focus:ring-gray-300"
       />
       <button onClick={() => onRemove(line.id)} title="Remove" className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
+    </div>
+  );
+}
+
+// Vendor field for a row: a text input backed by directory suggestions (datalist). On commit it
+// resolves the typed name against the directory — exact match links silently, a near match prompts
+// ("use one, or create new?"), no match creates a new directory vendor. Only rows with a vendor feed
+// the directory; clearing it unlinks.
+function VendorField({ line, category, location, onEdit }: {
+  line: BudgetLineTracker; category: string | null; location: string | null;
+  onEdit: (id: string, f: Partial<BudgetLineTracker>) => void;
+}) {
+  const [name, setName] = useState(line.vendorName ?? "");
+  const [near, setNear] = useState<VendorRow[] | null>(null);
+  const [suggestions, setSuggestions] = useState<VendorSuggestion[]>([]);
+  useEffect(() => { void suggestVendors(category, location).then(setSuggestions).catch(() => {}); }, [category, location]);
+  const listId = `vend-sugg-${line.id}`;
+
+  const commit = async () => {
+    const n = name.trim();
+    if (n === (line.vendorName ?? "")) return;
+    if (!n) { onEdit(line.id, { vendorId: null, vendorName: null }); return; }
+    const res = await resolveVendor(n);
+    if (res.kind === "exact") { setName(res.name); onEdit(line.id, { vendorId: res.id, vendorName: res.name }); }
+    else if (res.kind === "near") { setNear(res.matches); onEdit(line.id, { vendorName: n }); } // await the user's choice
+    else { const v = await createVendor(n, category); onEdit(line.id, { vendorId: v.id, vendorName: v.name }); }
+  };
+  const useExisting = (v: VendorRow) => { setName(v.name ?? ""); setNear(null); onEdit(line.id, { vendorId: v.id, vendorName: v.name ?? name }); };
+  const createNew = async () => { const v = await createVendor(name.trim(), category); setNear(null); onEdit(line.id, { vendorId: v.id, vendorName: v.name }); };
+
+  return (
+    <div className="relative w-32">
+      <input
+        value={name}
+        list={listId}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={commit}
+        placeholder="vendor (optional)"
+        className="w-full bg-transparent text-[13px] text-gray-500 focus:outline-none"
+      />
+      <datalist id={listId}>
+        {suggestions.map((s, i) => <option key={i} value={s.name} />)}
+      </datalist>
+      {near && (
+        <div className="absolute z-20 left-0 top-full mt-1 w-56 rounded-lg border border-amber-200 bg-white shadow-lg p-2 text-[13px]">
+          <p className="text-amber-700 mb-1">“{name.trim()}” looks similar to:</p>
+          {near.map((v) => (
+            <button key={v.id} onClick={() => useExisting(v)} className="block w-full text-left px-2 py-1 rounded hover:bg-amber-50 text-gray-700">{v.name}</button>
+          ))}
+          <button onClick={createNew} className="block w-full text-left px-2 py-1 rounded hover:bg-gray-50 text-gray-500 mt-0.5 border-t border-gray-100">Create new “{name.trim()}”</button>
+        </div>
+      )}
     </div>
   );
 }

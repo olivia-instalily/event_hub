@@ -3209,6 +3209,24 @@ export async function ensureVendor(name: string, category: string | null): Promi
   return id;
 }
 
+// Resolve a typed vendor name against the directory for a budget row: link an exact match silently,
+// prompt on a near match, or signal it's brand-new.
+export type VendorResolution =
+  | { kind: 'exact'; id: string; name: string }
+  | { kind: 'near'; matches: VendorRow[] }
+  | { kind: 'new' };
+export async function resolveVendor(name: string): Promise<VendorResolution> {
+  const { exact, near } = await matchVendors(name);
+  if (exact) return { kind: 'exact', id: exact.id, name: exact.name ?? name.trim() };
+  if (near.length) return { kind: 'near', matches: near };
+  return { kind: 'new' };
+}
+/** Create a directory vendor (used when the user confirms a typed name is new). Returns id + name. */
+export async function createVendor(name: string, category: string | null): Promise<{ id: string; name: string }> {
+  const id = await ensureVendor(name, category);
+  return { id, name: name.trim() };
+}
+
 // Events / series a vendor has been engaged on — for the directory's "used at" detail.
 export interface VendorUsage {
   engagementId: string; category: string | null; stage: string | null; contracted: boolean;
