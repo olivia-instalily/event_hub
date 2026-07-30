@@ -48,10 +48,16 @@ export function SuggestedDeliverables({
     const clear = () => { el.style.outline = ""; el.style.outlineOffset = ""; el.style.borderRadius = ""; };
     setTimeout(() => document.addEventListener("mousedown", clear, { once: true }), 0);
   };
-  // "Set date" → highlight the field AND pop its calendar open (click the DateEdit's calendar button).
+  // "Set date" → highlight the field AND pop its calendar open. Focusing the DateEdit input opens the
+  // picker when there's no date yet (its onFocus does); fall back to clicking the calendar button.
   const openDatePicker = () => {
     highlightDateField();
-    setTimeout(() => document.querySelector<HTMLButtonElement>('#hlf-date button[aria-label="Open calendar"]')?.click(), 350);
+    setTimeout(() => {
+      const root = document.getElementById("hlf-date");
+      const input = root?.querySelector<HTMLInputElement>("input");
+      if (input) input.focus();
+      else root?.querySelector<HTMLButtonElement>('button[aria-label="Open calendar"]')?.click();
+    }, 350);
   };
 
   // Tentative deliverables not yet added — each addable via +.
