@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2, ArrowUp, ArrowDown, Check } from "lucide-react";
+import { Plus, Trash2, ArrowUp, ArrowDown, Check, ExternalLink } from "lucide-react";
 import {
   type PlanningBudget, type BudgetLineTracker, type BudgetStatus, type BudgetApproval,
   type VendorRow, type VendorSuggestion,
@@ -19,6 +19,8 @@ const STATUS_LABEL: Record<BudgetStatus, string> = { estimate: "Estimate", quote
 const HEADER_COLOR: Record<string, string> = {
   actual: "text-green-700", estimate: "text-gray-500", range: "text-amber-600", empty: "text-gray-300",
 };
+// Per-row status color — the left-edge dot on each row matches its status tile's color.
+const STATUS_DOT: Record<BudgetStatus, string> = { estimate: "bg-gray-400", quoted: "bg-blue-400", paid: "bg-green-500" };
 const newCatId = () => "cat-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 14));
 
 // The single cost store for an event: optional categories (each with an optional estimate) grouping
@@ -111,35 +113,39 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
     <BudgetDropArea onFile={setDropFile} className="bg-white rounded-2xl border border-border p-6">
       {importNote && <p className="text-[15px] text-gray-500 inline-flex items-center gap-1 mb-3"><Check className="w-3.5 h-3.5 text-green-600" /> {importNote}</p>}
 
-      {/* Status tiles + vs-target */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
-        <StatCard label="Estimate" value={money(roll.estimate, cur)} accent="ring-gray-300" />
-        <StatCard label="Quoted" value={money(roll.quoted, cur)} accent="ring-blue-400" />
-        <StatCard label="Paid" value={money(roll.paid, cur)} accent="ring-green-400" />
-        <div id="budget-target-field">
-          <StatCard
-            label="vs target"
-            value={
-              <span className="inline-flex items-baseline gap-1">
-                {money(total, cur)}
-                <input
-                  type="number"
-                  value={targetInput}
-                  onChange={(e) => setTargetInput(e.target.value)}
-                  onBlur={(e) => saveTarget(e.target.value)}
-                  placeholder="target"
-                  className="w-20 text-sm text-right border border-border rounded px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-300"
-                />
-              </span>
-            }
-            sub={target != null && (
-              <span className={`inline-flex items-center gap-0.5 ${varText}`}>
-                {overTarget ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />}
-                {money(Math.abs(target - total), cur)} {overTarget ? "over" : "under"}
-              </span>
-            )}
-          />
-        </div>
+      {/* Status tiles + vs-target. Lighter rings so the color reads as a hint, not a warning. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-3">
+        <StatCard label="Estimate" value={money(roll.estimate, cur)} accent="ring-gray-200" />
+        <StatCard label="Quoted" value={money(roll.quoted, cur)} accent="ring-blue-200" />
+        <StatCard label="Paid" value={money(roll.paid, cur)} accent="ring-green-200" />
+        <StatCard
+          label="vs target"
+          value={target == null ? <span className="text-gray-300">—</span> : money(total, cur)}
+          sub={target != null && (
+            <span className={`inline-flex items-center gap-0.5 ${varText}`}>
+              {overTarget ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />}
+              {money(Math.abs(target - total), cur)} {overTarget ? "over" : "under"}
+            </span>
+          )}
+        />
+      </div>
+
+      {/* Target — its own field (kept separate from the tiles, as before). */}
+      <div id="budget-target-field" className="flex items-center justify-end gap-2 text-sm mb-5">
+        <span className="text-gray-500">Target</span>
+        <input
+          type="number"
+          value={targetInput}
+          onChange={(e) => setTargetInput(e.target.value)}
+          onBlur={(e) => saveTarget(e.target.value)}
+          placeholder="—"
+          className="w-28 text-right border border-border rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-gray-300"
+        />
+        {target != null && (
+          <span className={total > target ? "text-red-600" : "text-gray-500"}>
+            {total > target ? `${money(total - target, cur)} over` : `${money(target - total, cur)} left`}
+          </span>
+        )}
       </div>
 
       {empty && (
@@ -165,9 +171,12 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
                   onBlur={(e) => editCategory(cat.id, { name: e.target.value.trim() || "Category" })}
                   className="flex-1 min-w-0 bg-transparent font-medium text-gray-900 focus:outline-none"
                 />
+                {/* One editable estimate. When a category has gone actual it reads "est was" (the
+                    original estimate stays editable) — no separate fill-in area. */}
                 <span className="inline-flex items-center gap-1.5 text-sm text-gray-400">
-                  est
+                  {h.kind === "actual" ? "est was" : "est"}
                   <input
+                    key={`${cat.id}-est`}
                     type="number"
                     defaultValue={cat.estimate ?? ""}
                     onBlur={(e) => editCategory(cat.id, { estimate: e.target.value.trim() === "" ? null : Number(e.target.value) })}
@@ -177,7 +186,6 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
                 </span>
                 <span className={`text-sm font-semibold tabular-nums ${HEADER_COLOR[h.kind]}`}>
                   {headerText}
-                  {h.estWas != null && <span className="ml-1 font-normal text-gray-400">· est was {money(h.estWas, cur)}</span>}
                   {h.pendingCount > 0 && <span className="ml-1 font-normal text-amber-600">· +{h.pendingCount} still quoting</span>}
                 </span>
                 <button onClick={() => removeCategory(cat.id)} title="Remove category (rows move to loose)" className="text-gray-300 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
@@ -235,6 +243,8 @@ function Row({ line, cur, category, location, onEdit, onRemove }: {
 }) {
   return (
     <div className="flex items-center gap-2 px-4 py-2">
+      {/* Status dot — same color as the status tile (green paid · blue quoted · gray estimate). */}
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[line.status]}`} title={STATUS_LABEL[line.status]} />
       <input
         defaultValue={line.label ?? ""}
         onBlur={(e) => e.target.value !== (line.label ?? "") && onEdit(line.id, { label: e.target.value })}
@@ -249,12 +259,17 @@ function Row({ line, cur, category, location, onEdit, onRemove }: {
       >
         {BUDGET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
       </select>
-      <input
-        defaultValue={line.docUrl ?? ""}
-        onBlur={(e) => e.target.value !== (line.docUrl ?? "") && onEdit(line.id, { docUrl: e.target.value.trim() || null })}
-        placeholder="link"
-        className="w-24 bg-transparent text-[13px] text-blue-600 focus:outline-none truncate"
-      />
+      <div className="flex items-center gap-1 w-28">
+        <input
+          defaultValue={line.docUrl ?? ""}
+          onBlur={(e) => e.target.value !== (line.docUrl ?? "") && onEdit(line.id, { docUrl: e.target.value.trim() || null })}
+          placeholder="link"
+          className="flex-1 min-w-0 bg-transparent text-[13px] text-blue-600 focus:outline-none truncate"
+        />
+        {line.docUrl && (
+          <a href={line.docUrl} target="_blank" rel="noreferrer" title="Open link" className="text-blue-500 hover:text-blue-700 shrink-0"><ExternalLink className="w-3.5 h-3.5" /></a>
+        )}
+      </div>
       <input
         type="number"
         defaultValue={line.confirmedAmount ?? ""}
