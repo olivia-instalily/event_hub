@@ -2539,7 +2539,7 @@ function parseRunOfShow(text: string): { time: string; title: string }[] {
 // On the wrapped view, "what would make this complete" + a drop-to-fill enrichment target.
 // Lists fields a complete record of this category has but this backfilled event lacks; dropping a
 // doc (e.g. a budget sheet) extracts it and fills only the gaps. Resolved fields drop off the list.
-function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; eventId: string; onApplied: () => void }) {
+function CompletenessPanel({ plan, eventId, onApplied, onResolveGap }: { plan: EventPlanning; eventId: string; onApplied: () => void; onResolveGap?: (key: string) => boolean }) {
   const focus = eventFocus(plan.tags, plan.format, plan.focusOverride);
   const fields = completenessFields(plan);
   const gaps = fields.filter((f) => !f.present);
@@ -2611,9 +2611,23 @@ function CompletenessPanel({ plan, eventId, onApplied }: { plan: EventPlanning; 
       {!complete ? (
         <>
           <p className="text-[12px] text-amber-700 mb-2">Still missing for a complete {focus === "neither" ? "community" : focus} record — drop or click to add docs or a whole folder (debrief, budget sheet, brief); only the gaps fill in. <button onClick={(e) => { e.stopPropagation(); folderRef.current?.click(); }} className="underline hover:text-amber-900">Choose a folder</button></p>
-          <ul className="space-y-1">
-            {gaps.map((g) => <li key={g.key} className="flex items-center gap-2 text-[13px] text-amber-900"><span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />{g.label}</li>)}
-          </ul>
+          {/* Each gap is its own clickable block: clicking jumps to where the field is entered
+              (onResolveGap); when there's no manual editor for it, we fall back to opening the doc
+              picker so it can still be filled from a document. stopPropagation so the block's click
+              doesn't also trigger the panel-level dropzone click. */}
+          <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+            {gaps.map((g) => (
+              <button
+                key={g.key}
+                onClick={() => { if (!onResolveGap || !onResolveGap(g.key)) fileRef.current?.click(); }}
+                className="group w-full flex items-center gap-2 rounded-lg border border-amber-200 bg-white/60 px-3 py-2 text-left hover:bg-amber-100 transition-colors"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                <span className="flex-1 min-w-0 text-[13px] text-amber-900 group-hover:underline">{g.label}</span>
+                <ChevronRight className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              </button>
+            ))}
+          </div>
         </>
       ) : (
         <p className="text-[12px] text-amber-700">This record looks complete. Drop or click to add docs or a folder, or correct anything. <button onClick={(e) => { e.stopPropagation(); folderRef.current?.click(); }} className="underline hover:text-amber-900">Choose a folder</button></p>
@@ -4188,6 +4202,18 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     budget: { title: "Review budget targets", blurb: "Set targets from comparable past events.", Icon: DollarSign, go: () => { onOpenBudget(); reviewBudgetField(); } },
     timeline: { title: "Check timeline", blurb: "Add dated deliverables.", Icon: ClipboardList, go: onOpenTimeline },
   };
+  // Resolve a completeness gap by jumping to where it's entered manually. Returns false when this
+  // view has no manual editor for the field (outcome / run-of-show / vendors / roles) — the panel
+  // then falls back to its doc drop/picker so the gap can still be filled from a document.
+  const resolveGap = (key: string): boolean => {
+    switch (key) {
+      case "date": highlightField("hlf-date"); return true;
+      case "location": highlightField("hlf-location"); return true;
+      case "turnout": onOpenPeople(); return true;
+      case "budget": onOpenBudget(); return true;
+      default: return false;
+    }
+  };
   const openFlags = visibleFlags(plan);
   // "Anything open" = a setup gap OR any proposed Slack capture (the Open card hosts the From-Slack
   // inbox of all captures). Drives the top-slot choice.
@@ -4249,7 +4275,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       {/* Past or locked → "what would make this a complete record" (+ drop-to-fill), so any
           done event can be finished into a complete record. Upcoming → the GCal prompt. */}
       {(locked || temporal === "past" || pastByDate) ? (
-        <CompletenessPanel plan={plan} eventId={eventId} onApplied={onApplied} />
+        // "Complete record" is a post-phase concern — only in the Post view (not planning / day-of).
+        selectedView === "post" ? <CompletenessPanel plan={plan} eventId={eventId} onApplied={onApplied} onResolveGap={resolveGap} /> : null
       ) : (
         // Always mount GCalSync in the active planning view — it self-hides (returns null) when
         // there's nothing left to sync, but staying mounted lets the post-sync "Added ✓ / synced ✓"
@@ -4274,9 +4301,10 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           consistent across planning / day-of / post instead of flags jumping above the timeline. */}
       <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
 
-      {/* Classic setup-flag cards — kept for the phase views (day-before / day-of / post).
-          The planning view folds these into "Open · next up" instead (below). */}
-      {!planningActive && (openFlags.length > 0 || linearOpenItem) && (
+      {/* Classic setup-flag cards — kept for the day-before / day-of views. The planning view folds
+          these into "Open · next up" (below); the Post view drops them entirely — the "complete
+          record" block's clickable gap blocks are the open items there (no duplicate list). */}
+      {!planningActive && selectedView !== "post" && (openFlags.length > 0 || linearOpenItem) && (
         <div className="space-y-2">
           {openFlags.map((key) => {
             const m = SETUP_META[key];
@@ -4915,7 +4943,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 )}
               </div>
               <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
-              <LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} />
+              <span id="hlf-location" className="inline-flex items-center rounded-md"><LocationEdit value={plan.location} onChange={(location) => { setPlan((p) => (p ? { ...p, location } : p)); void updateEvent(eventId, { location }); }} /></span>
               <button id="hlf-headcount" onClick={() => goPeople('all')} className="flex items-center gap-1.5 hover:text-gray-900 text-left">
                 <Users className="w-4 h-4" /><span className={headcount === "—" ? "text-gray-400" : ""}>{headcount === "—" ? "Expected" : headcount}</span>
               </button>
@@ -4983,7 +5011,11 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 {eventSubTab === "record" && (
                   <div className="space-y-6">
                     {/* gaps + drop-to-fill (budget, turnout, …) — what would make this record complete */}
-                    <CompletenessPanel plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
+                    <CompletenessPanel plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} onResolveGap={(key) => {
+                      if (key === "turnout") { setEventSubTab("people"); return true; }
+                      if (key === "budget" || key === "vendors") { setEventSubTab("budget"); return true; }
+                      return false; // date/location/outcome/agenda/roles → doc picker fallback
+                    }} />
                     <LockedRundown plan={plan} assignedTarget={plan.eventBudgetTarget ?? plan.budget?.targetAmount ?? null} onOpenPeople={() => setEventSubTab("people")} onOpenBudget={() => setEventSubTab("budget")} onApplied={() => setReload((r) => r + 1)} onFocusChange={(f) => setPlan((p) => (p ? { ...p, focusOverride: f } : p))} />
                   </div>
                 )}
