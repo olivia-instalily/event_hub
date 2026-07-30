@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { TemplateView, PhaseRail, enrichPhases, PHASE_COLORS, tLabel as railLabel } from "./TemplateView";
+import { TemplateView, enrichPhases, PHASE_COLORS } from "./TemplateView";
 import { SourceMaterials } from "./SourceMaterials";
 import { SlackCaptureCard } from "./SlackCaptureCard";
 import {
@@ -1520,13 +1520,12 @@ function BenchmarkDropZone({ benchmarkId, children }: { benchmarkId: string; chi
   return <div ref={setNodeRef} className={`rounded-lg transition-shadow ${isOver ? "ring-2 ring-primary/50" : ""}`}>{children}</div>;
 }
 
-function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; benchmarks: Benchmark[]; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
+function Deliverables({ eventId, initial, phases, benchmarks, markers, currentKey, jumpId, linearProjectUrl, onLinearSynced, onOpenReflection }: { eventId: string; initial: Deliverable[]; phases: EventPhase[]; benchmarks: Benchmark[]; markers: OvMarker[]; currentKey: string; jumpId?: string | null; linearProjectUrl?: string | null; onLinearSynced?: () => void; onOpenReflection?: () => void }) {
   const [items, setItems] = useState(initial);
   const [adding, setAdding] = useState<string | null>(null); // phase being added to
   const [title, setTitle] = useState("");
   const [owner, setOwner] = useState("");
   const [due, setDueInput] = useState("");
-  const [activePhase, setActivePhase] = useState<string | null>(null);
   // Tag filter — single-select toggle (click same tag to clear).
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -1587,8 +1586,12 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
     const phaseKey = (PHASES as readonly string[]).includes(name)
       ? name
       : PHASES.find((k) => PHASE_LABEL[k] === name) ?? name;
-    setActivePhase(name);
     groupRefs.current[phaseKey]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  // Timeline click on Deliverables → scroll to the phase or benchmark section (not a view switch).
+  const jumpToMarker = (key: string) => {
+    if (key.startsWith("phase:")) jumpToGroup(key.slice("phase:".length));
+    else if (key.startsWith("bm:")) document.getElementById(`delsec-bm-${key.slice("bm:".length)}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   // Per-phase completion (done deliverables / total) — drives the rail's segment fills + check-offs.
   // rp.name may be a CAPITALIZED display label ("Planning") while d.phase is a lowercase key
@@ -1601,11 +1604,8 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
     const grp = items.filter((d) => d.phase === phaseKey);
     railProgress[rp.name] = grp.length ? grp.filter((d) => d.status === "Done").length / grp.length : 0;
   }
-  const railOffs = railPhases.flatMap((p) => [p.start, p.end]).filter((n): n is number => n != null);
-  const railUseTime = railPhases.filter((p) => p.start != null).length >= 2;
-  // Measure the combined sticky header (rail + bulk bar) so a jumped-to group lands just below it.
+  // Measure the sticky bulk-select bar so a jumped-to group lands just below it.
   const stickyRef = useRef<HTMLDivElement | null>(null);
-  const anchorRef = useRef<HTMLDivElement | null>(null); // timeline's original (un-stuck) position
   const [headerH, setHeaderH] = useState(96);
   useEffect(() => {
     const el = stickyRef.current;
@@ -1766,11 +1766,7 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
     <div className="bg-white rounded-2xl border border-border p-6">
       {/* Timeline header + progress scroll away; the rail and bulk-select bar pin together below
           as ONE sticky header with a single bottom divider (no double line). */}
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2 min-w-0">
-          {railPhases.length > 0 && <h3 className="text-sm font-medium text-gray-700 shrink-0">Timeline</h3>}
-          {railPhases.length > 0 && railUseTime && railOffs.length > 0 && <span className="text-[15px] text-gray-400 truncate">{railLabel(Math.min(...railOffs, 0), Math.max(...railOffs, 0))} · click a phase to jump</span>}
-        </div>
+      <div className="flex items-center justify-end gap-3 mb-3">
         <LinearSync eventId={eventId} projectUrl={linearProjectUrl} count={total} onSynced={onLinearSynced} />
       </div>
       <div className="flex items-center justify-between mb-1">
@@ -1801,15 +1797,15 @@ function Deliverables({ eventId, initial, phases, benchmarks, jumpId, linearProj
         </div>
       )}
 
-      {/* Anchor marking the timeline's natural position — clicking the bar jumps back here. */}
-      <div ref={anchorRef} className="h-0 scroll-mt-4" />
-      {/* Combined sticky header: timeline rail + bulk-select bar share one bottom divider. */}
+      {/* Timeline — identical to the Overview timeline (phases + benchmark sub-dots + NOW). Here a
+          click JUMPS to that section instead of previewing a phase view. */}
+      {markers.length > 0 && (
+        <div className="mb-4">
+          <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={currentKey} onSelect={jumpToMarker} benchmarksClickable hint="click to jump" />
+        </div>
+      )}
+      {/* Sticky bulk-select bar. */}
       <div ref={stickyRef} className="sticky top-0 z-30 -mx-6 mb-4 bg-white border-b border-gray-200">
-        {railPhases.length > 0 && (
-          <div data-timeline-bar onClick={() => anchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} title="Back to the timeline's place" className="px-6 pt-2.5 pb-1 cursor-pointer">
-            <PhaseRail phases={railPhases} active={activePhase} onPick={jumpToGroup} progress={railProgress} />
-          </div>
-        )}
         {total > 0 && (
           <div className="px-6 py-2 flex items-center gap-3 text-sm min-h-[2.5rem]">
             <label className="inline-flex items-center gap-2 text-gray-600 cursor-pointer">
@@ -2223,8 +2219,10 @@ function deriveMarkers(plan: EventPlanning): { markers: OvMarker[]; currentKey: 
 // Interactive timeline: primary phase nodes (large) + benchmark sub-dots (small, same-color,
 // indented). The date-derived "NOW" marker is fixed; the selected node is what's being previewed.
 // Clicking a node switches the previewed VIEW inside Overview (no tab navigation).
-function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }: { markers: OvMarker[]; currentKey: string; selectedKey: string; onSelect: (k: string) => void; locked?: boolean }) {
+function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked, benchmarksClickable = false, hint }: { markers: OvMarker[]; currentKey: string; selectedKey: string; onSelect: (k: string) => void; locked?: boolean; benchmarksClickable?: boolean; hint?: string }) {
   if (markers.length === 0) return null;
+  // The phase we're currently in (currentKey is always a `phase:<x>` key) — benchmarks under it get a halo.
+  const currentPhaseName = currentKey.startsWith("phase:") ? currentKey.slice("phase:".length) : null;
 
   function handleSelect(key: string) {
     if (locked) return;
@@ -2234,38 +2232,42 @@ function OverviewTimeline({ markers, currentKey, selectedKey, onSelect, locked }
   return (
     <div className="bg-white rounded-2xl border border-border p-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-[15px] font-medium text-gray-700">Timeline <span className="text-gray-400 font-normal">· {locked ? "final record" : "click a phase to preview"}</span></h3>
+        <h3 className="text-[15px] font-medium text-gray-700">Timeline <span className="text-gray-400 font-normal">· {locked ? "final record" : (hint ?? "click a phase to preview")}</span></h3>
         {!locked && selectedKey !== currentKey && <button onClick={() => onSelect(currentKey)} className="text-xs text-gray-600 hover:text-gray-900 inline-flex items-center gap-1"><ChevronLeft className="w-3.5 h-3.5" /> Back to now</button>}
       </div>
       <div className="relative">
         <div className="absolute left-0 right-0 top-[18px] h-px bg-gray-200" />
         <div className="flex">
           {markers.map((m) => {
-            // Locked: every phase reads as completed (no selection, no NOW), a static record.
-            const isSel = !locked && m.key === selectedKey, isNow = !locked && m.key === currentKey, big = m.kind === "primary";
-            // The actual current phase keeps a STRONG highlight (solid + ring-4) even while you preview
-            // another; a previewed non-current phase gets a LIGHTER highlight (soft fill + ring-2).
-            // Whichever circle is SELECTED fills dark. The current phase also carries a persistent HALO
-            // (ring) marking "you are here" — so it's halo+dark when selected, halo-only (hollow) when
-            // you preview a different phase, which itself fills dark as the selected one.
+            const cls = `group relative flex flex-col items-center text-center ${m.kind === "primary" ? "flex-1 min-w-[64px] px-1" : "min-w-[40px] px-0.5"}`;
+            // ── Benchmark sub-dot: a smaller version of its parent phase. It's NOT a phase, so it isn't
+            // clickable in preview mode. Halo if it falls in the phase we're currently in; else an
+            // empty circle in the parent's colour.
+            if (m.kind === "secondary") {
+              const inCurrentPhase = !locked && currentPhaseName != null && m.phaseName === currentPhaseName;
+              const dot = (
+                <>
+                  <span className="relative flex h-9 w-full items-center justify-center">
+                    <span className={`rounded-full transition-colors w-2.5 h-2.5 border-2 ${m.color.border} bg-white ${inCurrentPhase ? `ring-2 ${m.color.ring} ${m.color.fillSoft}` : ""}`} />
+                  </span>
+                  <span className={`mt-1.5 leading-tight text-[11px] ${inCurrentPhase ? m.color.text : "text-gray-400"}`}>{m.label}</span>
+                </>
+              );
+              return benchmarksClickable && !locked
+                ? <button key={m.key} type="button" onClick={() => handleSelect(m.key)} title={m.label} className={cls}>{dot}</button>
+                : <div key={m.key} title={m.label} className={`${cls} cursor-default`}>{dot}</div>;
+            }
+            // ── Primary phase dot. Current phase carries a persistent HALO ("you are here"); the SELECTED
+            // (previewed) one fills dark.
+            const isSel = !locked && m.key === selectedKey, isNow = !locked && m.key === currentKey;
             const halo = isNow && !locked;
-            const fill = locked || isSel ? m.color.dot
-              : isNow ? `bg-white ${m.color.fillSoft}`
-              : m.kind === "secondary" ? m.color.dot
-              : `bg-white ${m.color.fillSoft}`;
+            const fill = locked || isSel ? m.color.dot : `bg-white ${m.color.fillSoft}`;
             return (
-              <button
-                key={m.key}
-                type="button"
-                onClick={() => handleSelect(m.key)}
-                disabled={locked}
-                title={m.label}
-                className={`group relative flex flex-col items-center text-center ${big ? "flex-1 min-w-[64px] px-1" : "min-w-[40px] px-0.5"} ${locked ? "cursor-default" : ""}`}
-              >
+              <button key={m.key} type="button" onClick={() => handleSelect(m.key)} disabled={locked} title={m.label} className={`${cls} ${locked ? "cursor-default" : ""}`}>
                 <span className="relative flex h-9 w-full items-center justify-center">
-                  <span className={`rounded-full transition-colors ${big ? "w-5 h-5 border-2 " + m.color.border : "w-2.5 h-2.5"} ${halo ? `ring-4 ${m.color.ring}` : ""} ${fill}`} />
+                  <span className={`rounded-full transition-colors w-5 h-5 border-2 ${m.color.border} ${halo ? `ring-4 ${m.color.ring}` : ""} ${fill}`} />
                 </span>
-                <span className={`mt-1.5 leading-tight ${big ? "text-[13px]" : "text-[11px]"} ${isNow ? `${m.color.text} font-semibold` : isSel ? m.color.text : m.kind === "secondary" ? "text-gray-400" : "text-gray-600"}`}>{m.label}</span>
+                <span className={`mt-1.5 leading-tight text-[13px] ${isNow ? `${m.color.text} font-semibold` : isSel ? m.color.text : "text-gray-600"}`}>{m.label}</span>
                 {m.date && <span className="mt-0.5 text-[11px] text-gray-400 whitespace-nowrap">{fmtShort(m.date)}</span>}
                 {isNow && <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide text-gray-900"><span className="w-2 h-2 rounded-full bg-gray-900" /> NOW</span>}
               </button>
@@ -4301,30 +4303,14 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           consistent across planning / day-of / post instead of flags jumping above the timeline. */}
       <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
 
-      {/* Classic setup-flag cards — kept for the day-before / day-of views. The planning view folds
-          these into "Open · next up" (below); the Post view drops them entirely — the "complete
-          record" block's clickable gap blocks are the open items there (no duplicate list). */}
-      {!planningActive && selectedView !== "post" && (openFlags.length > 0 || linearOpenItem) && (
-        <div className="space-y-2">
-          {openFlags.map((key) => {
-            const m = SETUP_META[key];
-            return (
-              <div key={key} className="flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 pr-2">
-                <button onClick={m.go} className="group flex-1 min-w-0 flex items-center gap-3 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition-colors">
-                  <m.Icon className="w-5 h-5 text-amber-700 shrink-0" />
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-[15px] font-medium text-amber-900 group-hover:underline">{m.title}</span>
-                    <span className="block text-[13px] text-amber-700">{m.blurb}</span>
-                  </span>
-                </button>
-                <button onClick={() => settleSetup(key)} title="Dismiss — don't show this again" className="w-5 h-5 rounded-full border border-amber-300 text-amber-700 hover:bg-amber-100 flex items-center justify-center shrink-0">
-                  <Check className="w-3 h-3" />
-                </button>
-              </div>
-            );
-          })}
+      {/* Day-of / day-before views surface the SAME "Open" card as the planning view (setup fields +
+          captured proposals), so the yellow bars group under "Open" consistently. Post drops them —
+          its "complete record" gap blocks are the open items there. OpenNextUp self-hides when empty. */}
+      {!planningActive && selectedView !== "post" && (
+        <>
+          <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
           {linearOpenItem}
-        </div>
+        </>
       )}
 
       {/* Status digest (classic one-liner) — phase views only; the planning view uses the composed
@@ -5064,7 +5050,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           <div className="space-y-6">
             <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
             <BenchmarkEditor eventId={eventId} benchmarks={plan.benchmarks} deliverables={plan.deliverables} setPlan={setPlan} />
-            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
+            <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} markers={deriveMarkers(plan).markers} currentKey={deriveMarkers(plan).currentKey} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
           </div>
         )}
