@@ -171,3 +171,78 @@ export async function extractScrape(msgs: SlackMsg[]): Promise<{ captures: Scrap
     return { captures: [], people: [], removals: [] };
   }
 }
+
+// ── Series scrape: one channel covers several member events. Same extraction as above, but each fact
+// also carries a routing target — the member event it's clearly about, "series" (push-wide), or
+// "unassigned" (can't tell → never guess; waits for the user to assign). ──
+export interface RosterEvent { id: string; name: string; date?: string | null; descriptor?: string }
+export type TargetedProposal = ScrapeProposal & { eventId: string }; // eventId ∈ roster ids | 'series' | 'unassigned'
+
+export async function extractSeriesScrape(
+  msgs: SlackMsg[], roster: RosterEvent[],
+): Promise<{ captures: TargetedProposal[]; people: ScrapePerson[]; removals: Removal[] }> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || msgs.length === 0 || roster.length === 0) return { captures: [], people: [], removals: [] };
+  const targets = [...roster.map((r) => r.id), 'series', 'unassigned'];
+
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      captures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+        home: { enum: ['plan', 'person', 'open', 'budget'] },
+        eventId: { enum: targets, description: 'which member event this fact is about; "series" if push-wide; "unassigned" if not clear' },
+        summary: { type: 'string', description: 'SHORT label ≤8 words' },
+        detail: { type: 'string', description: 'ONE short line, or ""' },
+        sourceTs: { type: 'string' }, sourceQuote: { type: 'string' },
+      }, required: ['home', 'eventId', 'summary', 'detail', 'sourceTs', 'sourceQuote'] } },
+      people: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+        name: { type: 'string' }, note: { type: 'string' }, linkedin: { type: 'string' }, sourceTs: { type: 'string' }, sourceQuote: { type: 'string' },
+      }, required: ['name', 'note', 'linkedin', 'sourceTs', 'sourceQuote'] } },
+      removals: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { label: { type: 'string' } }, required: ['label'] } },
+    },
+    required: ['captures', 'people', 'removals'],
+  };
+
+  const rosterText = roster.map((r) => `  - id "${r.id}": ${r.name}${r.date ? ` (${r.date})` : ''}${r.descriptor ? ` — ${r.descriptor}` : ''}`).join('\n');
+  const system = `${SCRAPE_SYSTEM}
+
+ROUTING — this channel covers a SERIES of several events (a collective push). Member events:
+${rosterText}
+
+For EACH capture set eventId to the member event it is clearly about. Use the event names, dates, and topics as cues — a fact dated near an event, or naming it, belongs to it.
+- "series"     → the fact is push-wide / shared across events (an overall budget, a shared vendor, the whole campaign).
+- "unassigned" → you CANNOT confidently tell which event it's about. DO NOT GUESS. Prefer "unassigned" over a wrong guess; a human will route it.
+Only route to a specific event when the message makes it clear. When in doubt, "unassigned".`;
+
+  const transcript = msgs.map((m) => `[${m.ts}] ${m.user ?? '?'}: ${m.text}`).join('\n');
+  const client = new Anthropic({ apiKey });
+  const resp = await (client.messages.create as any)({
+    model: 'claude-haiku-4-5', max_tokens: 4000, system,
+    messages: [{ role: 'user', content: `Channel conversation:\n${transcript}` }],
+    output_config: { format: { type: 'json_schema', schema } },
+  });
+  const textBlock = (resp.content as any[]).find((b: any) => b.type === 'text');
+  if (!textBlock) return { captures: [], people: [], removals: [] };
+  try {
+    const j = JSON.parse(textBlock.text);
+    const valid = new Set(targets);
+    const captures: TargetedProposal[] = (j.captures ?? []).map((c: any) => ({
+      home: c.home as Home,
+      eventId: valid.has(String(c.eventId)) ? String(c.eventId) : 'unassigned',
+      summary: String(c.summary ?? '').trim(),
+      detail: c.detail ? String(c.detail) : undefined,
+      sourceQuote: c.sourceQuote ? String(c.sourceQuote) : undefined,
+      sourceTs: String(c.sourceTs ?? ''),
+    })).filter((c: TargetedProposal) => c.summary && c.sourceTs);
+    const people: ScrapePerson[] = (j.people ?? []).map((p: any) => ({
+      name: String(p.name ?? '').trim(), note: String(p.note ?? '').trim(),
+      linkedin: p.linkedin ? String(p.linkedin).trim() : undefined,
+      sourceQuote: p.sourceQuote ? String(p.sourceQuote) : undefined, sourceTs: String(p.sourceTs ?? ''),
+    })).filter((p: ScrapePerson) => p.name && p.sourceTs);
+    const removals: Removal[] = (j.removals ?? []).map((r: any) => ({ label: String(r.label ?? '').trim() })).filter((r: Removal) => r.label);
+    return { captures, people, removals };
+  } catch {
+    console.error(JSON.stringify({ fn: 'slack-extract', op: 'series-scrape', error: 'invalid json', raw: textBlock.text }));
+    return { captures: [], people: [], removals: [] };
+  }
+}

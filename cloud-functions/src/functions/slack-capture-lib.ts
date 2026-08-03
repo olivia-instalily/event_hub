@@ -17,7 +17,7 @@ export interface Removal { label: string }
 // legacy 'vendor' value that predates the vendor→budget-field move.
 export type StoredHome = Home | 'people' | 'vendor';
 export interface StoredCapture {
-  id: string; event_id: string; slack_channel: string; slack_ts: string; home: StoredHome;
+  id: string; event_id: string | null; series_id: string | null; slack_channel: string; slack_ts: string; home: StoredHome;
   summary: string; detail: string | null; status: 'proposed'; source_ref: string | null;
   source_quote: string | null; context_ts: any; flags: Record<string, unknown>; reactor_user: string | null;
 }
@@ -66,7 +66,7 @@ export function buildCaptures(
     if (p.home === 'budget' && committed.budget) flags.conflict = { field: 'budget' };
     return {
       id: captureId(event.id, channel, pinnedTs, p.home),
-      event_id: event.id, slack_channel: channel, slack_ts: pinnedTs, home: p.home,
+      event_id: event.id, series_id: null, slack_channel: channel, slack_ts: pinnedTs, home: p.home,
       summary: p.summary, detail: p.detail ?? null, status: 'proposed' as const,
       source_ref: sourceRef, source_quote: p.sourceQuote ?? null, context_ts: p.usedContext ?? null,
       flags, reactor_user: reactor,
@@ -82,12 +82,35 @@ export function buildScrapeCaptures(
 ): StoredCapture[] {
   return proposals.filter((p) => p.sourceTs && p.summary?.trim()).map((p) => ({
     id: `${captureId(event.id, channel, p.sourceTs, p.home)}:${summarySlug(p.summary)}`,
-    event_id: event.id, slack_channel: channel, slack_ts: p.sourceTs, home: p.home,
+    event_id: event.id, series_id: null, slack_channel: channel, slack_ts: p.sourceTs, home: p.home,
     summary: p.summary.trim(), detail: p.detail?.trim() || null, status: 'proposed' as const,
     source_ref: permalinks[p.sourceTs] ?? null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
     flags: {}, reactor_user: null,
   }));
 }
+
+// Series scrape: one channel, several member events. Each targeted proposal is stored owned by the
+// event it routes to (event_id set — it then applies on that event's page exactly like a per-event
+// capture), or owned by the SERIES when push-wide/unassigned (series_id set, event_id null, flags
+// carry the routing = 'series' | 'unassigned' so the series Open area can show + let the user assign).
+export function buildTargetedCaptures(
+  seriesId: string, channel: string, proposals: TargetedProposalLike[], rosterIds: Set<string>, permalinks: Record<string, string | null> = {},
+): StoredCapture[] {
+  return proposals.filter((p) => p.sourceTs && p.summary?.trim()).map((p) => {
+    const toEvent = rosterIds.has(p.eventId);
+    const ownerKey = toEvent ? p.eventId : seriesId;
+    return {
+      id: `${captureId(ownerKey, channel, p.sourceTs, p.home)}:${summarySlug(p.summary)}`,
+      event_id: toEvent ? p.eventId : null,
+      series_id: toEvent ? null : seriesId,
+      slack_channel: channel, slack_ts: p.sourceTs, home: p.home,
+      summary: p.summary.trim(), detail: p.detail?.trim() || null, status: 'proposed' as const,
+      source_ref: permalinks[p.sourceTs] ?? null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
+      flags: toEvent ? {} : { routing: p.eventId === 'series' ? 'series' : 'unassigned' }, reactor_user: null,
+    };
+  });
+}
+export interface TargetedProposalLike { home: Home; eventId: string; summary: string; detail?: string; sourceQuote?: string; sourceTs: string }
 
 // Normalize a person name for matching against the People list: trim, lowercase, collapse whitespace.
 export function normalizeName(name: string): string {
@@ -133,7 +156,7 @@ export function buildPeopleNoMatch(
 ): StoredCapture[] {
   return people.filter((p) => p.name?.trim() && p.sourceTs).map((p) => ({
     id: `${captureId(event.id, channel, p.sourceTs, 'people')}:${summarySlug(p.name)}`,
-    event_id: event.id, slack_channel: channel, slack_ts: p.sourceTs, home: 'people',
+    event_id: event.id, series_id: null, slack_channel: channel, slack_ts: p.sourceTs, home: 'people',
     summary: p.name.trim(), detail: p.note?.trim() || null, status: 'proposed' as const,
     source_ref: permalinks[p.sourceTs] ?? null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
     flags: { noMatch: true, ...(p.linkedin ? { linkedin: p.linkedin } : {}) }, reactor_user: null,
