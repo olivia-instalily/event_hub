@@ -2299,6 +2299,8 @@ async function ensureBudgetId(eventId: string): Promise<string> {
   if (!id) { id = genId('bud'); const { error } = await supabase.from('budget').insert({ id, event_id: eventId, currency: 'USD' }); if (error) throw new Error(error.message); }
   return id;
 }
+/** Create an empty budget for an event if it has none (so the Budget tab can start one). */
+export async function ensureEventBudget(eventId: string): Promise<void> { await ensureBudgetId(eventId); }
 
 /** An existing budget line for the event whose label matches this one (fuzzy), or null. Doesn't
  *  create a budget. Used to decide whether a confirmed budget capture merges or stands alone. */

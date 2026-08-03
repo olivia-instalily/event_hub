@@ -257,8 +257,9 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
           </div>
         </SortableContext>
 
-        {/* Loose lines */}
-        {(rowsIn(null).length > 0 || categories.length > 0) && (
+        {/* Loose lines — always available so an empty budget can add a line directly (not only after
+            a category exists). */}
+        {(
           <div className="mt-5">
             <p className="text-[13px] font-medium text-gray-400 mb-1.5">Loose lines</p>
             <GroupDroppable id="group:loose">

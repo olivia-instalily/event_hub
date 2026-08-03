@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -3972,7 +3972,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}
                 {eventSubTab === "budget" && (plan.budget
                   ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} location={plan.location} />
-                  : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
+                  : <div className="bg-white rounded-2xl border border-border p-6">
+                      <p className="text-sm text-gray-500 mb-3">No budget yet for this event.</p>
+                      <button onClick={async () => { await ensureEventBudget(eventId); setReload((r) => r + 1); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black"><Plus className="w-4 h-4" /> Start a budget</button>
+                    </div>)}
                 {eventSubTab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
               </div>
             </div>
@@ -4008,7 +4011,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               <BudgetProjections plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
               <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} location={plan.location} />
             </div>
-          : <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">No budget attached to this event yet.</div>)}
+          : <div className="bg-white rounded-2xl border border-border p-6">
+              <p className="text-sm text-gray-500 mb-3">No budget yet for this event.</p>
+              <button onClick={async () => { await ensureEventBudget(eventId); setReload((r) => r + 1); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black"><Plus className="w-4 h-4" /> Start a budget</button>
+            </div>)}
         {tab === "deliverables" && (
           <div className="space-y-6">
             <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
