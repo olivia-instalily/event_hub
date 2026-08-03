@@ -177,7 +177,7 @@ export function BudgetTracker({ budget, eventId, eventBudgetTarget = null, locat
 
       {/* Status tiles + vs-target. Lighter rings so the color reads as a hint, not a warning. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-3">
-        <StatCard label="Estimate" value={money(roll.estimate, cur)} accent="ring-gray-200" />
+        <StatCard label="Estimate" value={money(roll.estimate, cur)} accent="ring-yellow-300" />
         <StatCard label="Quoted" value={money(roll.quoted, cur)} accent="ring-blue-200" />
         <StatCard label="Paid" value={money(roll.paid, cur)} accent="ring-green-200" />
         <StatCard
