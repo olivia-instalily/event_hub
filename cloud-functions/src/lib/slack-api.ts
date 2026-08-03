@@ -45,6 +45,18 @@ export async function getPermalink(channel: string, ts: string): Promise<string 
   return r.ok ? r.permalink : null;
 }
 
+// Post a normal channel message (used for the "drop the transcript" nudge). Returns the ts, or null.
+export async function postMessage(channel: string, text: string): Promise<string | null> {
+  const r = await fetch('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`, 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ channel, text }),
+  });
+  const j = await r.json() as any;
+  if (!j.ok) { console.error(JSON.stringify({ fn: 'slack-api', op: 'postMessage', error: j.error })); return null; }
+  return j.ts as string;
+}
+
 export async function postEphemeral(channel: string, user: string, text: string): Promise<void> {
   const r = await fetch('https://slack.com/api/chat.postEphemeral', {
     method: 'POST',

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { captureId, resolveEvent, contextBounds, buildCaptures, buildScrapeCaptures, summarySlug, composeEphemeral, matchRemovals,
-  matchPeople, normalizeName, candidateNote, buildPeopleNoMatch,
+  matchPeople, normalizeName, candidateNote, buildPeopleNoMatch, meetingsToNudge, transcriptNudgeText,
   HOME_LABEL, type EventRow, type SlackMsg, type Proposal, type ScrapeProposal, type ScrapePerson } from "./slack-capture-lib.js";
 
 const ev = (id: string, ch: string | null, date: string | null = null): EventRow => ({ id, slack_channel: ch, event_date: date, name: id });
@@ -178,6 +178,29 @@ describe("buildPeopleNoMatch", () => {
     expect(caps[0].source_ref).toBe("https://slack/p9");
     expect(caps[0].flags).toEqual({ noMatch: true, linkedin: "https://li/adina" });
     expect(caps[0].id).toBe(`${captureId("e1", "C1", "9.9", "people")}:adina-t`);
+  });
+});
+
+describe("meetingsToNudge", () => {
+  const ev = (id: string, date: string | null, nudged: string | null = null) => ({ id, name: id, event_date: date, transcript_nudged_at: nudged });
+  it("picks events that have happened and weren't nudged yet", () => {
+    const got = meetingsToNudge([
+      ev("past", "2026-09-20"),                          // happened, not nudged → yes
+      ev("today", "2026-09-22"),                         // today → yes
+      ev("future", "2026-09-30"),                        // not yet → no
+      ev("already", "2026-09-01", "2026-09-02T00:00:00Z"), // nudged → no
+      ev("nodate", null),                                // no date → no
+    ], "2026-09-22");
+    expect(got.map((e) => e.id)).toEqual(["past", "today"]);
+  });
+});
+
+describe("transcriptNudgeText", () => {
+  it("names the event + date and invites a paste into the channel", () => {
+    const t = transcriptNudgeText("UofT Career Fair", "2026-09-22");
+    expect(t).toContain("UofT Career Fair");
+    expect(t).toContain("2026-09-22");
+    expect(t.toLowerCase()).toContain("transcript");
   });
 });
 

@@ -6,9 +6,21 @@
 import { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { getServiceClient } from '../db.js';
-import { fetchSince, getPermalink } from '../lib/slack-api.js';
+import { fetchSince, getPermalink, postMessage } from '../lib/slack-api.js';
 import { extractScrape, extractSeriesScrape, type RosterEvent } from './slack-extract.js';
-import { buildScrapeCaptures, buildTargetedCaptures, matchRemovals, matchPeople, candidateNote, buildPeopleNoMatch } from './slack-capture-lib.js';
+import { buildScrapeCaptures, buildTargetedCaptures, matchRemovals, matchPeople, candidateNote, buildPeopleNoMatch, meetingsToNudge, transcriptNudgeText, type NudgeEvent } from './slack-capture-lib.js';
+
+// Post a one-time "drop the transcript" prompt to the channel for any linked meeting/event that has
+// happened and hasn't been nudged. Sticky: sets event.transcript_nudged_at so it never re-nags.
+async function runTranscriptNudges(sb: any, channel: string, events: NudgeEvent[]): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10);
+  let n = 0;
+  for (const e of meetingsToNudge(events, today)) {
+    const ts = await postMessage(channel, transcriptNudgeText(e.name, e.event_date));
+    if (ts) { await sb.from('event').update({ transcript_nudged_at: new Date().toISOString() }).eq('id', e.id); n++; }
+  }
+  return n;
+}
 
 export async function handler(req: Request, res: Response) {
   const eventId = String(req.body?.eventId ?? '');
@@ -37,8 +49,12 @@ export async function handler(req: Request, res: Response) {
   if (!ev || !channel) { res.json({ ok: true, skipped: 'no linked channel' }); return; }
   const marker = ((ev as any).slack_last_extracted_ts as string | null) ?? null;
 
+  // Transcript nudge for this event (its own channel), independent of new messages.
+  const { data: nEv } = await sb.from('event').select('id, name, event_date, transcript_nudged_at').eq('id', eventId).maybeSingle();
+  const nudged = nEv ? await runTranscriptNudges(sb, channel, [nEv as NudgeEvent]) : 0;
+
   const msgs = await fetchSince(channel, marker);
-  if (msgs.length === 0) { res.json({ ok: true, skipped: 'nothing new' }); return; }
+  if (msgs.length === 0) { res.json({ ok: true, skipped: 'nothing new', nudged }); return; }
 
   // Claim this window atomically before extracting (see scrapeSeries) — one run wins, concurrent
   // runs get 0 rows and bail, so the same messages never yield near-duplicate captures.
@@ -110,8 +126,8 @@ export async function handler(req: Request, res: Response) {
   }
 
   // (marker already advanced at claim time)
-  console.log(JSON.stringify({ fn: 'slack-scrape', eventId, processed: msgs.length, extracted: captures.length, stored, tagged, noMatch, dismissed }));
-  res.json({ ok: true, processed: msgs.length, stored, tagged, noMatch, dismissed });
+  console.log(JSON.stringify({ fn: 'slack-scrape', eventId, processed: msgs.length, extracted: captures.length, stored, tagged, noMatch, dismissed, nudged }));
+  res.json({ ok: true, processed: msgs.length, stored, tagged, noMatch, dismissed, nudged });
 }
 
 // Series scrape: pull the series channel since the series marker, route each fact to a member event
@@ -121,8 +137,13 @@ export async function handler(req: Request, res: Response) {
 async function scrapeSeries(sb: any, ser: { id: string; slack_channel: string; slack_last_extracted_ts: string | null }, res: Response) {
   const channel = ser.slack_channel;
   const marker = ser.slack_last_extracted_ts ?? null;
+
+  // Transcript nudges run on every open (independent of new messages) for member events that wrapped.
+  const { data: nudgeEvs } = await sb.from('event').select('id, name, event_date, transcript_nudged_at').eq('series_id', ser.id);
+  const nudged = await runTranscriptNudges(sb, channel, (nudgeEvs ?? []) as NudgeEvent[]);
+
   const msgs = await fetchSince(channel, marker);
-  if (msgs.length === 0) { res.json({ ok: true, mode: 'series', skipped: 'nothing new' }); return; }
+  if (msgs.length === 0) { res.json({ ok: true, mode: 'series', skipped: 'nothing new', nudged }); return; }
 
   // Claim this window atomically BEFORE extracting: advance the marker only if it's still what we read.
   // A concurrent scrape (Overview mount + a member event open, a double-mount, another tab) reads the
@@ -165,6 +186,6 @@ async function scrapeSeries(sb: any, ser: { id: string; slack_channel: string; s
   }
 
   // (marker already advanced at claim time)
-  console.log(JSON.stringify({ fn: 'slack-scrape', mode: 'series', seriesId: ser.id, processed: msgs.length, extracted: captures.length, stored, toEvents, toSeries, dismissed }));
-  res.json({ ok: true, mode: 'series', processed: msgs.length, stored, toEvents, toSeries, dismissed });
+  console.log(JSON.stringify({ fn: 'slack-scrape', mode: 'series', seriesId: ser.id, processed: msgs.length, extracted: captures.length, stored, toEvents, toSeries, dismissed, nudged }));
+  res.json({ ok: true, mode: 'series', processed: msgs.length, stored, toEvents, toSeries, dismissed, nudged });
 }

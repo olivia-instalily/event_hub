@@ -163,6 +163,20 @@ export function buildPeopleNoMatch(
   }));
 }
 
+// Which events warrant a "drop the transcript" nudge now: the meeting has happened (event_date is on
+// or before today) and we haven't nudged for it yet. `today` is an ISO date (YYYY-MM-DD).
+export interface NudgeEvent { id: string; name: string; event_date: string | null; transcript_nudged_at: string | null }
+export function meetingsToNudge(events: NudgeEvent[], today: string): NudgeEvent[] {
+  return events.filter((e) => e.event_date && e.event_date <= today && !e.transcript_nudged_at);
+}
+
+// The channel prompt inviting a transcript for a meeting that happened — pasted text gets ingested by
+// the scrape and attributed to this event.
+export function transcriptNudgeText(name: string, date: string | null): string {
+  const when = date ? ` (${date})` : '';
+  return `📝 *${name}*${when} has wrapped — drop the recording link, transcript, or notes here (from Fathom, Granola, Zoom, anywhere) and I'll log them to the event. Paste the text right in this channel.`;
+}
+
 // ≤6-line reactor-only summary, grouped by home so a misroute is spottable at a glance.
 export function composeEphemeral(eventName: string, eventUrl: string, caps: StoredCapture[], removals: Removal[], radiusNote?: string): string {
   if (caps.length === 0 && removals.length === 0) {
