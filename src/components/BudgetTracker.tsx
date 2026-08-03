@@ -316,13 +316,14 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
         className="basis-40 shrink min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
       />
       <VendorField line={line} category={category} location={location} onEdit={onEdit} />
-      {/* Link sits between vendor and status. */}
-      <div className="flex items-center gap-1 w-28 shrink-0">
+      {/* Link sits right after vendor; collapsed to a small footprint until one's added (or while
+          typing), then it shifts and expands to show it. */}
+      <div className="flex items-center gap-1 shrink-0">
         <input
           defaultValue={line.docUrl ?? ""}
           onBlur={(e) => e.target.value !== (line.docUrl ?? "") && onEdit(line.id, { docUrl: e.target.value.trim() || null })}
           placeholder="link"
-          className="flex-1 min-w-0 bg-transparent text-[13px] text-blue-600 focus:outline-none truncate"
+          className={`bg-transparent text-[13px] text-blue-600 focus:outline-none truncate transition-[width] duration-150 ${line.docUrl ? "w-40" : "w-12 focus:w-40"}`}
         />
         {line.docUrl && (
           <a href={line.docUrl} target="_blank" rel="noreferrer" title="Open link" className="text-blue-500 hover:text-blue-700 shrink-0"><ExternalLink className="w-3.5 h-3.5" /></a>
@@ -384,7 +385,7 @@ function VendorField({ line, category, location, onEdit }: {
         list={listId}
         onChange={(e) => setName(e.target.value)}
         onBlur={commit}
-        placeholder="vendor (optional)"
+        placeholder="vendor"
         className="w-full bg-transparent text-[13px] text-gray-500 focus:outline-none"
       />
       <datalist id={listId}>
