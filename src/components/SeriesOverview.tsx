@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox } from "lucide-react";
+import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Undo2 } from "lucide-react";
 import {
-  listSeriesCaptures, assignSeriesCapture, dismissSlackCapture, runSeriesScrape,
-  getSeriesOverviewData, type SeriesCapture, type SeriesOverviewData, type CaptureHome,
+  listSeriesCaptures, listAssignedSeriesCaptures, assignSeriesCapture, dismissSlackCapture, discardCapture,
+  runSeriesScrape, getSeriesOverviewData, addSeriesBudgetLine, addSeriesRole,
+  type SeriesCapture, type AssignedCapture, type SeriesOverviewData, type CaptureHome,
 } from "../lib/db";
 import type { TabProps } from "./SeriesDashboard";
 
@@ -19,34 +20,57 @@ const fmtDate = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDat
 // The series' cross-event Overview: where Slack updates for the whole push land + get routed to a
 // member event, plus a snapshot that stretches across the events (budget rollup, staffing, learnings).
 export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabProps) {
-  const [caps, setCaps] = useState<SeriesCapture[]>([]);
+  const [caps, setCaps] = useState<SeriesCapture[]>([]);          // series-level (unrouted / push-wide)
+  const [assigned, setAssigned] = useState<AssignedCapture[]>([]); // routed to a member event
   const [data, setData] = useState<SeriesOverviewData | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [sel, setSel] = useState<Set<string>>(new Set());   // selected in "From Slack"
+  const [aSel, setASel] = useState<Set<string>>(new Set());  // selected in "Assigned to events"
+  const [lineLabel, setLineLabel] = useState(""); const [lineAmt, setLineAmt] = useState("");
+  const [roleDraft, setRoleDraft] = useState("");
 
-  const reloadCaps = () => { void listSeriesCaptures(seriesId).then(setCaps); };
+  const reloadCaps = () => { void listSeriesCaptures(seriesId).then(setCaps); void listAssignedSeriesCaptures(seriesId).then(setAssigned); };
   const reloadData = () => { void getSeriesOverviewData(seriesId).then(setData); };
+  const reloadAll = () => { reloadCaps(); reloadData(); };
   useEffect(() => {
-    reloadCaps(); reloadData();
-    void runSeriesScrape(seriesId).then((r) => { if (r?.ok) { reloadCaps(); reloadData(); } }).catch(() => {});
+    reloadAll();
+    void runSeriesScrape(seriesId).then((r) => { if (r?.ok) reloadAll(); }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seriesId]);
 
+  const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) =>
+    set((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allOn = (set: React.Dispatch<React.SetStateAction<Set<string>>>, ids: string[], on: boolean) => set(on ? new Set(ids) : new Set());
+
   const assign = async (capId: string, eventId: string) => {
-    setBusy(capId);
-    try { await assignSeriesCapture(capId, eventId); reloadCaps(); reloadData(); } catch { /* ignore */ } finally { setBusy(null); }
+    setBusy(true);
+    try { await assignSeriesCapture(capId, eventId); setSel((p) => { const n = new Set(p); n.delete(capId); return n; }); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); }
   };
-  const dismiss = async (capId: string) => { setBusy(capId); try { await dismissSlackCapture(capId); reloadCaps(); } catch { /* ignore */ } finally { setBusy(null); } };
+  // From Slack (nothing applied yet) → Discard just removes the card.
+  const discardFromSlack = async () => { setBusy(true); try { for (const id of sel) await dismissSlackCapture(id); setSel(new Set()); reloadCaps(); } catch { /* ignore */ } finally { setBusy(false); } };
+  // Assigned → Discard reverses what each applied (budget line / role) then removes; Keep just clears the cards.
+  const discardAssigned = async () => { setBusy(true); try { for (const c of assigned.filter((c) => aSel.has(c.id))) await discardCapture({ id: c.id, eventId: c.eventId, undo: c.undo }); setASel(new Set()); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const keepAssigned = async () => { setBusy(true); try { for (const id of aSel) await dismissSlackCapture(id); setASel(new Set()); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
+
+  const addLine = async () => { const l = lineLabel.trim(); if (!l) return; setBusy(true); try { await addSeriesBudgetLine(seriesId, l, lineAmt.trim() === "" ? null : Number(lineAmt)); setLineLabel(""); setLineAmt(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const addRole = async () => { const r = roleDraft.trim(); if (!r) return; setBusy(true); try { await addSeriesRole(seriesId, r); setRoleDraft(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
 
   const committedTotal = (data?.committed ?? []).reduce((s, c) => s + c.committed, 0);
+  const seriesLinesTotal = (data?.seriesLines ?? []).reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
   const cur = campaign.currency || data?.committed[0]?.currency || "USD";
-  // Merged staffing: series-level roles + any role on a member event (deduped), with where it sits.
   const roleRows = (() => {
-    const m = new Map<string, string[]>(); // role → where (series / event names)
+    const m = new Map<string, string[]>();
     for (const r of data?.seriesRoles ?? []) (m.get(r) ?? m.set(r, []).get(r))!.push("series");
     for (const e of data?.events ?? []) for (const r of e.staffRoles) (m.get(r) ?? m.set(r, []).get(r))!.push(e.name);
     return [...m.entries()].map(([role, where]) => ({ role, where }));
   })();
   const learnings = (data?.events ?? []).filter((e) => e.reflections.length > 0);
+  const assignedByEvent = events.map((e) => ({ event: e, caps: assigned.filter((c) => c.eventId === e.id) })).filter((g) => g.caps.length > 0);
+
+  const CardChip = ({ home }: { home: CaptureHome }) => <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${HOME_TAG[home].cls}`}>{HOME_TAG[home].label}</span>;
+  const Box = ({ on, onClick }: { on: boolean; onClick: () => void }) => (
+    <button onClick={onClick} className="shrink-0 text-gray-400 hover:text-violet-600">{on ? <CheckSquare className="w-4 h-4 text-violet-600" /> : <Square className="w-4 h-4" />}</button>
+  );
 
   return (
     <div className="space-y-6">
@@ -60,13 +84,21 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
         {caps.length === 0 ? (
           <p className="text-[13px] text-gray-400 mt-2">Nothing waiting. Updates the scrape couldn't pin to one event land here to assign.</p>
         ) : (
-          <ul className="mt-3 space-y-2">
-            {caps.map((c) => {
-              const tag = HOME_TAG[c.home];
-              return (
+          <>
+            <div className="mt-2 flex items-center gap-2">
+              <button onClick={() => allOn(setSel, caps.map((c) => c.id), sel.size !== caps.length)} className="inline-flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-800">
+                {sel.size === caps.length ? <CheckSquare className="w-4 h-4 text-violet-600" /> : <Square className="w-4 h-4" />} Select all
+              </button>
+              {sel.size > 0 && (
+                <button onClick={discardFromSlack} disabled={busy} className="ml-auto inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-[12px] text-red-600 hover:bg-red-50 disabled:opacity-50"><X className="w-3.5 h-3.5" /> Discard ({sel.size})</button>
+              )}
+            </div>
+            <ul className="mt-2 space-y-2">
+              {caps.map((c) => (
                 <li key={c.id} className="rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2.5">
                   <div className="flex items-center gap-1.5 mb-1">
-                    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tag.cls}`}>{tag.label}</span>
+                    <Box on={sel.has(c.id)} onClick={() => toggle(setSel, c.id)} />
+                    <CardChip home={c.home} />
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.routing === "series" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>{c.routing === "series" ? "push-wide" : "no event matched"}</span>
                     {c.sourceRef && <a href={c.sourceRef} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-0.5 text-[11px] text-violet-600 hover:text-violet-800">source <ArrowUpRight className="w-3 h-3" /></a>}
                   </div>
@@ -74,19 +106,57 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <span className="text-[11px] text-gray-400">assign to:</span>
                     {events.map((e) => (
-                      <button key={e.id} disabled={busy === c.id} onClick={() => assign(c.id, e.id)}
-                        className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">
-                        {e.name}
-                      </button>
+                      <button key={e.id} disabled={busy} onClick={() => assign(c.id, e.id)}
+                        className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">{e.name}</button>
                     ))}
-                    <button disabled={busy === c.id} onClick={() => dismiss(c.id)} title="Dismiss" className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"><X className="w-3.5 h-3.5" /> dismiss</button>
                   </div>
                 </li>
-              );
-            })}
-          </ul>
+              ))}
+            </ul>
+          </>
         )}
       </section>
+
+      {/* ── Assigned to events — Slack facts routed to a member event ──────────────── */}
+      {assignedByEvent.length > 0 && (
+        <section className="bg-white rounded-2xl border border-border p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <Inbox className="w-4 h-4 text-gray-400" />
+            <h3 className="font-medium">Assigned to events</h3>
+            <span className="text-[12px] text-gray-400">Slack facts routed to a specific event (also shown on that event)</span>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <button onClick={() => allOn(setASel, assigned.map((c) => c.id), aSel.size !== assigned.length)} className="inline-flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-800">
+              {aSel.size === assigned.length && assigned.length > 0 ? <CheckSquare className="w-4 h-4 text-violet-600" /> : <Square className="w-4 h-4" />} Select all
+            </button>
+            {aSel.size > 0 && (
+              <div className="ml-auto flex items-center gap-1.5">
+                <button onClick={keepAssigned} disabled={busy} title="Clear the cards, keep what they added" className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-[12px] text-gray-600 hover:bg-gray-50 disabled:opacity-50"><X className="w-3.5 h-3.5" /> Keep ({aSel.size})</button>
+                <button onClick={discardAssigned} disabled={busy} title="Reverse what they added, then remove" className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-[12px] text-red-600 hover:bg-red-50 disabled:opacity-50"><Undo2 className="w-3.5 h-3.5" /> Discard ({aSel.size})</button>
+              </div>
+            )}
+          </div>
+          <div className="mt-3 space-y-4">
+            {assignedByEvent.map(({ event, caps: ec }) => (
+              <div key={event.id}>
+                <button onClick={() => onOpenEvent?.(event.id)} className="text-[12px] font-medium text-gray-600 hover:text-violet-700 hover:underline mb-1">{event.name}</button>
+                <ul className="space-y-1.5">
+                  {ec.map((c) => (
+                    <li key={c.id} className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 px-3 py-2">
+                      <div className="mt-0.5"><Box on={aSel.has(c.id)} onClick={() => toggle(setASel, c.id)} /></div>
+                      <span className="flex-1 min-w-0">
+                        <span className="flex items-center gap-1.5"><CardChip home={c.home} />{c.applied && <span className="text-[10px] text-emerald-700">✓ applied</span>}</span>
+                        <span className="block text-[13px] text-gray-900">{c.summary}{c.detail && <span className="text-gray-500"> — {c.detail}</span>}</span>
+                      </span>
+                      {c.sourceRef && <a href={c.sourceRef} target="_blank" rel="noreferrer" className="shrink-0 inline-flex items-center text-violet-500 hover:text-violet-700"><ArrowUpRight className="w-3.5 h-3.5" /></a>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ── Where things stand — the events in the push ────────────────────────────── */}
       <section className="bg-white rounded-2xl border border-border p-5">
@@ -106,12 +176,12 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
         </ul>
       </section>
 
-      {/* ── Budget · Staffing (stretched across the push) ──────────────────────────── */}
+      {/* ── Budget · Staffing (stretched across the push + push-wide items) ────────── */}
       <div className="grid md:grid-cols-2 gap-6">
         <section className="bg-white rounded-2xl border border-border p-5">
           <h3 className="font-medium mb-3">Budget</h3>
-          <p className="text-2xl font-semibold text-gray-900">{money(committedTotal, cur)}</p>
-          <p className="text-[12px] text-gray-500 mb-3">committed across the push</p>
+          <p className="text-2xl font-semibold text-gray-900">{money(committedTotal + seriesLinesTotal, cur)}</p>
+          <p className="text-[12px] text-gray-500 mb-3">committed across the push{seriesLinesTotal > 0 ? " (incl. push-wide)" : ""}</p>
           <ul className="space-y-1">
             {(data?.committed ?? []).filter((c) => c.committed > 0).map((c) => (
               <li key={c.eventId} className="flex items-center justify-between text-[13px]">
@@ -119,8 +189,19 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
                 <span className="text-gray-600 shrink-0 ml-2">{money(c.committed, c.currency)}</span>
               </li>
             ))}
-            {(data?.committed ?? []).every((c) => c.committed === 0) && <li className="text-[13px] text-gray-400">Nothing committed yet.</li>}
+            {(data?.seriesLines ?? []).map((l) => (
+              <li key={l.id} className="flex items-center justify-between text-[13px]">
+                <span className="text-gray-700 truncate">{l.label || "—"} <span className="text-[10px] text-amber-600">push-wide</span></span>
+                <span className="text-gray-600 shrink-0 ml-2">{money(l.confirmedAmount, cur)}</span>
+              </li>
+            ))}
           </ul>
+          {/* Add a push-wide line directly to the series (not tied to an event). */}
+          <div className="mt-3 flex items-center gap-1.5">
+            <input value={lineLabel} onChange={(e) => setLineLabel(e.target.value)} placeholder="Add push-wide cost…" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
+            <input value={lineAmt} onChange={(e) => setLineAmt(e.target.value)} placeholder={money(0, cur)} type="number" className="w-20 px-2 py-1 border border-gray-200 rounded text-[13px] text-right focus:outline-none focus:ring-2 focus:ring-gray-300" />
+            <button onClick={addLine} disabled={busy || !lineLabel.trim()} className="inline-flex items-center rounded-md bg-gray-900 text-white px-2 py-1 hover:bg-gray-700 disabled:opacity-50"><Plus className="w-3.5 h-3.5" /></button>
+          </div>
         </section>
 
         <section className="bg-white rounded-2xl border border-border p-5">
@@ -135,6 +216,10 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
               ))}
             </ul>
           )}
+          <div className="mt-3 flex items-center gap-1.5">
+            <input value={roleDraft} onChange={(e) => setRoleDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addRole(); }} placeholder="Add push-wide role…" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
+            <button onClick={addRole} disabled={busy || !roleDraft.trim()} className="inline-flex items-center rounded-md bg-gray-900 text-white px-2 py-1 hover:bg-gray-700 disabled:opacity-50"><Plus className="w-3.5 h-3.5" /></button>
+          </div>
         </section>
       </div>
 

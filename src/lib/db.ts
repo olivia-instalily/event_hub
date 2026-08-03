@@ -2124,20 +2124,68 @@ export async function assignSeriesCapture(captureId: string, eventId: string): P
   if (error) throw new Error(error.message);
 }
 
+// Slack captures already routed to a member event of this series — shown on the series Overview in a
+// separate "Assigned to events" section (grouped by event). `applied` = it already created a budget
+// line / staff role on that event; `undo` carries what to reverse on Discard.
+export interface AssignedCapture {
+  id: string; eventId: string; eventName: string; home: CaptureHome; summary: string; detail: string | null;
+  sourceRef: string | null; applied: boolean; undo: Record<string, any> | null;
+}
+export async function listAssignedSeriesCaptures(seriesId: string): Promise<AssignedCapture[]> {
+  const { data: evs } = await supabase.from('event').select('id, name').eq('series_id', seriesId);
+  const nameById = new Map<string, string>((evs ?? []).map((e: any) => [e.id, e.name]));
+  const ids = [...nameById.keys()];
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase
+    .from('slack_capture')
+    .select('id, event_id, home, summary, detail, source_ref, flags, created_at')
+    .in('event_id', ids).eq('status', 'proposed').neq('home', 'people')
+    .not('slack_ts', 'is', null).order('created_at', { ascending: true });
+  if (error) { console.warn('listAssignedSeriesCaptures', error.message); return []; }
+  return (data ?? []).map((r: any) => ({
+    id: r.id, eventId: r.event_id, eventName: nameById.get(r.event_id) ?? '—',
+    home: (r.home === 'vendor' ? 'budget' : r.home) as CaptureHome, summary: r.summary, detail: r.detail ?? null,
+    sourceRef: r.source_ref ?? null, applied: !!(r.flags as any)?.applied, undo: (r.flags as any)?.undo ?? null,
+  }));
+}
+
+// "Discard" a capture — reverse what it applied to the event (delete the budget line / remove the
+// staff role it created), then dismiss it. For unapplied/series-level captures there's nothing to
+// reverse, so it's just a dismiss. ("Keep" = dismissSlackCapture: clears the card, leaves the info.)
+export async function discardCapture(cap: { id: string; eventId?: string | null; undo?: Record<string, any> | null }): Promise<void> {
+  const undo = cap.undo ?? null;
+  if (undo?.kind === 'budget' && undo.lineId) {
+    await deleteBudgetLine(undo.lineId as string).catch(() => {});
+  } else if (undo?.kind === 'person' && cap.eventId && undo.roleWasNew) {
+    const { data } = await supabase.from('event').select('staff_roles, role_assignments, role_slack_refs').eq('id', cap.eventId).maybeSingle();
+    if (data) {
+      const roles = (Array.isArray((data as any).staff_roles) ? (data as any).staff_roles : []).filter((r: string) => r !== undo.role);
+      await setEventStaffRoles(cap.eventId, roles).catch(() => {});
+      const ra = { ...((data as any).role_assignments ?? {}) }; delete ra[undo.role];
+      await setRoleAssignments(cap.eventId, ra).catch(() => {});
+      const rr = { ...((data as any).role_slack_refs ?? {}) }; delete rr[undo.role];
+      await setEventRoleSlackRefs(cap.eventId, rr).catch(() => {});
+    }
+  }
+  await dismissSlackCapture(cap.id);
+}
+
 // Cross-event data for the series Overview: series-level crew, each member event's staffing /
 // reflections / budget target, and the committed-budget rollup. One place so the Overview can
 // "stretch across" the events without the page firing a query per event.
 export interface SeriesOverviewData {
   seriesRoles: string[];
   seriesAssignments: Record<string, string>;
+  seriesLines: BudgetLineTracker[];   // push-wide budget lines added directly to the series
   events: { id: string; name: string; date: string | null; budgetTarget: number | null; staffRoles: string[]; reflections: string[] }[];
   committed: SeriesCommitted[];
 }
 export async function getSeriesOverviewData(seriesId: string): Promise<SeriesOverviewData> {
-  const [{ data: ser }, { data: evs }, committed] = await Promise.all([
+  const [{ data: ser }, { data: evs }, committed, seriesLines] = await Promise.all([
     supabase.from('event_series').select('staff_roles, role_assignments').eq('id', seriesId).maybeSingle(),
     supabase.from('event').select('id, name, event_date, event_budget_target, staff_roles, reflections').eq('series_id', seriesId).order('event_date', { ascending: true }),
     getSeriesCommittedTotals(seriesId),
+    listSeriesBudgetLines(seriesId),
   ]);
   return {
     seriesRoles: Array.isArray((ser as any)?.staff_roles) ? (ser as any).staff_roles : [],
@@ -2148,7 +2196,41 @@ export async function getSeriesOverviewData(seriesId: string): Promise<SeriesOve
       reflections: Array.isArray(e.reflections) ? e.reflections.filter((r: any) => typeof r === 'string' && r.trim()) : [],
     })),
     committed,
+    seriesLines,
   };
+}
+
+// ── Series-level info added directly (not tied to an event) ─────────────────────────────────────
+// Ensure a budget row exists for the SERIES (budget.series_id) and return its id.
+async function ensureSeriesBudgetId(seriesId: string): Promise<string> {
+  const { data: existing } = await supabase.from('budget').select('id').eq('series_id', seriesId).maybeSingle();
+  if (existing?.id) return existing.id;
+  const id = genId('bud');
+  const { error } = await supabase.from('budget').insert({ id, series_id: seriesId, currency: 'USD', categories: [] });
+  if (error) throw new Error(error.message);
+  return id;
+}
+/** Add a push-wide budget line to the series (no event). Returns the new line id. */
+export async function addSeriesBudgetLine(seriesId: string, label: string, amount: number | null, status: BudgetStatus = 'estimate'): Promise<string> {
+  const budgetId = await ensureSeriesBudgetId(seriesId);
+  const id = genId('bl');
+  const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, confirmed_amount: amount, payment_status: amount != null ? status : 'estimate' });
+  if (error) throw new Error(error.message);
+  return id;
+}
+/** List the series' own (push-wide) budget lines. */
+export async function listSeriesBudgetLines(seriesId: string): Promise<BudgetLineTracker[]> {
+  const { data: b } = await supabase.from('budget').select('id').eq('series_id', seriesId).maybeSingle();
+  if (!b?.id) return [];
+  return listBudgetLines(b.id);
+}
+/** Add a push-wide staff role to the series (event_series.staff_roles). */
+export async function addSeriesRole(seriesId: string, role: string): Promise<void> {
+  const { data } = await supabase.from('event_series').select('staff_roles').eq('id', seriesId).maybeSingle();
+  const roles = Array.isArray((data as any)?.staff_roles) ? (data as any).staff_roles as string[] : [];
+  if (roles.includes(role)) return;
+  const { error } = await supabase.from('event_series').update({ staff_roles: [...roles, role] }).eq('id', seriesId);
+  if (error) throw new Error(error.message);
 }
 
 // Kick a series-level scrape (shared channel). Safe no-op if the series has no channel / nothing new.
