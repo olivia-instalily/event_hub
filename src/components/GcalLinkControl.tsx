@@ -9,10 +9,22 @@ import { syncEventToGoogleCalendar, deleteEventFromGoogleCalendar, resolveGcalMa
 //   • unsynced → an "add to calendar" icon that (re)links.
 // Hidden when the event has no date (Google Calendar needs one). `onChange` should refetch the plan
 // so the icon reflects the new state.
-export function GcalLinkControl({ eventId, synced, htmlLink, hasDate, matchPending = null, onChange }: {
+// Build a clickable Google Calendar link from the stored calendar ids when the API-provided html_link
+// is missing — so a synced event is always clickable, never a dead icon. Uses a non-"primary" entry
+// (a real calendar id, e.g. the coordination calendar), whose eid is base64("<eventId> <calendarId>").
+function gcalLinkFromIds(ids?: Record<string, string> | null): string | null {
+  if (!ids) return null;
+  const entry = Object.entries(ids).find(([cal]) => cal && cal !== "primary");
+  if (!entry) return null;
+  try { return `https://www.google.com/calendar/event?eid=${btoa(`${entry[1]} ${entry[0]}`).replace(/=+$/, "")}`; }
+  catch { return null; }
+}
+
+export function GcalLinkControl({ eventId, synced, htmlLink, gcalEventIds = null, hasDate, matchPending = null, onChange }: {
   eventId: string;
   synced: boolean;
   htmlLink: string | null;
+  gcalEventIds?: Record<string, string> | null;
   hasDate: boolean;
   matchPending?: Record<string, { summary: string; reason?: string } | null> | null;
   onChange: () => void;
@@ -22,6 +34,8 @@ export function GcalLinkControl({ eventId, synced, htmlLink, hasDate, matchPendi
   const [err, setErr] = useState<string | null>(null);
 
   if (!hasDate) return null;
+  // Effective clickable link: the stored one, else one built from the calendar ids.
+  const calLink = htmlLink ?? gcalLinkFromIds(gcalEventIds);
 
   // Explicit (re)link → force a fresh calendar instance for THIS event ('create'), not 'auto'. After a
   // remove, 'auto' re-classifies and can re-adopt a look-alike (e.g. a duplicate event's instance) or
@@ -73,18 +87,15 @@ export function GcalLinkControl({ eventId, synced, htmlLink, hasDate, matchPendi
   }
 
   if (synced) {
+    // Linked: a single clickable calendar icon + delink. Never an "add to calendar" alongside delink.
     return (
       <span className="inline-flex items-center gap-1">
-        {htmlLink ? (
-          <a href={htmlLink} target="_blank" rel="noreferrer" title="View in Google Calendar" className="inline-flex text-emerald-600 hover:text-emerald-700">
+        {calLink ? (
+          <a href={calLink} target="_blank" rel="noreferrer" title="View in Google Calendar" className="inline-flex text-emerald-600 hover:text-emerald-700">
             <Calendar className="w-5 h-5" />
           </a>
         ) : (
-          // Synced but the clickable link is missing — offer a re-link to rebuild the instance + link
-          // instead of a dead icon.
-          <button onClick={relink} disabled={busy} title="Calendar link missing — re-link to fix" className="inline-flex items-center text-amber-600 hover:text-amber-700 disabled:opacity-50">
-            {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <CalendarPlus className="w-5 h-5" />}
-          </button>
+          <span title="On Google Calendar" className="inline-flex"><Calendar className="w-5 h-5 text-emerald-600" /></span>
         )}
         <button onClick={() => setConfirming(true)} title="Remove from Google Calendar" className="inline-flex text-gray-300 hover:text-gray-600">
           <Link2Off className="w-3.5 h-3.5" />

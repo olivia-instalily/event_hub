@@ -3889,7 +3889,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                     unsynced → an "add to calendar" button. (Previously gated to synced/pending only, which
                     left a dated-but-unsynced event with no way to attach.) */}
                 {plan.date && (
-                  <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
+                  <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} gcalEventIds={plan.gcalEventIds} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                 )}
               </div>
               <TimeRangeEditor eventId={eventId} startTime={plan.startTime} endTime={plan.endTime} onSaved={(s, e) => setPlan((p) => (p ? { ...p, startTime: s, endTime: e } : p))} />
