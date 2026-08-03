@@ -26,6 +26,7 @@ const SCHEMA = {
 
 const SYSTEM = `You write a brief, concrete status digest for an event the team is planning.
 Given structured facts (stage, days out, confirmed vendor decisions, pending items, budget, deliverable progress, what's coming up), write 3–5 short bullet points a planner can scan at a glance: what's locked, what's still open, what's imminent or overdue. Use the real numbers/names.
+Facts may include \`notes\` — loose planned concepts/decisions pulled from Slack. Only fold in the genuinely significant ones (a headline decision like the event format or venue) as a bullet; skip minor/operational notes. Don't just list them.
 Format as one bullet per line, each line starting with "- ". Keep each bullet to a single short clause. No preamble, no headings.`;
 
 Deno.serve(async (req) => {

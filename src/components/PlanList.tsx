@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { ListChecks, X, ArrowUpRight, Plus } from "lucide-react";
+import { StickyNote, X, ArrowUpRight, Plus } from "lucide-react";
 import { listPlanItems, addPlanItem, removePlanItem, type PlanItem } from "../lib/db";
 
-// The event's "Plan" — things planned to happen (format, venue, timing, decided elements) that don't
-// need a deliverable. Confirmed Slack 'plan' captures land here; also manually add/remove. `reloadKey`
-// bumps when captures apply so the list refreshes.
+// The event's "Notes" — general concepts / notes drawn from Slack (and manual), the loose stuff that
+// isn't a deliverable, a schedule item, or a budget line. Confirmed Slack 'plan' captures land here.
+// Lives in the deliverables area. `reloadKey` bumps when captures apply so the list refreshes.
+// (Still backed by event.plan_items.)
 export function PlanList({ eventId, reloadKey = 0 }: { eventId: string; reloadKey?: number }) {
   const [items, setItems] = useState<PlanItem[]>([]);
   const [draft, setDraft] = useState("");
@@ -19,12 +20,12 @@ export function PlanList({ eventId, reloadKey = 0 }: { eventId: string; reloadKe
   return (
     <section className="bg-white rounded-2xl border border-border p-5">
       <div className="flex items-center gap-2 mb-3">
-        <ListChecks className="w-4 h-4 text-gray-400" />
-        <h3 className="font-medium">Plan</h3>
-        <span className="text-[12px] text-gray-400">what's planned to happen</span>
+        <StickyNote className="w-4 h-4 text-gray-400" />
+        <h3 className="font-medium">Notes</h3>
+        <span className="text-[12px] text-gray-400">concepts & general notes — not deliverables</span>
       </div>
       {items.length === 0 ? (
-        <p className="text-[13px] text-gray-400 mb-2">Nothing yet. Decided details from Slack land here, or add your own.</p>
+        <p className="text-[13px] text-gray-400 mb-2">Nothing yet. Concepts & notes from Slack land here, or add your own.</p>
       ) : (
         <ul className="mb-2 space-y-1.5">
           {items.map((p) => (
@@ -40,7 +41,7 @@ export function PlanList({ eventId, reloadKey = 0 }: { eventId: string; reloadKe
         </ul>
       )}
       <div className="flex items-center gap-1.5">
-        <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add a planned detail…" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add a note…" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
         <button onClick={add} disabled={busy || !draft.trim()} className="inline-flex items-center rounded-md bg-gray-900 text-white px-2 py-1 hover:bg-gray-700 disabled:opacity-50"><Plus className="w-3.5 h-3.5" /></button>
       </div>
     </section>

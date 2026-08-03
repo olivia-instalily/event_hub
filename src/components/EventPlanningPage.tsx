@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, listPlanItems, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -1824,6 +1824,8 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
         );
       })}
       </DndContext>
+      {/* Notes — loose concepts / general notes (from Slack + manual) that aren't deliverables. */}
+      <PlanList eventId={plan.id} />
     </section>
   );
 }
@@ -2913,7 +2915,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     try {
       let synced = 0;
       try { const r = await syncGmail(eventId); synced = r.recorded; } catch { /* sync optional */ }
-      const s = await getPlanningSummary(buildFacts(plan));
+      const noteItems = await listPlanItems(eventId).catch(() => []);
+      const s = await getPlanningSummary({ ...buildFacts(plan), notes: noteItems.map((n) => n.text).slice(0, 12) });
       await saveOverviewSummary(eventId, s);
       setSummary(s);
       setResyncMsg(`Regenerated${synced ? ` · ${synced} new email${synced === 1 ? "" : "s"}` : ""}.`);
@@ -2947,8 +2950,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // Pins land in the ledger as `proposed`; the composed Overview surfaces them per home
   // (open → Open·next-up, budget → Budget, person → Staffing) as engageable violet cards.
   const [captures, setCaptures] = useState<SlackCapture[]>([]);
-  const [planKey, setPlanKey] = useState(0);   // bumped when a plan capture applies/discards → refreshes the Plan list
-  const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); setPlanKey((k) => k + 1); };
+  const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); };
   useEffect(() => {
     void loadAndAutoApply();                                      // show + auto-apply already-stored captures
     // then pull new; only re-run the apply pass if the scrape actually stored/changed something
@@ -2992,7 +2994,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
     } else if (c.home === "plan") {
       await addPlanItem(eventId, { text: c.summary, detail: c.detail, slackRef: c.sourceRef });
-      setPlanKey((k) => k + 1);
     }
     // Vendors are no longer a capture home — a cost capture is home 'budget' and lands as a budget
     // row above (loose line); the user can tag its optional vendor in place afterward.
@@ -3040,7 +3041,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       undo = created ? { kind: "plan", planItemId: id } : { kind: "plan" };
     }
     await setCaptureFlags(c.id, { ...c.flags, applied: true, undo });
-    setPlanKey((k) => k + 1);
     return true;
   };
 
@@ -3296,7 +3296,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
       {/* Calendar meetings related to this event — self-hides when there are none. */}
       <div className="mt-4"><UpcomingMeetings eventId={eventId} /></div>
-      <div className="mt-4"><PlanList eventId={eventId} reloadKey={planKey} /></div>
 
       {/* Day-of / day-before views surface the SAME "Open" card as the planning view (setup fields +
           captured proposals), so the yellow bars group under "Open" consistently. Post drops them —
@@ -3674,6 +3673,13 @@ function TimeRangeEditor({ eventId, startTime, endTime, onSaved }: { eventId: st
   );
 }
 
+// No budget row yet → create an empty one on mount and reload, so the Budget tab lands straight on
+// the sectioned tracker (everything at 0) instead of an intermediate "start a budget" step.
+function StartBudget({ eventId, onReady }: { eventId: string; onReady: () => void }) {
+  useEffect(() => { void ensureEventBudget(eventId).then(onReady).catch(() => {}); }, [eventId]);
+  return <div className="bg-white rounded-2xl border border-border p-6 text-sm text-gray-400">Setting up budget…</div>;
+}
+
 export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Props) {
   const [plan, setPlan] = useState<EventPlanning | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3983,10 +3989,7 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 {eventSubTab === "deliverables" && <WrappedDeliverables plan={plan} />}
                 {eventSubTab === "budget" && (plan.budget
                   ? <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} location={plan.location} />
-                  : <div className="bg-white rounded-2xl border border-border p-6">
-                      <p className="text-sm text-gray-500 mb-3">No budget yet for this event.</p>
-                      <button onClick={async () => { await ensureEventBudget(eventId); setReload((r) => r + 1); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black"><Plus className="w-4 h-4" /> Start a budget</button>
-                    </div>)}
+                  : <StartBudget eventId={eventId} onReady={() => setReload((r) => r + 1)} />)}
                 {eventSubTab === "people" && <PeoplePage eventFilter={{ id: eventId, name: plan.title, tag: plan.tags[0] ?? null, status: peopleStatus }} />}
               </div>
             </div>
@@ -4022,16 +4025,15 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
               <BudgetProjections plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
               <BudgetTracker budget={plan.budget} eventId={eventId} eventBudgetTarget={plan.eventBudgetTarget} location={plan.location} />
             </div>
-          : <div className="bg-white rounded-2xl border border-border p-6">
-              <p className="text-sm text-gray-500 mb-3">No budget yet for this event.</p>
-              <button onClick={async () => { await ensureEventBudget(eventId); setReload((r) => r + 1); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm hover:bg-black"><Plus className="w-4 h-4" /> Start a budget</button>
-            </div>)}
+          : <StartBudget eventId={eventId} onReady={() => setReload((r) => r + 1)} />)}
         {tab === "deliverables" && (
           <div className="space-y-6">
             <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
             <BenchmarkEditor eventId={eventId} benchmarks={plan.benchmarks} deliverables={plan.deliverables} setPlan={setPlan} />
             <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} markers={deriveMarkers(plan).markers} currentKey={deriveMarkers(plan).currentKey} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
+            {/* Notes — loose concepts / general notes (Slack + manual), not deliverables. */}
+            <PlanList eventId={eventId} />
           </div>
         )}
         {tab === "page" && (

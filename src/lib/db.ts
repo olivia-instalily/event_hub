@@ -4147,6 +4147,7 @@ export interface PlanningFacts {
   pendingDecisions: { category: string; stage: string }[];
   budget: { committed: number; paid: number; pending: number; target: number | null } | null;
   deliverables: { done: number; total: number; overdue: number; upcoming: string[] };
+  notes?: string[];  // loose planned concepts/notes (from Slack) — the summary folds in only the notable ones
 }
 
 function fmtMoney(n: number | null | undefined): string {
