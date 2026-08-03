@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Trash2 } from "lucide-react";
+import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Trash2, StickyNote } from "lucide-react";
 import {
   listSeriesCaptures, listAssignedSeriesCaptures, assignSeriesCapture, dismissSlackCapture, discardCapture,
-  editSlackCapture, setCaptureHome,
+  editSlackCapture, setCaptureHome, keepSeriesCapture, listSeriesNotes, addSeriesNote, removeSeriesNote,
   runSeriesScrape, getSeriesOverviewData, addSeriesBudgetLine, addSeriesRole,
-  type SeriesCapture, type AssignedCapture, type SeriesOverviewData, type CaptureHome,
+  type SeriesCapture, type AssignedCapture, type SeriesOverviewData, type CaptureHome, type PlanItem,
 } from "../lib/db";
 import { SlackCard, SlackCaptureList } from "./SlackCard";
 import type { TabProps } from "./SeriesDashboard";
@@ -23,9 +23,11 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
   const [aSel, setASel] = useState<Set<string>>(new Set());  // selected in "Assigned to events"
   const [lineLabel, setLineLabel] = useState(""); const [lineAmt, setLineAmt] = useState("");
   const [roleDraft, setRoleDraft] = useState("");
+  const [notes, setNotes] = useState<PlanItem[]>([]);   // push-wide form & structure
+  const [noteDraft, setNoteDraft] = useState("");
 
   const reloadCaps = () => { void listSeriesCaptures(seriesId).then(setCaps); void listAssignedSeriesCaptures(seriesId).then(setAssigned); };
-  const reloadData = () => { void getSeriesOverviewData(seriesId).then(setData); };
+  const reloadData = () => { void getSeriesOverviewData(seriesId).then(setData); void listSeriesNotes(seriesId).then(setNotes); };
   const reloadAll = () => { reloadCaps(); reloadData(); };
   useEffect(() => {
     reloadAll();
@@ -56,6 +58,11 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
 
   const addLine = async () => { const l = lineLabel.trim(); if (!l) return; setBusy(true); try { await addSeriesBudgetLine(seriesId, l, lineAmt.trim() === "" ? null : Number(lineAmt)); setLineLabel(""); setLineAmt(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
   const addRole = async () => { const r = roleDraft.trim(); if (!r) return; setBusy(true); try { await addSeriesRole(seriesId, r); setRoleDraft(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const addNote = async () => { const t = noteDraft.trim(); if (!t) return; setBusy(true); try { await addSeriesNote(seriesId, { text: t }); setNoteDraft(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const removeNote = async (id: string) => { setBusy(true); try { await removeSeriesNote(seriesId, id); setNotes((p) => p.filter((x) => x.id !== id)); } catch { /* ignore */ } finally { setBusy(false); } };
+  // "Keep" on a push-wide card routes it into the series-level store (budget / staffing / notes) and clears the card.
+  const keepSeriesWide = async (c: SeriesCapture) => { setBusy(true); try { await keepSeriesCapture(seriesId, { id: c.id, home: c.home, summary: c.summary, detail: c.detail, sourceRef: c.sourceRef }); setSel((p) => { const n = new Set(p); n.delete(c.id); return n; }); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const keepSeriesBulk = async () => { setBusy(true); try { for (const c of caps.filter((c) => sel.has(c.id))) await keepSeriesCapture(seriesId, { id: c.id, home: c.home, summary: c.summary, detail: c.detail, sourceRef: c.sourceRef }); setSel(new Set()); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
 
   const committedTotal = (data?.committed ?? []).reduce((s, c) => s + c.committed, 0);
   const seriesLinesTotal = (data?.seriesLines ?? []).reduce((s, l) => s + (l.confirmedAmount ?? 0), 0);
@@ -85,11 +92,13 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
           }))}
           selected={sel}
           onToggleAll={(on) => allOn(setSel, caps.map((c) => c.id), on)}
+          onBulkKeep={keepSeriesBulk}
           onBulkDiscard={discardFromSlack}
           emptyText="Nothing waiting. Updates the scrape couldn't pin to one event land here to assign."
           card={(m) => (
             <SlackCard model={m} selected={sel.has(m.id)} onToggleSelect={() => toggle(setSel, m.id)}
               assignTargets={events.map((e) => ({ id: e.id, name: e.name }))} onAssign={(eid) => assign(m.id, eid)}
+              onKeep={() => { const c = caps.find((x) => x.id === m.id); return c ? keepSeriesWide(c) : Promise.resolve(); }}
               onDiscard={() => discardOne(m.id)} onEdit={(s, d) => editCap(m.id, s, d)} onMove={(h) => moveCap(m.id, h)} />
           )}
         />
@@ -199,6 +208,33 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
           </div>
         </section>
       </div>
+
+      {/* ── Form & structure (push-wide concepts / how the series runs) ─────────────── */}
+      <section className="bg-white rounded-2xl border border-border p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <StickyNote className="w-4 h-4 text-gray-400" />
+          <h3 className="font-medium">Form &amp; structure</h3>
+          <span className="text-[12px] text-gray-400">push-wide concepts / how the series runs — not deliverables</span>
+        </div>
+        {notes.length > 0 && (
+          <ul className="mb-2 space-y-1.5">
+            {notes.map((p) => (
+              <li key={p.id} className="flex items-start gap-2 text-sm group">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0" />
+                <span className="flex-1 min-w-0 text-gray-800">
+                  {p.text}{p.detail && <span className="text-gray-500"> — {p.detail}</span>}
+                  {p.slackRef && <a href={p.slackRef} target="_blank" rel="noreferrer" title="From Slack" className="ml-1 inline-flex items-center text-violet-500 hover:text-violet-700 align-middle"><ArrowUpRight className="w-3 h-3" /></a>}
+                </span>
+                <button onClick={() => removeNote(p.id)} disabled={busy} title="Remove" className="shrink-0 text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100 disabled:opacity-50"><X className="w-3.5 h-3.5" /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-center gap-1.5">
+          <input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addNote(); }} placeholder="Add a push-wide note…" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-[13px] focus:outline-none focus:ring-2 focus:ring-gray-300" />
+          <button onClick={addNote} disabled={busy || !noteDraft.trim()} className="inline-flex items-center rounded-md bg-gray-900 text-white px-2 py-1 hover:bg-gray-700 disabled:opacity-50"><Plus className="w-3.5 h-3.5" /></button>
+        </div>
+      </section>
 
       {/* ── Learnings (carried across the events) ──────────────────────────────────── */}
       <section className="bg-white rounded-2xl border border-border p-5">

@@ -4,7 +4,7 @@ import { scopingToApproval, loadScoping } from './scoping';
 import { PAGE_PUBLIC_FIELDS } from './page';
 import { dueOffsetForTitle } from './schedule';
 import { matchFormat } from './formats';
-import { labelsMatch } from './capturePromote';
+import { labelsMatch, parseMoney, parseBudgetStatus, parsePersonRole } from './capturePromote';
 import { dedupeCategories } from './vendorCategories';
 import { categoryKey } from './budgetCategories';
 import { eventFocus, type EventFocus } from './eventFocus';
@@ -2197,6 +2197,39 @@ export async function listSeriesCaptures(seriesId: string): Promise<SeriesCaptur
     routing: ((r.flags as any)?.routing === 'series' ? 'series' : 'unassigned'),
     sourceRef: r.source_ref ?? null, sourceQuote: r.source_quote ?? null, createdAt: r.created_at,
   }));
+}
+
+// Series-level "Form & structure" notes (event_series.plan_items) — mirrors the event Notes list.
+export async function listSeriesNotes(seriesId: string): Promise<PlanItem[]> {
+  const { data } = await supabase.from('event_series').select('plan_items').eq('id', seriesId).maybeSingle();
+  const raw = Array.isArray((data as any)?.plan_items) ? (data as any).plan_items : [];
+  return raw.map((p: any) => ({ id: p.id, text: p.text ?? '', detail: p.detail ?? null, slackRef: p.slackRef ?? null }));
+}
+export async function addSeriesNote(seriesId: string, item: { text: string; detail?: string | null; slackRef?: string | null }): Promise<void> {
+  const items = await listSeriesNotes(seriesId);
+  if (items.some((p) => normPlan(p.text) === normPlan(item.text))) return;
+  const next = [...items, { id: genId('pi'), text: item.text.trim(), detail: item.detail?.trim() || null, slackRef: item.slackRef ?? null }];
+  const { error } = await supabase.from('event_series').update({ plan_items: next }).eq('id', seriesId);
+  if (error) throw new Error(error.message);
+}
+export async function removeSeriesNote(seriesId: string, id: string): Promise<void> {
+  const items = await listSeriesNotes(seriesId);
+  const { error } = await supabase.from('event_series').update({ plan_items: items.filter((p) => p.id !== id) }).eq('id', seriesId);
+  if (error) throw new Error(error.message);
+}
+
+// "Keep" a series-wide capture into the series-level store: budget → a series budget line, staffing →
+// a series role (a throughline across the push), everything else → a series note. Then clear the card.
+export async function keepSeriesCapture(seriesId: string, cap: { id: string; home: CaptureHome; summary: string; detail: string | null; sourceRef: string | null }): Promise<void> {
+  if (cap.home === 'budget') {
+    const amount = parseMoney(cap.detail) ?? parseMoney(cap.summary);
+    await addSeriesBudgetLine(seriesId, cap.summary, amount, parseBudgetStatus(`${cap.summary} ${cap.detail ?? ''}`) as BudgetStatus);
+  } else if (cap.home === 'person') {
+    await addSeriesRole(seriesId, parsePersonRole(cap.summary).role);
+  } else {
+    await addSeriesNote(seriesId, { text: cap.summary, detail: cap.detail, slackRef: cap.sourceRef });
+  }
+  await dismissSlackCapture(cap.id);
 }
 
 // Assign a series-level capture to a member event: re-own it (event_id set, series_id cleared) and
