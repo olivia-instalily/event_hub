@@ -25,8 +25,8 @@ export function PlanList({ eventId, reloadKey = 0 }: { eventId: string; reloadKe
     <section className="bg-white rounded-2xl border border-border p-5">
       <div className="flex items-center gap-2 mb-3">
         <StickyNote className="w-4 h-4 text-gray-400" />
-        <h3 className="font-medium">Notes</h3>
-        <span className="text-[12px] text-gray-400">concepts & general notes — not deliverables</span>
+        <h3 className="font-medium">Form &amp; structure</h3>
+        <span className="text-[12px] text-gray-400">concepts / how the event runs — not deliverables</span>
       </div>
       <ul className="mb-2 space-y-1.5">
         {items.map((p) => (

@@ -1824,8 +1824,6 @@ function WrappedDeliverables({ plan }: { plan: EventPlanning }) {
         );
       })}
       </DndContext>
-      {/* Notes — loose concepts / general notes (from Slack + manual) that aren't deliverables. */}
-      <PlanList eventId={plan.id} />
     </section>
   );
 }
@@ -3366,6 +3364,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
                   onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h) => reclassifyCapture(c, h)}
                   onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
               ))}
+              {/* Form & structure — concepts/notes; self-hides when empty. Sits below budget. */}
+              <PlanList eventId={eventId} />
             </div>
             <div id="ov-staffing" className="space-y-3 min-w-0 rounded-2xl">
               {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
@@ -4045,8 +4045,6 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           : <StartBudget eventId={eventId} onReady={() => setReload((r) => r + 1)} />)}
         {tab === "deliverables" && (
           <div className="space-y-6">
-            {/* Notes — loose concepts / general notes (Slack + manual); self-hides when empty. */}
-            <PlanList eventId={eventId} />
             <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
             <BenchmarkEditor eventId={eventId} benchmarks={plan.benchmarks} deliverables={plan.deliverables} setPlan={setPlan} />
             <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} markers={deriveMarkers(plan).markers} currentKey={deriveMarkers(plan).currentKey} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
