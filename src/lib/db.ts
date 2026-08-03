@@ -2236,7 +2236,10 @@ export async function listAssignedSeriesCaptures(seriesId: string): Promise<Assi
 // "Discard" a capture — reverse what it applied to the event (delete the budget line / remove the
 // staff role it created), then dismiss it. For unapplied/series-level captures there's nothing to
 // reverse, so it's just a dismiss. ("Keep" = dismissSlackCapture: clears the card, leaves the info.)
-export async function discardCapture(cap: { id: string; eventId?: string | null; undo?: Record<string, any> | null }): Promise<void> {
+// Reverse only the effect a capture applied (delete the budget line / agenda item / deliverable / plan
+// note / staff role) — without touching the capture row. Used by discard (then dismiss) and by
+// re-categorize (then re-apply as the new kind).
+export async function reverseCaptureEffect(cap: { eventId?: string | null; undo?: Record<string, any> | null }): Promise<void> {
   const undo = cap.undo ?? null;
   if (undo?.kind === 'budget' && undo.lineId) {
     await deleteBudgetLine(undo.lineId as string).catch(() => {});
@@ -2257,6 +2260,10 @@ export async function discardCapture(cap: { id: string; eventId?: string | null;
       await setEventRoleSlackRefs(cap.eventId, rr).catch(() => {});
     }
   }
+}
+
+export async function discardCapture(cap: { id: string; eventId?: string | null; undo?: Record<string, any> | null }): Promise<void> {
+  await reverseCaptureEffect(cap);
   await dismissSlackCapture(cap.id);
 }
 

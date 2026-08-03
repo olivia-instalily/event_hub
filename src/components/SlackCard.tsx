@@ -9,16 +9,21 @@ export const HOME_TAG: Record<CaptureHome, { label: string; cls: string }> = {
   open: { label: "Still open", cls: "bg-violet-100 text-violet-700" },
   plan: { label: "Plan", cls: "bg-gray-100 text-gray-600" },
 };
-// Lanes a capture can be moved to (reclassify home).
-const HOME_MOVE: { home: CaptureHome; label: string }[] = [
+// Lanes a capture can be moved to. The three plan kinds (home=plan) route where a decided fact lands:
+// Form & structure (note), Run of show (agenda), Deliverable — plus the other homes.
+export type PlanKind = "note" | "agenda" | "deliverable";
+const HOME_MOVE: { home: CaptureHome; planKind?: PlanKind; label: string }[] = [
+  { home: "plan", planKind: "note", label: "Form & structure" },
+  { home: "plan", planKind: "agenda", label: "Run of show" },
+  { home: "plan", planKind: "deliverable", label: "Deliverable" },
   { home: "person", label: "Staffing" }, { home: "budget", label: "Budget" },
-  { home: "open", label: "Still open" }, { home: "plan", label: "Plan" },
+  { home: "open", label: "Still open" },
 ];
 
 // A capture normalized to what the card renders — callers map SlackCapture / SeriesCapture /
 // AssignedCapture into this common shape.
 export type SlackCardModel = {
-  id: string; home: CaptureHome; summary: string; detail: string | null;
+  id: string; home: CaptureHome; planKind?: PlanKind; summary: string; detail: string | null;
   sourceRef: string | null; badge?: ReactNode; warning?: string | null;
 };
 
@@ -34,7 +39,7 @@ export function SlackCard({
   tone?: "violet" | "emerald";
   selected?: boolean; onToggleSelect?: () => void;
   onEdit?: (summary: string, detail: string | null) => Promise<void>;
-  onMove?: (home: CaptureHome) => Promise<void>;
+  onMove?: (home: CaptureHome, planKind?: PlanKind) => Promise<void>;
   onKeep?: () => Promise<void>;
   onDiscard?: () => Promise<void>;
   assignTargets?: { id: string; name: string }[];
@@ -48,7 +53,11 @@ export function SlackCard({
 
   const run = async (fn: () => Promise<void>) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const saveEdit = () => run(async () => { await onEdit?.(summary.trim(), detail.trim() || null); setEditing(false); });
-  const tag = HOME_TAG[model.home];
+  // A 'plan' capture shows its kind (Form & structure / Run of show / Deliverable), not a bare "Plan".
+  const PLAN_KIND_TAG: Record<PlanKind, string> = { note: "Form & structure", agenda: "Run of show", deliverable: "Deliverable" };
+  const tag = model.home === "plan"
+    ? { label: PLAN_KIND_TAG[model.planKind ?? "note"], cls: HOME_TAG.plan.cls }
+    : HOME_TAG[model.home];
   const toneCls = tone === "emerald" ? "border-emerald-200 bg-emerald-50/40" : "border-violet-200 bg-violet-50/50";
 
   return (
@@ -79,8 +88,8 @@ export function SlackCard({
               {onMove && (
                 <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                   <span className="text-[11px] text-gray-400">move to:</span>
-                  {HOME_MOVE.filter((h) => h.home !== model.home).map((h) => (
-                    <button key={h.home} onClick={() => run(async () => { await onMove(h.home); setEditing(false); })} disabled={busy}
+                  {HOME_MOVE.filter((h) => !(h.home === model.home && (h.planKind ?? null) === (model.planKind ?? null))).map((h) => (
+                    <button key={h.label} onClick={() => run(async () => { await onMove(h.home, h.planKind); setEditing(false); })} disabled={busy}
                       className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">{h.label}</button>
                   ))}
                 </div>

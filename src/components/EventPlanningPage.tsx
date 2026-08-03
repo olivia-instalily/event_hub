@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, listPlanItems, parseAgendaItem, addAgendaItem, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, reverseCaptureEffect, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, listPlanItems, parseAgendaItem, addAgendaItem, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -3111,9 +3111,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   };
 
   // Fix a misclassified capture's lane (e.g. a vendor read as a person) before it's settled.
-  const reclassifyCapture = async (c: SlackCapture, home: CaptureHome) => {
-    await setCaptureHome(c.id, home);
-    reloadCaptures();
+  // Re-categorize a capture to a different lane (incl. a plan kind: Form & structure / Run of show /
+  // Deliverable). If it was already applied, reverse what it created, then re-apply as the new lane.
+  const reclassifyCapture = async (c: SlackCapture, home: CaptureHome, planKind?: "note" | "agenda" | "deliverable") => {
+    if (capApplied(c)) await reverseCaptureEffect({ eventId, undo: (c.flags as any)?.undo ?? null });
+    if (home !== c.home) await setCaptureHome(c.id, home);
+    await setCaptureFlags(c.id, home === "plan" && planKind ? { planKind } : {});
+    await loadAndAutoApply();
   };
 
   // Keep = clear the card, keep what it applied. Discard = reverse what it applied, then remove.
@@ -3127,7 +3131,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   const bulkDiscardCaps = async () => { for (const id of capSel) { const c = captures.find((x) => x.id === id); if (c) await discardCapture({ id: c.id, eventId, undo: (c.flags as any)?.undo ?? null }); } setCapSel(new Set()); reloadCaptures(); onApplied(); };
   // A capture → the shared card model (badge = applied, warning = held reason).
   const captureModel = (c: SlackCapture): SlackCardModel => ({
-    id: c.id, home: c.home, summary: c.summary, detail: c.detail, sourceRef: c.sourceRef,
+    id: c.id, home: c.home, planKind: (c.flags as any)?.planKind, summary: c.summary, detail: c.detail, sourceRef: c.sourceRef,
     badge: capApplied(c) ? <span className="text-[10px] text-emerald-700">✓ added</span> : undefined,
     warning: capHeld(c) ? (((c.flags as any)?.ambiguity as string) ?? `conflicts with the set ${(c.flags as any)?.conflict?.field ?? "value"} — won't overwrite`) : null,
   });
@@ -3136,7 +3140,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       model={captureModel(c)} tone={capApplied(c) ? "emerald" : "violet"}
       selected={capSel.has(c.id)} onToggleSelect={() => toggleCapSel(c.id)}
       onKeep={() => keepCapture(c)} onDiscard={() => discardCaptureEvt(c)}
-      onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h) => reclassifyCapture(c, h)}
+      onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h, pk) => reclassifyCapture(c, h, pk)}
       onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined}
     />
   );
@@ -3361,7 +3365,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
               {capByHome("budget").map((c) => (
                 <SlackCard key={c.id} model={captureModel(c)} tone={capApplied(c) ? "emerald" : "violet"}
                   onKeep={() => keepCapture(c)} onDiscard={() => discardCaptureEvt(c)}
-                  onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h) => reclassifyCapture(c, h)}
+                  onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h, pk) => reclassifyCapture(c, h, pk)}
                   onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
               ))}
               {/* Form & structure — concepts/notes; self-hides when empty. Sits below budget. */}
@@ -3373,7 +3377,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
               {capByHome("person").map((c) => (
                 <SlackCard key={c.id} model={captureModel(c)} tone={capApplied(c) ? "emerald" : "violet"}
                   onKeep={() => keepCapture(c)} onDiscard={() => discardCaptureEvt(c)}
-                  onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h) => reclassifyCapture(c, h)}
+                  onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h, pk) => reclassifyCapture(c, h, pk)}
                   onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
               ))}
               <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} roleSlackRefs={plan.roleSlackRefs ?? {}} />
