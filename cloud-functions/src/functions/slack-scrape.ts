@@ -40,6 +40,13 @@ export async function handler(req: Request, res: Response) {
   const msgs = await fetchSince(channel, marker);
   if (msgs.length === 0) { res.json({ ok: true, skipped: 'nothing new' }); return; }
 
+  // Claim this window atomically before extracting (see scrapeSeries) — one run wins, concurrent
+  // runs get 0 rows and bail, so the same messages never yield near-duplicate captures.
+  const eLatestTs = msgs[msgs.length - 1].ts;
+  const eClaimQ = sb.from('event').update({ slack_last_extracted_ts: eLatestTs }).eq('id', eventId);
+  const { data: eClaimed } = await (marker == null ? eClaimQ.is('slack_last_extracted_ts', null) : eClaimQ.eq('slack_last_extracted_ts', marker)).select('id');
+  if (!eClaimed || eClaimed.length === 0) { res.json({ ok: true, skipped: 'another scrape in progress' }); return; }
+
   const { captures, people, removals } = await extractScrape(msgs);
 
   // Resolve a Slack permalink per unique source ts once (captures + people share the map) — the client
@@ -102,10 +109,7 @@ export async function handler(req: Request, res: Response) {
     if (rmIds.length) { await sb.from('slack_capture').update({ status: 'dismissed' }).in('id', rmIds); dismissed = rmIds.length; }
   }
 
-  // Advance the marker to the newest message processed (msgs are chronological).
-  const latestTs = msgs[msgs.length - 1].ts;
-  await sb.from('event').update({ slack_last_extracted_ts: latestTs }).eq('id', eventId);
-
+  // (marker already advanced at claim time)
   console.log(JSON.stringify({ fn: 'slack-scrape', eventId, processed: msgs.length, extracted: captures.length, stored, tagged, noMatch, dismissed }));
   res.json({ ok: true, processed: msgs.length, stored, tagged, noMatch, dismissed });
 }
@@ -119,6 +123,16 @@ async function scrapeSeries(sb: any, ser: { id: string; slack_channel: string; s
   const marker = ser.slack_last_extracted_ts ?? null;
   const msgs = await fetchSince(channel, marker);
   if (msgs.length === 0) { res.json({ ok: true, mode: 'series', skipped: 'nothing new' }); return; }
+
+  // Claim this window atomically BEFORE extracting: advance the marker only if it's still what we read.
+  // A concurrent scrape (Overview mount + a member event open, a double-mount, another tab) reads the
+  // same old marker and races us — extraction is nondeterministic, so both would store near-duplicate
+  // captures with different summary-slug ids. The conditional update lets exactly one run win; the
+  // loser gets 0 rows and bails, so the same messages are never processed twice.
+  const latestTs = msgs[msgs.length - 1].ts;
+  const claimQ = sb.from('event_series').update({ slack_last_extracted_ts: latestTs }).eq('id', ser.id);
+  const { data: claimed } = await (marker == null ? claimQ.is('slack_last_extracted_ts', null) : claimQ.eq('slack_last_extracted_ts', marker)).select('id');
+  if (!claimed || claimed.length === 0) { res.json({ ok: true, mode: 'series', skipped: 'another scrape in progress' }); return; }
 
   const { data: rosterRows } = await sb.from('event').select('id, name, event_date').eq('series_id', ser.id);
   const roster: RosterEvent[] = (rosterRows ?? []).map((r: any) => ({ id: r.id, name: r.name, date: r.event_date }));
@@ -150,9 +164,7 @@ async function scrapeSeries(sb: any, ser: { id: string; slack_channel: string; s
     if (rmIds.length) { await sb.from('slack_capture').update({ status: 'dismissed' }).in('id', rmIds); dismissed = rmIds.length; }
   }
 
-  const latestTs = msgs[msgs.length - 1].ts;
-  await sb.from('event_series').update({ slack_last_extracted_ts: latestTs }).eq('id', ser.id);
-
+  // (marker already advanced at claim time)
   console.log(JSON.stringify({ fn: 'slack-scrape', mode: 'series', seriesId: ser.id, processed: msgs.length, extracted: captures.length, stored, toEvents, toSeries, dismissed }));
   res.json({ ok: true, mode: 'series', processed: msgs.length, stored, toEvents, toSeries, dismissed });
 }
