@@ -42,12 +42,25 @@ export function labelsMatch(a: string, b: string): boolean {
 
 /** Split a person capture into name + role. "Thurman — bar" / "Thurman (bar)" / "Doug on sound".
  *  Falls back to a role-only entry (name null) when there's no separator. */
-export function parsePersonRole(summary: string): { name: string | null; role: string } {
+// Verbs that bridge a name and the role they fill ("Olivia runs check-in", "Doug leads AV").
+const ROLE_VERB = "runs?|running|leads?|leading|does|doing|handles?|handling|manages?|managing|owns?|owning|covers?|covering|is\\s+on|will\\s+run|to\\s+run|to\\s+lead|on";
+const stripRole = (r: string) => r.replace(/^\s*(?:the|our|a)\s+/i, "").trim();
+
+export function parsePersonRole(summary: string, knownNames?: string[]): { name: string | null; role: string } {
   const s = summary.trim();
-  const m =
-    s.match(/^(.+?)\s*[—–-]\s*(.+)$/) ||       // Name — role / Name - role
-    s.match(/^(.+?)\s*\((.+)\)\s*$/) ||         // Name (role)
-    s.match(/^(.+?)\s+on\s+(.+)$/i);            // Name on role
-  if (m) return { name: m[1].trim(), role: m[2].trim() };
+  // 1. explicit delimiter: "Name — role" / "Name (role)". A plain hyphen must have spaces around it,
+  //    so a hyphenated role word ("check-in") isn't split; em/en dashes may be tight.
+  let m = s.match(/^(.+?)\s*[—–]\s*(.+)$/) || s.match(/^(.+?)\s+-\s+(.+)$/) || s.match(/^(.+?)\s*\((.+)\)\s*$/);
+  if (m) return { name: m[1].trim(), role: stripRole(m[2]) };
+  // 2. a known name (owner / team member) at the start → that's the person; the rest, minus a bridging
+  //    verb, is the role. "Olivia runs check in" → Olivia / check in.
+  const hit = (knownNames ?? []).find((n) => n && new RegExp(`^${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(s));
+  if (hit) {
+    const rest = s.slice(hit.length).replace(new RegExp(`^\\s*(?:'s)?\\s*(?:${ROLE_VERB})\\b\\s*`, "i"), "").trim();
+    return { name: hit, role: stripRole(rest) || stripRole(s.slice(hit.length)) || s };
+  }
+  // 3. verb bridge tells us where the name ends: "<name> runs <role>"
+  m = s.match(new RegExp(`^(.{1,40}?)\\s+(?:${ROLE_VERB})\\s+(.+)$`, "i"));
+  if (m) return { name: m[1].trim(), role: stripRole(m[2]) };
   return { name: null, role: s };
 }

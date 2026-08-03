@@ -2948,6 +2948,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // Pins land in the ledger as `proposed`; the composed Overview surfaces them per home
   // (open → Open·next-up, budget → Budget, person → Staffing) as engageable violet cards.
   const [captures, setCaptures] = useState<SlackCapture[]>([]);
+  // Known people (owners + already-assigned) so a person capture like "Olivia runs check-in" parses to
+  // Olivia / check-in instead of guessing where the name ends.
+  const ownerNames = [...(plan.owners ?? []).map((o) => o.name), ...Object.values(plan.roleAssignments ?? {})].filter(Boolean) as string[];
   const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); };
   useEffect(() => {
     void loadAndAutoApply();                                      // show + auto-apply already-stored captures
@@ -2987,7 +2990,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       if (match) return { capture: c, amount, status, match };
       await insertBudgetLine(eventId, c.summary, amount, status);
     } else if (c.home === "person") {
-      const { name, role } = parsePersonRole(c.summary);
+      const { name, role } = parsePersonRole(c.summary, ownerNames);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
     } else if (c.home === "plan") {
@@ -3087,7 +3090,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       const assigns = { ...(plan.roleAssignments ?? {}) };
       const refs = { ...(plan.roleSlackRefs ?? {}) };
       for (const c of persons) {
-        const { name, role } = parsePersonRole(c.summary);
+        const { name, role } = parsePersonRole(c.summary, ownerNames);
         if (roles.includes(role)) {
           // Role already on the event (pre-existing or added earlier this pass) → don't duplicate;
           // pin the Slack link on the role and clear the card. Don't overwrite the existing assignment.
