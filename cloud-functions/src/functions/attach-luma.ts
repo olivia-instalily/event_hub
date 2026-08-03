@@ -33,7 +33,7 @@ async function findLumaEventBySlug(apiKey: string, slug: string) {
 
 export async function handler(req: Request, res: Response) {
   try {
-    const { eventId, url } = req.body;
+    const { eventId, url, force } = req.body;
     if (!eventId || !url) { res.status(400).json({ error: 'eventId and url are required' }); return; }
 
     const slug = slugOf(url);
@@ -46,6 +46,14 @@ export async function handler(req: Request, res: Response) {
     if (!match) { res.status(404).json({ error: 'No Luma event on this calendar matches that link.' }); return; }
 
     const sb = getServiceClient();
+    // Guard: this Luma is likely already another event (it auto-synced, or was attached elsewhere).
+    // Attaching again duplicates it — surface the existing event so the user can go there / merge
+    // instead of silently creating a second copy. `force` proceeds anyway.
+    if (!force) {
+      const { data: dupes } = await sb.from('event').select('id, name').eq('luma_event_id', match.id).neq('id', eventId).limit(1);
+      if (dupes && dupes.length) { res.json({ conflict: { eventId: dupes[0].id, name: dupes[0].name ?? match.name } }); return; }
+    }
+
     const { error } = await sb.from('event')
       .update({ luma_event_id: match.id, cover_image_url: match.cover_url, luma_cover_url: match.cover_url, luma_url: match.url, luma_name: match.name })
       .eq('id', eventId);

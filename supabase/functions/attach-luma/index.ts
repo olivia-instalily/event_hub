@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
 
   try {
-    const { eventId, url } = await req.json();
+    const { eventId, url, force } = await req.json();
     if (!eventId || !url) return json({ error: 'eventId and url are required' }, 400);
 
     const slug = slugOf(url);
@@ -72,6 +72,11 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
       { auth: { persistSession: false } },
     );
+    // Guard: don't silently duplicate a Luma that's already another event — surface it (see Express twin).
+    if (!force) {
+      const { data: dupes } = await sb.from('event').select('id, name').eq('luma_event_id', match.id).neq('id', eventId).limit(1);
+      if (dupes && dupes.length) return json({ conflict: { eventId: dupes[0].id, name: dupes[0].name ?? match.name } });
+    }
     const { error } = await sb
       .from('event')
       .update({ luma_event_id: match.id, cover_image_url: match.cover_url, luma_cover_url: match.cover_url, luma_url: match.url, luma_name: match.name })

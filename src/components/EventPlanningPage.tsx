@@ -219,11 +219,16 @@ function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: str
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<{ eventId: string; name: string | null } | null>(null); // Luma already on another event
 
-  const attach = async () => {
+  const attach = async (force = false) => {
     const u = input.trim(); if (!u) return;
     setBusy(true); setErr(null);
-    try { const r = await attachLuma(eventId, u); setUrl(r.lumaUrl ?? u); setMode("idle"); setInput(""); }
+    try {
+      const r = await attachLuma(eventId, u, force);
+      if ("conflict" in r) { setConflict(r.conflict); return; }   // already linked elsewhere → ask before duplicating
+      setUrl(r.lumaUrl ?? u); setMode("idle"); setInput(""); setConflict(null);
+    }
     catch (e: any) { setErr(e?.message ?? String(e)); }
     finally { setBusy(false); }
   };
@@ -262,10 +267,16 @@ function LumaAttach({ eventId, initialUrl, draft, descriptions }: { eventId: str
     </span>
   );
   if (mode === "attach") return (
-    <span className="inline-flex items-center gap-1">
-      <input autoFocus value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") attach(); }} placeholder="luma.com/…" className="px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-      <button onClick={attach} disabled={busy || !input.trim()} className="px-2 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">{busy ? "…" : "Attach"}</button>
-      <button onClick={() => setMode("menu")} className="text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <input autoFocus value={input} onChange={(e) => { setInput(e.target.value); setConflict(null); }} onKeyDown={(e) => { if (e.key === "Enter") attach(); }} placeholder="luma.com/…" className="px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
+      <button onClick={() => attach()} disabled={busy || !input.trim()} className="px-2 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300 disabled:opacity-50">{busy ? "…" : "Attach"}</button>
+      <button onClick={() => { setMode("menu"); setConflict(null); }} className="text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
+      {conflict && (
+        <span className="w-full mt-1 flex items-center gap-2 text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+          Already synced as <span className="font-medium">“{conflict.name ?? "another event"}”</span>. Use that one to avoid a duplicate, or
+          <button onClick={() => attach(true)} disabled={busy} className="font-medium text-amber-800 underline hover:text-amber-900 disabled:opacity-50">attach here anyway</button>.
+        </span>
+      )}
       {err && <span className="text-[15px] text-red-600">{err}</span>}
     </span>
   );

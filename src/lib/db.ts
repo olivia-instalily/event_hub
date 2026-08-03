@@ -1842,18 +1842,22 @@ export async function syncGreenhouse(emails: string[]): Promise<{ configured: bo
 }
 
 /** Attach a Luma event from a pasted public link. Server-side resolution + write. */
+export type AttachLumaResult =
+  | { lumaEventId: string; name: string | null; coverImageUrl: string | null; lumaUrl: string }
+  | { conflict: { eventId: string; name: string | null } };  // this Luma is already another event
 export async function attachLuma(
   eventId: string,
   url: string,
-): Promise<{ lumaEventId: string; name: string | null; coverImageUrl: string | null; lumaUrl: string }> {
-  const { data, error } = await supabase.functions.invoke('attach-luma', { body: { eventId, url } });
+  force = false,
+): Promise<AttachLumaResult> {
+  const { data, error } = await supabase.functions.invoke('attach-luma', { body: { eventId, url, force } });
   if (error) {
     // Surface the function's JSON error message when present.
     const msg = (data as any)?.error ?? error.message ?? String(error);
     throw new Error(msg);
   }
   if ((data as any)?.error) throw new Error((data as any).error);
-  return data as any;
+  return data as AttachLumaResult;
 }
 
 /** Break the Luma link on an event: clears the stored Luma id/url/name/cover so it's no longer
