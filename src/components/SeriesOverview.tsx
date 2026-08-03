@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Undo2 } from "lucide-react";
+import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Undo2, Trash2 } from "lucide-react";
 import {
   listSeriesCaptures, listAssignedSeriesCaptures, assignSeriesCapture, dismissSlackCapture, discardCapture,
   runSeriesScrape, getSeriesOverviewData, addSeriesBudgetLine, addSeriesRole,
@@ -114,7 +114,7 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
                       <button key={e.id} disabled={busy} onClick={() => assign(c.id, e.id)}
                         className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">{e.name}</button>
                     ))}
-                    <button disabled={busy} onClick={() => discardOne(c.id)} title="Discard this update" className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"><X className="w-3.5 h-3.5" /> discard</button>
+                    <button disabled={busy} onClick={() => discardOne(c.id)} title="Discard this update" className="ml-auto inline-flex items-center rounded-md p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </li>
               ))}
@@ -148,16 +148,19 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
                 <button onClick={() => onOpenEvent?.(event.id)} className="text-[12px] font-medium text-gray-600 hover:text-violet-700 hover:underline mb-1">{event.name}</button>
                 <ul className="space-y-1.5">
                   {ec.map((c) => (
-                    <li key={c.id} className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 px-3 py-2">
+                    <li key={c.id} className="flex items-stretch gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 px-3 py-2">
                       <div className="mt-0.5"><Box on={aSel.has(c.id)} onClick={() => toggle(setASel, c.id)} /></div>
                       <span className="flex-1 min-w-0">
                         <span className="flex items-center gap-1.5"><CardChip home={c.home} />{c.applied && <span className="text-[10px] text-emerald-700">✓ applied</span>}</span>
                         <span className="block text-[13px] text-gray-900">{c.summary}{c.detail && <span className="text-gray-500"> — {c.detail}</span>}</span>
                       </span>
-                      {c.sourceRef && <a href={c.sourceRef} target="_blank" rel="noreferrer" className="shrink-0 inline-flex items-center text-violet-500 hover:text-violet-700"><ArrowUpRight className="w-3.5 h-3.5" /></a>}
-                      <div className="shrink-0 flex items-center gap-1 text-[11px]">
-                        <button disabled={busy} onClick={() => keepOne(c.id)} title="Clear this card, keep what it added" className="rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 disabled:opacity-50">keep</button>
-                        <button disabled={busy} onClick={() => discardOneAssigned(c)} title="Reverse what it added, then remove" className="rounded px-1.5 py-0.5 text-red-500 hover:bg-red-50 disabled:opacity-50">discard</button>
+                      {/* Source (purple) pinned top-right; keep/discard pinned bottom-right, close together. */}
+                      <div className="shrink-0 flex flex-col items-end justify-between">
+                        {c.sourceRef ? <a href={c.sourceRef} target="_blank" rel="noreferrer" className="inline-flex items-center text-violet-500 hover:text-violet-700"><ArrowUpRight className="w-3.5 h-3.5" /></a> : <span />}
+                        <div className="flex items-center gap-0.5 text-[11px]">
+                          <button disabled={busy} onClick={() => keepOne(c.id)} title="Clear this card, keep what it added" className="rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 disabled:opacity-50">keep</button>
+                          <button disabled={busy} onClick={() => discardOneAssigned(c)} title="Reverse what it added, then remove" className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
                       </div>
                     </li>
                   ))}
