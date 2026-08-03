@@ -7,8 +7,11 @@ const HOME_ORDER: Home[] = ['plan', 'person', 'open', 'budget'];
 export interface SlackMsg { ts: string; text: string; user?: string; thread_ts?: string }
 export interface EventRow { id: string; name?: string; event_date?: string | null; slack_channel?: string | null }
 export interface Proposal { home: Home; summary: string; detail?: string; sourceQuote?: string; usedContext?: { first: string; last: string }; ambiguity?: string }
+// planKind splits a 'plan' fact by where it should land: a scheduled time-point → run of show
+// ('agenda'), something to produce/do → 'deliverable', or a form/structure concept → 'note' (default).
+export type PlanKind = 'note' | 'agenda' | 'deliverable';
 // A scrape proposal carries the SOURCE message ts, so re-scraping the same message is idempotent.
-export interface ScrapeProposal { home: Home; summary: string; detail?: string; sourceQuote?: string; sourceTs: string }
+export interface ScrapeProposal { home: Home; summary: string; detail?: string; sourceQuote?: string; sourceTs: string; planKind?: PlanKind }
 // A person met at/around the event (candidate/contact) — routed to the People list, not an Overview card.
 // note = why they matter / their interest; linkedin = a profile URL if one was shared; sourceTs → permalink.
 export interface ScrapePerson { name: string; note: string; linkedin?: string; sourceTs: string; sourceQuote?: string }
@@ -85,7 +88,7 @@ export function buildScrapeCaptures(
     event_id: event.id, series_id: null, slack_channel: channel, slack_ts: p.sourceTs, home: p.home,
     summary: p.summary.trim(), detail: p.detail?.trim() || null, status: 'proposed' as const,
     source_ref: permalinks[p.sourceTs] ?? null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
-    flags: {}, reactor_user: null,
+    flags: p.home === 'plan' ? { planKind: p.planKind ?? 'note' } : {}, reactor_user: null,
   }));
 }
 
@@ -106,11 +109,14 @@ export function buildTargetedCaptures(
       slack_channel: channel, slack_ts: p.sourceTs, home: p.home,
       summary: p.summary.trim(), detail: p.detail?.trim() || null, status: 'proposed' as const,
       source_ref: permalinks[p.sourceTs] ?? null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
-      flags: toEvent ? {} : { routing: p.eventId === 'series' ? 'series' : 'unassigned' }, reactor_user: null,
+      flags: toEvent
+        ? (p.home === 'plan' ? { planKind: p.planKind ?? 'note' } : {})
+        : { routing: p.eventId === 'series' ? 'series' : 'unassigned' },
+      reactor_user: null,
     };
   });
 }
-export interface TargetedProposalLike { home: Home; eventId: string; summary: string; detail?: string; sourceQuote?: string; sourceTs: string }
+export interface TargetedProposalLike { home: Home; eventId: string; summary: string; detail?: string; sourceQuote?: string; sourceTs: string; planKind?: PlanKind }
 
 // Normalize a person name for matching against the People list: trim, lowercase, collapse whitespace.
 export function normalizeName(name: string): string {

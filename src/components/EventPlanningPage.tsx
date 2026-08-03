@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, listPlanItems, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, listPlanItems, parseAgendaItem, addAgendaItem, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -2993,7 +2993,12 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
     } else if (c.home === "plan") {
-      await addPlanItem(eventId, { text: c.summary, detail: c.detail, slackRef: c.sourceRef });
+      const kind = (c.flags as any)?.planKind ?? "note";
+      if (kind === "agenda") { await addAgendaItem(eventId, parseAgendaItem(c.summary)); }
+      else if (kind === "deliverable") {
+        const d = await addDeliverable(eventId, { title: c.summary, phase: "Planning", ownerRole: null, dueDate: null });
+        if (/\b(ordered|done|sent|uploaded|built|finalized|complete|completed|shipped|booked|paid|posted)\b/i.test(`${c.summary} ${c.detail ?? ""}`)) await setDeliverableStatus(d.id, "Done");
+      } else { await addPlanItem(eventId, { text: c.summary, detail: c.detail, slackRef: c.sourceRef }); }
     }
     // Vendors are no longer a capture home — a cost capture is home 'budget' and lands as a budget
     // row above (loose line); the user can tag its optional vendor in place afterward.
@@ -3036,9 +3041,21 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       if (c.sourceRef) await setBudgetLineSlackRef(lineId, c.sourceRef);
       undo = { kind: "budget", lineId };
     } else if (c.home === "plan") {
-      // Decided detail → the event's Plan list (deduped on text). Undo removes it only if we created it.
-      const { id, created } = await addPlanItem(eventId, { text: c.summary, detail: c.detail, slackRef: c.sourceRef });
-      undo = created ? { kind: "plan", planItemId: id } : { kind: "plan" };
+      // A decided detail splits by planKind: scheduled time → run of show, produce/do → deliverable,
+      // form/structure concept → Notes.
+      const kind = (c.flags as any)?.planKind ?? "note";
+      if (kind === "agenda") {
+        const item = parseAgendaItem(c.summary);
+        await addAgendaItem(eventId, item);
+        undo = { kind: "agenda", time: item.time, title: item.title };
+      } else if (kind === "deliverable") {
+        const d = await addDeliverable(eventId, { title: c.summary, phase: "Planning", ownerRole: null, dueDate: null });
+        if (/\b(ordered|done|sent|uploaded|built|finalized|complete|completed|shipped|booked|paid|posted)\b/i.test(`${c.summary} ${c.detail ?? ""}`)) await setDeliverableStatus(d.id, "Done");
+        undo = { kind: "deliverable", deliverableId: d.id };
+      } else {
+        const { id, created } = await addPlanItem(eventId, { text: c.summary, detail: c.detail, slackRef: c.sourceRef });
+        undo = created ? { kind: "plan", planItemId: id } : { kind: "plan" };
+      }
     }
     await setCaptureFlags(c.id, { ...c.flags, applied: true, undo });
     return true;

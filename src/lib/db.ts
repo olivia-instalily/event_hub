@@ -2113,6 +2113,33 @@ export async function removePlanItem(eventId: string, id: string): Promise<void>
   if (error) throw new Error(error.message);
 }
 
+// Split a plan-agenda fact into a run-of-show {time, title}. Pulls a clock time out of the text if
+// there is one ("doors 6pm" → time "6:00 PM", title "doors"); otherwise leaves time blank.
+export function parseAgendaItem(text: string): { time: string; title: string } {
+  const m = text.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (!m) return { time: '', title: text.trim() };
+  const h = m[1]; const min = m[2] ?? '00'; const ap = m[3].toUpperCase();
+  const time = `${h}:${min} ${ap}`;
+  const title = text.replace(m[0], '').replace(/\s*[—–-]\s*$/, '').replace(/\s{2,}/g, ' ').replace(/^\s*[—–-]\s*/, '').trim() || text.trim();
+  return { time, title };
+}
+
+async function readAgenda(eventId: string): Promise<RunOfShowItem[]> {
+  const { data } = await supabase.from('event').select('agenda').eq('id', eventId).maybeSingle();
+  return Array.isArray((data as any)?.agenda) ? (data as any).agenda as RunOfShowItem[] : [];
+}
+export async function addAgendaItem(eventId: string, item: RunOfShowItem): Promise<void> {
+  await setEventAgenda(eventId, [...(await readAgenda(eventId)), item]);
+}
+export async function removeAgendaItem(eventId: string, item: RunOfShowItem): Promise<void> {
+  let removed = false;
+  const next = (await readAgenda(eventId)).filter((a) => {
+    if (!removed && a.title === item.title && a.time === item.time) { removed = true; return false; }
+    return true;
+  });
+  await setEventAgenda(eventId, next);
+}
+
 // ── Upcoming meetings (calendar entries related to an event) ─────────────────────────────────────
 export interface UpcomingMeeting { id: string; title: string; start: string; htmlLink: string | null }
 
@@ -2215,6 +2242,10 @@ export async function discardCapture(cap: { id: string; eventId?: string | null;
     await deleteBudgetLine(undo.lineId as string).catch(() => {});
   } else if (undo?.kind === 'plan' && undo.planItemId && cap.eventId) {
     await removePlanItem(cap.eventId, undo.planItemId as string).catch(() => {});
+  } else if (undo?.kind === 'agenda' && cap.eventId) {
+    await removeAgendaItem(cap.eventId, { time: undo.time ?? '', title: undo.title ?? '' }).catch(() => {});
+  } else if (undo?.kind === 'deliverable' && undo.deliverableId) {
+    await deleteDeliverable(undo.deliverableId as string).catch(() => {});
   } else if (undo?.kind === 'person' && cap.eventId && undo.roleWasNew) {
     const { data } = await supabase.from('event').select('staff_roles, role_assignments, role_slack_refs').eq('id', cap.eventId).maybeSingle();
     if (data) {

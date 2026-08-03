@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { SlackMsg, Proposal, Removal, Home, ScrapeProposal, ScrapePerson } from './slack-capture-lib.js';
+import type { SlackMsg, Proposal, Removal, Home, ScrapeProposal, ScrapePerson, PlanKind } from './slack-capture-lib.js';
 
 // Anthropic strict json_schema: every object needs additionalProperties:false and all keys required;
 // optionals are nullable / empty-string instead. detail/sourceQuote use "" for none; ambiguity + radiusNote null.
@@ -95,11 +95,12 @@ const SCRAPE_SCHEMA = {
   properties: {
     captures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
       home: { enum: ['plan', 'person', 'open', 'budget'] },
+      planKind: { enum: ['note', 'agenda', 'deliverable'], description: 'ONLY for home=plan: agenda=a scheduled time-point; deliverable=something to produce/do; note=a form/structure concept. Use "note" for all non-plan homes.' },
       summary: { type: 'string', description: 'SHORT label ≤8 words, no sentence' },
       detail: { type: 'string', description: 'ONE short line of context, or ""' },
       sourceTs: { type: 'string', description: 'the [ts] of the message this fact is from' },
       sourceQuote: { type: 'string', description: 'the exact phrase, or ""' },
-    }, required: ['home', 'summary', 'detail', 'sourceTs', 'sourceQuote'] } },
+    }, required: ['home', 'planKind', 'summary', 'detail', 'sourceTs', 'sourceQuote'] } },
     people: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
       name: { type: 'string', description: 'the person\'s full name' },
       note: { type: 'string', description: 'why they matter / their interest, in a few words, or ""' },
@@ -115,7 +116,10 @@ const SCRAPE_SCHEMA = {
 const SCRAPE_SYSTEM = `You read a Slack channel paired to ONE event in EventHub and pull structured facts. Every message is prefixed with its [ts]. You produce THREE lists: captures (event-planning facts), people (individuals met/discussed), and removals (dropped decisions).
 
 CAPTURES — concrete event-logistics facts, each routed to exactly ONE home:
-- plan   — a DECIDED format/flow/choice ("fireside not a panel", "6pm at Ace Hotel", "merch ordered").
+- plan   — a DECIDED detail about the event. Then set planKind to route it:
+    · agenda      — a scheduled TIME-POINT / run-of-show item ("doors 6pm", "fireside at 6:30", "roundtables 7pm").
+    · deliverable — something to PRODUCE or DO ("merch ordered", "hype reel", "photos uploaded to Luma", "deck built").
+    · note        — a FORM / STRUCTURE concept, not timed and not a to-do ("fireside not a panel", "playlist not a DJ", "6 color-coded roundtable sections"). This is the default.
 - open   — a TENTATIVE idea, an open to-do, OR anything still UNCERTAIN / being decided. Tentative wording (maybe / leaning / if / depending / getting a quote) → open, never plan. ALSO capture explicit uncertainty as open, e.g. "waiting to hear back from <X>", "still waiting on <X>", "choosing between <A> and <B>", "deciding between …", "TBD / not sure yet / to confirm" — surface it here so the unresolved question is visible (summary names the decision, e.g. "Choosing between Ace Hotel and MaRS").
 - budget — a stated cost/figure ("$500 dinner", "$1,500 paid"); put the figure (and any vendor name) in summary/detail.
 - person — an INTERNAL TEAMMATE + their event role ("Thurman on bar", "Olivia runs logistics"). Only our own team doing a job for the event.
@@ -152,6 +156,7 @@ export async function extractScrape(msgs: SlackMsg[]): Promise<{ captures: Scrap
     const j = JSON.parse(textBlock.text);
     const captures: ScrapeProposal[] = (j.captures ?? []).map((c: any) => ({
       home: c.home as Home,
+      planKind: (['agenda', 'deliverable', 'note'].includes(c.planKind) ? c.planKind : 'note') as PlanKind,
       summary: String(c.summary ?? '').trim(),
       detail: c.detail ? String(c.detail) : undefined,
       sourceQuote: c.sourceQuote ? String(c.sourceQuote) : undefined,
@@ -190,11 +195,12 @@ export async function extractSeriesScrape(
     properties: {
       captures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
         home: { enum: ['plan', 'person', 'open', 'budget'] },
+        planKind: { enum: ['note', 'agenda', 'deliverable'], description: 'ONLY for home=plan: agenda=scheduled time-point; deliverable=something to produce/do; note=form/structure concept. "note" for non-plan.' },
         eventId: { enum: targets, description: 'which member event this fact is about; "series" if push-wide; "unassigned" if not clear' },
         summary: { type: 'string', description: 'SHORT label ≤8 words' },
         detail: { type: 'string', description: 'ONE short line, or ""' },
         sourceTs: { type: 'string' }, sourceQuote: { type: 'string' },
-      }, required: ['home', 'eventId', 'summary', 'detail', 'sourceTs', 'sourceQuote'] } },
+      }, required: ['home', 'planKind', 'eventId', 'summary', 'detail', 'sourceTs', 'sourceQuote'] } },
       people: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
         name: { type: 'string' }, note: { type: 'string' }, linkedin: { type: 'string' }, sourceTs: { type: 'string' }, sourceQuote: { type: 'string' },
       }, required: ['name', 'note', 'linkedin', 'sourceTs', 'sourceQuote'] } },
@@ -228,6 +234,7 @@ Only route to a specific event when the message makes it clear. When in doubt, "
     const valid = new Set(targets);
     const captures: TargetedProposal[] = (j.captures ?? []).map((c: any) => ({
       home: c.home as Home,
+      planKind: (['agenda', 'deliverable', 'note'].includes(c.planKind) ? c.planKind : 'note') as PlanKind,
       eventId: valid.has(String(c.eventId)) ? String(c.eventId) : 'unassigned',
       summary: String(c.summary ?? '').trim(),
       detail: c.detail ? String(c.detail) : undefined,
