@@ -4028,12 +4028,12 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
           : <StartBudget eventId={eventId} onReady={() => setReload((r) => r + 1)} />)}
         {tab === "deliverables" && (
           <div className="space-y-6">
+            {/* Notes — loose concepts / general notes (Slack + manual); self-hides when empty. */}
+            <PlanList eventId={eventId} />
             <SuggestedDeliverables plan={plan} eventId={eventId} onApplied={() => setReload((r) => r + 1)} />
             <BenchmarkEditor eventId={eventId} benchmarks={plan.benchmarks} deliverables={plan.deliverables} setPlan={setPlan} />
             <Deliverables eventId={eventId} initial={plan.deliverables} phases={plan.phases} benchmarks={plan.benchmarks} markers={deriveMarkers(plan).markers} currentKey={deriveMarkers(plan).currentKey} jumpId={deliverableJump} linearProjectUrl={plan.linearProjectUrl} onLinearSynced={() => setReload((r) => r + 1)} onOpenReflection={() => { setReflectionJump((n) => n + 1); setTab("overview"); }} />
             <AgendaEditor eventId={eventId} initial={plan.agenda} />
-            {/* Notes — loose concepts / general notes (Slack + manual), not deliverables. */}
-            <PlanList eventId={eventId} />
           </div>
         )}
         {tab === "page" && (
