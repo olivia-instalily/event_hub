@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Check, Pencil, X, ArrowUpRight, AlertTriangle, Shuffle, Trash2, CheckSquare, Square } from "lucide-react";
+import { Check, Pencil, X, ArrowUpRight, AlertTriangle, Trash2, CheckSquare, Square } from "lucide-react";
 import { type CaptureHome } from "../lib/db";
 
 // Category chip per home — shared by every Slack surface (event + series).
@@ -42,7 +42,6 @@ export function SlackCard({
   onResolve?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [moving, setMoving] = useState(false);
   const [summary, setSummary] = useState(model.summary);
   const [detail, setDetail] = useState(model.detail ?? "");
   const [busy, setBusy] = useState(false);
@@ -76,6 +75,16 @@ export function SlackCard({
                 className="w-full text-[14px] text-gray-900 border border-violet-300 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-400" />
               <input value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="detail (optional)"
                 className="w-full text-[13px] text-gray-600 border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-violet-400" />
+              {/* Move-to lives inside edit now (no separate move button). */}
+              {onMove && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span className="text-[11px] text-gray-400">move to:</span>
+                  {HOME_MOVE.filter((h) => h.home !== model.home).map((h) => (
+                    <button key={h.home} onClick={() => run(async () => { await onMove(h.home); setEditing(false); })} disabled={busy}
+                      className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">{h.label}</button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-[14px] text-gray-900 leading-snug">{model.summary}{model.detail && <span className="text-gray-500"> — {model.detail}</span>}</p>
@@ -107,7 +116,6 @@ export function SlackCard({
               <>
                 {onResolve && <button onClick={onResolve} disabled={busy} className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-700 disabled:opacity-50"><Check className="w-3.5 h-3.5" /> resolve</button>}
                 {onEdit && <button onClick={() => setEditing(true)} disabled={busy} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-gray-600 hover:bg-gray-100 disabled:opacity-50"><Pencil className="w-3.5 h-3.5" /> edit</button>}
-                {onMove && <button onClick={() => setMoving((m) => !m)} disabled={busy} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-gray-100 disabled:opacity-50 ${moving ? "bg-violet-100 text-violet-700" : "text-gray-600"}`}><Shuffle className="w-3.5 h-3.5" /> move</button>}
                 {(onKeep || onDiscard) && (
                   <div className="ml-auto flex items-center gap-0.5 text-[11px]">
                     {onKeep && <button onClick={() => run(onKeep)} disabled={busy} title="Clear this card, keep what it added" className="rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 disabled:opacity-50">keep</button>}
@@ -117,16 +125,6 @@ export function SlackCard({
               </>
             )}
           </div>
-
-          {moving && onMove && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] text-gray-400">move to:</span>
-              {HOME_MOVE.filter((h) => h.home !== model.home).map((h) => (
-                <button key={h.home} onClick={() => run(async () => { await onMove(h.home); setMoving(false); })} disabled={busy}
-                  className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">{h.label}</button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
     </div>
