@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Plus, Trash2, ArrowUp, ArrowDown, Check, ExternalLink, GripVertical } from "lucide-react";
+import { Plus, Trash2, ArrowUp, ArrowDown, Check, ExternalLink, GripVertical, ChevronDown } from "lucide-react";
 import { DndContext, PointerSensor, useSensor, useSensors, closestCorners, useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -20,10 +20,17 @@ function money(n: number | null | undefined, currency = "USD"): string {
 
 const STATUS_LABEL: Record<BudgetStatus, string> = { estimate: "Estimate", quoted: "Quoted", paid: "Paid" };
 const HEADER_COLOR: Record<string, string> = {
-  paid: "text-green-700", quoted: "text-blue-600", estimate: "text-gray-500", empty: "text-gray-300",
+  paid: "text-green-700", quoted: "text-blue-600", estimate: "text-yellow-600", empty: "text-gray-300",
 };
-// Per-row status color — the left-edge dot on each row matches its status tile's color.
-const STATUS_DOT: Record<BudgetStatus, string> = { estimate: "bg-gray-400", quoted: "bg-blue-400", paid: "bg-green-500" };
+// Per-row status color — the left-edge dot on each row matches its status.
+const STATUS_DOT: Record<BudgetStatus, string> = { estimate: "bg-yellow-400", quoted: "bg-blue-400", paid: "bg-green-500" };
+// Status shown as a tag-style pill (event-tag look): darker outline, lighter bg, darker text.
+const STATUS_PILL: Record<BudgetStatus, string> = {
+  estimate: "border-yellow-400 bg-yellow-50",
+  quoted: "border-blue-400 bg-blue-50",
+  paid: "border-green-500 bg-green-50",
+};
+const STATUS_TEXT: Record<BudgetStatus, string> = { estimate: "text-yellow-800", quoted: "text-blue-700", paid: "text-green-700" };
 const newCatId = () => "cat-" + (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 14));
 
 // The single cost store for an event: optional categories (each with an optional estimate) grouping
@@ -309,14 +316,8 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
         className="basis-40 shrink min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
       />
       <VendorField line={line} category={category} location={location} onEdit={onEdit} />
-      <select
-        value={line.status}
-        onChange={(e) => onEdit(line.id, { status: e.target.value as BudgetStatus })}
-        className="text-[13px] border border-gray-200 rounded px-1.5 py-1 text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-300"
-      >
-        {BUDGET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
-      </select>
-      <div className="flex items-center gap-1 w-28">
+      {/* Link sits between vendor and status. */}
+      <div className="flex items-center gap-1 w-28 shrink-0">
         <input
           defaultValue={line.docUrl ?? ""}
           onBlur={(e) => e.target.value !== (line.docUrl ?? "") && onEdit(line.id, { docUrl: e.target.value.trim() || null })}
@@ -326,6 +327,17 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
         {line.docUrl && (
           <a href={line.docUrl} target="_blank" rel="noreferrer" title="Open link" className="text-blue-500 hover:text-blue-700 shrink-0"><ExternalLink className="w-3.5 h-3.5" /></a>
         )}
+      </div>
+      {/* Status as a tag-style pill: outlined in its status color, with a dropdown arrow. */}
+      <div className={`relative shrink-0 ${STATUS_TEXT[line.status]}`}>
+        <select
+          value={line.status}
+          onChange={(e) => onEdit(line.id, { status: e.target.value as BudgetStatus })}
+          className={`appearance-none cursor-pointer rounded-full border pl-2.5 pr-6 py-0.5 text-[12px] font-medium text-current focus:outline-none ${STATUS_PILL[line.status]}`}
+        >
+          {BUDGET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-current opacity-70" />
       </div>
       <input
         type="number"
