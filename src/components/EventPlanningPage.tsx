@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { TemplateView, enrichPhases, PHASE_COLORS } from "./TemplateView";
 import { SourceMaterials } from "./SourceMaterials";
-import { SlackCaptureCard } from "./SlackCaptureCard";
 import { SlackCard, SlackCaptureList, type SlackCardModel } from "./SlackCard";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
@@ -38,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, deleteBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -3086,24 +3085,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     onApplied();
   };
 
-  // Undo an auto-applied capture: reverse what it created, then dismiss it (sticky — won't re-apply).
-  const undoCapture = async (c: SlackCapture) => {
-    const undo = (c.flags as any)?.undo ?? {};
-    try {
-      if (undo.kind === "budget" && undo.lineId) await deleteBudgetLine(undo.lineId as string);
-      else if (undo.kind === "person") {
-        if (undo.roleWasNew) await setEventStaffRoles(eventId, plan.staffRoles.filter((r) => r !== undo.role));
-        const next = { ...(plan.roleAssignments ?? {}) };
-        if (undo.hadAssignment && undo.prevName != null) next[undo.role as string] = undo.prevName as string;
-        else delete next[undo.role as string];
-        await setRoleAssignments(eventId, next);
-      }
-      await dismissSlackCapture(c.id);
-    } catch { /* ignore */ }
-    reloadCaptures();
-    onApplied();
-  };
-
   // Fix a misclassified capture's lane (e.g. a vendor read as a person) before it's settled.
   const reclassifyCapture = async (c: SlackCapture, home: CaptureHome) => {
     await setCaptureHome(c.id, home);
@@ -3352,12 +3333,22 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           <div className="grid grid-cols-2 gap-6 items-start">
             <div id="ov-budget" className="space-y-3 min-w-0 rounded-2xl">
               <BudgetCard plan={plan} onOpenBudget={onOpenBudget} onSetTarget={() => { onOpenBudget(); reviewBudgetField(); }} />
-              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onUndo={undoCapture} onReclassify={reclassifyCapture} />)}
+              {capByHome("budget").map((c) => (
+                <SlackCard key={c.id} model={captureModel(c)} tone={capApplied(c) ? "emerald" : "violet"}
+                  onKeep={() => keepCapture(c)} onDiscard={() => discardCaptureEvt(c)}
+                  onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h) => reclassifyCapture(c, h)}
+                  onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
+              ))}
             </div>
             <div id="ov-staffing" className="space-y-3 min-w-0 rounded-2xl">
               {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
                   reclassified in place via the card's "move" menu. */}
-              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onUndo={undoCapture} onReclassify={reclassifyCapture} />)}
+              {capByHome("person").map((c) => (
+                <SlackCard key={c.id} model={captureModel(c)} tone={capApplied(c) ? "emerald" : "violet"}
+                  onKeep={() => keepCapture(c)} onDiscard={() => discardCaptureEvt(c)}
+                  onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h) => reclassifyCapture(c, h)}
+                  onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
+              ))}
               <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} roleSlackRefs={plan.roleSlackRefs ?? {}} />
             </div>
           </div>
