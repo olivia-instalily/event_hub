@@ -4,6 +4,7 @@ import { getSeriesCampaign, getSeriesEvents, saveCampaign, renameSeries, type Se
 import { type Campaign, emptyCampaign } from "../lib/campaign";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { DocLinkControl } from "./DocLinkControl";
+import { SeriesOverview } from "./SeriesOverview";
 import { SeriesPlan } from "./SeriesPlan";
 import { SeriesEvents } from "./SeriesEvents";
 import { SeriesPeople } from "./SeriesPeople";
@@ -19,8 +20,9 @@ export interface TabProps {
   reload: () => void;
   reloadEvents: () => void; // refetch only the member events (leaves the optimistic campaign intact)
 }
-type Tab = "plan" | "events" | "people" | "budget" | "briefs";
+type Tab = "overview" | "plan" | "events" | "people" | "budget" | "briefs";
 const TABS: { key: Tab; label: string }[] = [
+  { key: "overview", label: "Overview" },
   { key: "plan", label: "Plan" }, { key: "events", label: "Events" },
   { key: "people", label: "People & logistics" },
   { key: "budget", label: "Budget" }, { key: "briefs", label: "Briefs" },
@@ -31,7 +33,7 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
   const [campaign, setCampaign] = useState<Campaign>(emptyCampaign());
   const [events, setEvents] = useState<SeriesEvent[]>([]);
   // Open the tab named by a deep link (?series=<id>&tab=…) when it's a real tab, else the default Plan.
-  const [tab, setTab] = useState<Tab>(TABS.some((t) => t.key === initialTab) ? (initialTab as Tab) : "plan");
+  const [tab, setTab] = useState<Tab>(TABS.some((t) => t.key === initialTab) ? (initialTab as Tab) : "overview");
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -84,6 +86,7 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
       {loading ? <p className="text-gray-400 py-12 text-center">Loading…</p> : (
         <>
           {saveError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700">{saveError}</div>}
+          {tab === "overview" && <SeriesOverview {...props} />}
           {tab === "plan" && <SeriesPlan {...props} />}
           {tab === "events" && <SeriesEvents {...props} />}
           {tab === "people" && <SeriesPeople {...props} />}

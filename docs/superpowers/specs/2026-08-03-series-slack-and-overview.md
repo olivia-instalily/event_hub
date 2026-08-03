@@ -28,7 +28,7 @@ target: a specific `eventId` (confident) or `"unassigned"` / `"series"` (won't g
 
 ## Series Overview (new section on the series page)
 
-Mirrors an event's Overview **minus Learnings**. Sections:
+Mirrors an event's Overview (Learnings included — user, 2026-08-03). Sections:
 - **Open** — series-level / unassigned Slack captures with an **assign-to-event** control; already-routed
   captures can be **reassigned** here. Series-level open items.
 - **Where things stand** — across the push (member events + their phases/dates).

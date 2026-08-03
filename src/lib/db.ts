@@ -2077,6 +2077,71 @@ export async function listPeopleCaptures(eventId: string): Promise<PeopleCapture
   }));
 }
 
+// ── Series-level Slack captures (shared-channel push) ───────────────────────────────────────────
+// Facts the scrape held at series level: push-wide ('series') or couldn't route ('unassigned'). Shown
+// in the series Overview's "From Slack" area to assign to a member event (or dismiss).
+export interface SeriesCapture {
+  id: string; home: CaptureHome; summary: string; detail: string | null;
+  routing: 'series' | 'unassigned'; sourceRef: string | null; sourceQuote: string | null; createdAt: string;
+}
+
+export async function listSeriesCaptures(seriesId: string): Promise<SeriesCapture[]> {
+  const { data, error } = await supabase
+    .from('slack_capture')
+    .select('id, home, summary, detail, status, source_ref, source_quote, flags, created_at')
+    .eq('series_id', seriesId).eq('status', 'proposed').neq('home', 'people')
+    .order('created_at', { ascending: true });
+  if (error) { console.warn('listSeriesCaptures', error.message); return []; }
+  return (data ?? []).map((r: any) => ({
+    id: r.id, home: (r.home === 'vendor' ? 'budget' : r.home) as CaptureHome, summary: r.summary, detail: r.detail ?? null,
+    routing: ((r.flags as any)?.routing === 'series' ? 'series' : 'unassigned'),
+    sourceRef: r.source_ref ?? null, sourceQuote: r.source_quote ?? null, createdAt: r.created_at,
+  }));
+}
+
+// Assign a series-level capture to a member event: re-own it (event_id set, series_id cleared) and
+// clear its routing flag. It becomes a normal proposed event capture and auto-applies when that
+// event's Overview next loads (or immediately if it's open).
+export async function assignSeriesCapture(captureId: string, eventId: string): Promise<void> {
+  const { error } = await supabase.from('slack_capture')
+    .update({ event_id: eventId, series_id: null, flags: {} }).eq('id', captureId);
+  if (error) throw new Error(error.message);
+}
+
+// Cross-event data for the series Overview: series-level crew, each member event's staffing /
+// reflections / budget target, and the committed-budget rollup. One place so the Overview can
+// "stretch across" the events without the page firing a query per event.
+export interface SeriesOverviewData {
+  seriesRoles: string[];
+  seriesAssignments: Record<string, string>;
+  events: { id: string; name: string; date: string | null; budgetTarget: number | null; staffRoles: string[]; reflections: string[] }[];
+  committed: SeriesCommitted[];
+}
+export async function getSeriesOverviewData(seriesId: string): Promise<SeriesOverviewData> {
+  const [{ data: ser }, { data: evs }, committed] = await Promise.all([
+    supabase.from('event_series').select('staff_roles, role_assignments').eq('id', seriesId).maybeSingle(),
+    supabase.from('event').select('id, name, event_date, event_budget_target, staff_roles, reflections').eq('series_id', seriesId).order('event_date', { ascending: true }),
+    getSeriesCommittedTotals(seriesId),
+  ]);
+  return {
+    seriesRoles: Array.isArray((ser as any)?.staff_roles) ? (ser as any).staff_roles : [],
+    seriesAssignments: ((ser as any)?.role_assignments ?? {}) as Record<string, string>,
+    events: (evs ?? []).map((e: any) => ({
+      id: e.id, name: e.name, date: e.event_date ?? null, budgetTarget: e.event_budget_target ?? null,
+      staffRoles: Array.isArray(e.staff_roles) ? e.staff_roles : [],
+      reflections: Array.isArray(e.reflections) ? e.reflections.filter((r: any) => typeof r === 'string' && r.trim()) : [],
+    })),
+    committed,
+  };
+}
+
+// Kick a series-level scrape (shared channel). Safe no-op if the series has no channel / nothing new.
+export async function runSeriesScrape(seriesId: string): Promise<{ ok: boolean; mode?: string; stored?: number; toEvents?: number; toSeries?: number; skipped?: string }> {
+  const { data, error } = await supabase.functions.invoke('slack-scrape', { body: { seriesId } });
+  if (error) { console.warn('runSeriesScrape', error.message); return { ok: false }; }
+  return (data ?? { ok: false }) as any;
+}
+
 // "Add anyway" from a no-match people card: create the person, link them to the event, apply the
 // candidate lens with a Slack-sourced comment, then dismiss the card. Returns the new attendee id.
 export async function addCandidateFromCapture(
