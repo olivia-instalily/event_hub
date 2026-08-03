@@ -316,7 +316,7 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
         defaultValue={line.label ?? ""}
         onBlur={(e) => e.target.value !== (line.label ?? "") && onEdit(line.id, { label: e.target.value })}
         placeholder="what it's for"
-        className="basis-40 shrink min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
+        className="flex-1 min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
       />
       {/* Link sits right after vendor; collapsed to a small footprint until one's added (or while
           typing), then it shifts and expands to show it. */}
@@ -381,7 +381,7 @@ function VendorField({ line, category, location, onEdit }: {
   const createNew = async () => { const v = await createVendor(name.trim(), category); setNear(null); onEdit(line.id, { vendorId: v.id, vendorName: v.name }); };
 
   return (
-    <div className="relative flex-1 min-w-0">
+    <div className="relative basis-44 shrink-0 min-w-0">
       <input
         value={name}
         list={listId}
