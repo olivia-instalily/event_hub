@@ -116,7 +116,7 @@ const SCRAPE_SYSTEM = `You read a Slack channel paired to ONE event in EventHub 
 
 CAPTURES — concrete event-logistics facts, each routed to exactly ONE home:
 - plan   — a DECIDED format/flow/choice ("fireside not a panel", "6pm at Ace Hotel", "merch ordered").
-- open   — a TENTATIVE idea or open to-do ("maybe a mural", "leaning robot dog", "still need quotes"). Tentative wording (maybe / leaning / if / depending / getting a quote) → open, never plan.
+- open   — a TENTATIVE idea, an open to-do, OR anything still UNCERTAIN / being decided. Tentative wording (maybe / leaning / if / depending / getting a quote) → open, never plan. ALSO capture explicit uncertainty as open, e.g. "waiting to hear back from <X>", "still waiting on <X>", "choosing between <A> and <B>", "deciding between …", "TBD / not sure yet / to confirm" — surface it here so the unresolved question is visible (summary names the decision, e.g. "Choosing between Ace Hotel and MaRS").
 - budget — a stated cost/figure ("$500 dinner", "$1,500 paid"); put the figure (and any vendor name) in summary/detail.
 - person — an INTERNAL TEAMMATE + their event role ("Thurman on bar", "Olivia runs logistics"). Only our own team doing a job for the event.
 

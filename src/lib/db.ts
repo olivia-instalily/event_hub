@@ -2079,6 +2079,40 @@ export async function runSlackScrape(eventId: string): Promise<{ ok: boolean; pr
   return (data ?? { ok: false }) as any;
 }
 
+// ── Plan list (things planned to happen — Slack 'plan' captures + manual) ────────────────────────
+export interface PlanItem { id: string; text: string; detail: string | null; slackRef: string | null }
+const normPlan = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+
+export async function listPlanItems(eventId: string): Promise<PlanItem[]> {
+  const { data } = await supabase.from('event').select('plan_items').eq('id', eventId).maybeSingle();
+  const raw = Array.isArray((data as any)?.plan_items) ? (data as any).plan_items : [];
+  return raw.map((p: any) => ({ id: p.id, text: p.text ?? '', detail: p.detail ?? null, slackRef: p.slackRef ?? null }));
+}
+
+// Append a plan item, deduping on normalized text. Returns the item id + whether it was newly created
+// (so a Slack capture knows whether it has something to remove on undo).
+export async function addPlanItem(eventId: string, item: { text: string; detail?: string | null; slackRef?: string | null }): Promise<{ id: string; created: boolean }> {
+  const items = await listPlanItems(eventId);
+  const existing = items.find((p) => normPlan(p.text) === normPlan(item.text));
+  if (existing) {
+    if (item.slackRef && !existing.slackRef) {
+      await supabase.from('event').update({ plan_items: items.map((p) => (p.id === existing.id ? { ...p, slackRef: item.slackRef } : p)) }).eq('id', eventId);
+    }
+    return { id: existing.id, created: false };
+  }
+  const id = genId('pi');
+  const next = [...items, { id, text: item.text.trim(), detail: item.detail?.trim() || null, slackRef: item.slackRef ?? null }];
+  const { error } = await supabase.from('event').update({ plan_items: next }).eq('id', eventId);
+  if (error) throw new Error(error.message);
+  return { id, created: true };
+}
+
+export async function removePlanItem(eventId: string, id: string): Promise<void> {
+  const items = await listPlanItems(eventId);
+  const { error } = await supabase.from('event').update({ plan_items: items.filter((p) => p.id !== id) }).eq('id', eventId);
+  if (error) throw new Error(error.message);
+}
+
 // ── Upcoming meetings (calendar entries related to an event) ─────────────────────────────────────
 export interface UpcomingMeeting { id: string; title: string; start: string; htmlLink: string | null }
 
@@ -2179,6 +2213,8 @@ export async function discardCapture(cap: { id: string; eventId?: string | null;
   const undo = cap.undo ?? null;
   if (undo?.kind === 'budget' && undo.lineId) {
     await deleteBudgetLine(undo.lineId as string).catch(() => {});
+  } else if (undo?.kind === 'plan' && undo.planItemId && cap.eventId) {
+    await removePlanItem(cap.eventId, undo.planItemId as string).catch(() => {});
   } else if (undo?.kind === 'person' && cap.eventId && undo.roleWasNew) {
     const { data } = await supabase.from('event').select('staff_roles, role_assignments, role_slack_refs').eq('id', cap.eventId).maybeSingle();
     if (data) {

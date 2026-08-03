@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -56,6 +56,7 @@ import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
 import { StaffingEditor, AssigneePicker } from "./StaffingEditor";
 import { UpcomingMeetings } from "./UpcomingMeetings";
+import { PlanList } from "./PlanList";
 import { useProfile } from "../lib/profile";
 import { regenerateFromMaterials as runRegenerate } from "../lib/regenerate";
 import { ConfirmModal } from "./Modal";
@@ -2946,7 +2947,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // Pins land in the ledger as `proposed`; the composed Overview surfaces them per home
   // (open → Open·next-up, budget → Budget, person → Staffing) as engageable violet cards.
   const [captures, setCaptures] = useState<SlackCapture[]>([]);
-  const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); };
+  const [planKey, setPlanKey] = useState(0);   // bumped when a plan capture applies/discards → refreshes the Plan list
+  const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); setPlanKey((k) => k + 1); };
   useEffect(() => {
     void loadAndAutoApply();                                      // show + auto-apply already-stored captures
     // then pull new; only re-run the apply pass if the scrape actually stored/changed something
@@ -2988,6 +2990,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       const { name, role } = parsePersonRole(c.summary);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
       if (name) await setRoleAssignments(eventId, { ...(plan.roleAssignments ?? {}), [role]: name });
+    } else if (c.home === "plan") {
+      await addPlanItem(eventId, { text: c.summary, detail: c.detail, slackRef: c.sourceRef });
+      setPlanKey((k) => k + 1);
     }
     // Vendors are no longer a capture home — a cost capture is home 'budget' and lands as a budget
     // row above (loose line); the user can tag its optional vendor in place afterward.
@@ -3029,8 +3034,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       const lineId = await insertBudgetLine(eventId, c.summary, amount, status);
       if (c.sourceRef) await setBudgetLineSlackRef(lineId, c.sourceRef);
       undo = { kind: "budget", lineId };
+    } else if (c.home === "plan") {
+      // Decided detail → the event's Plan list (deduped on text). Undo removes it only if we created it.
+      const { id, created } = await addPlanItem(eventId, { text: c.summary, detail: c.detail, slackRef: c.sourceRef });
+      undo = created ? { kind: "plan", planItemId: id } : { kind: "plan" };
     }
     await setCaptureFlags(c.id, { ...c.flags, applied: true, undo });
+    setPlanKey((k) => k + 1);
     return true;
   };
 
@@ -3286,6 +3296,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
 
       {/* Calendar meetings related to this event — self-hides when there are none. */}
       <div className="mt-4"><UpcomingMeetings eventId={eventId} /></div>
+      <div className="mt-4"><PlanList eventId={eventId} reloadKey={planKey} /></div>
 
       {/* Day-of / day-before views surface the SAME "Open" card as the planning view (setup fields +
           captured proposals), so the yellow bars group under "Open" consistently. Post drops them —
