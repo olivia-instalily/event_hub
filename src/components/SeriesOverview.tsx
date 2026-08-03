@@ -2,17 +2,12 @@ import { useEffect, useState } from "react";
 import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Trash2 } from "lucide-react";
 import {
   listSeriesCaptures, listAssignedSeriesCaptures, assignSeriesCapture, dismissSlackCapture, discardCapture,
+  editSlackCapture, setCaptureHome,
   runSeriesScrape, getSeriesOverviewData, addSeriesBudgetLine, addSeriesRole,
   type SeriesCapture, type AssignedCapture, type SeriesOverviewData, type CaptureHome,
 } from "../lib/db";
+import { SlackCard, SlackCaptureList } from "./SlackCard";
 import type { TabProps } from "./SeriesDashboard";
-
-const HOME_TAG: Record<CaptureHome, { label: string; cls: string }> = {
-  person: { label: "Staffing", cls: "bg-blue-100 text-blue-700" },
-  budget: { label: "Budget", cls: "bg-emerald-100 text-emerald-700" },
-  open: { label: "Still open", cls: "bg-violet-100 text-violet-700" },
-  plan: { label: "Plan", cls: "bg-gray-100 text-gray-600" },
-};
 const money = (n: number | null | undefined, cur = "USD") =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(n);
 const fmtDate = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "TBD");
@@ -56,6 +51,8 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
   const discardOne = async (id: string) => { setBusy(true); try { await dismissSlackCapture(id); setSel((p) => { const n = new Set(p); n.delete(id); return n; }); reloadCaps(); } catch { /* ignore */ } finally { setBusy(false); } };
   const keepOne = async (id: string) => { setBusy(true); try { await dismissSlackCapture(id); setASel((p) => { const n = new Set(p); n.delete(id); return n; }); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
   const discardOneAssigned = async (c: AssignedCapture) => { setBusy(true); try { await discardCapture({ id: c.id, eventId: c.eventId, undo: c.undo }); setASel((p) => { const n = new Set(p); n.delete(c.id); return n; }); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const editCap = async (id: string, summary: string, detail: string | null) => { setBusy(true); try { await editSlackCapture(id, { summary, detail }); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const moveCap = async (id: string, home: CaptureHome) => { setBusy(true); try { await setCaptureHome(id, home); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
 
   const addLine = async () => { const l = lineLabel.trim(); if (!l) return; setBusy(true); try { await addSeriesBudgetLine(seriesId, l, lineAmt.trim() === "" ? null : Number(lineAmt)); setLineLabel(""); setLineAmt(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
   const addRole = async () => { const r = roleDraft.trim(); if (!r) return; setBusy(true); try { await addSeriesRole(seriesId, r); setRoleDraft(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
@@ -72,11 +69,6 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
   const learnings = (data?.events ?? []).filter((e) => e.reflections.length > 0);
   const assignedByEvent = events.map((e) => ({ event: e, caps: assigned.filter((c) => c.eventId === e.id) })).filter((g) => g.caps.length > 0);
 
-  const CardChip = ({ home }: { home: CaptureHome }) => <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${HOME_TAG[home].cls}`}>{HOME_TAG[home].label}</span>;
-  const Box = ({ on, onClick }: { on: boolean; onClick: () => void }) => (
-    <button onClick={onClick} className="shrink-0 text-gray-400 hover:text-violet-600">{on ? <CheckSquare className="w-4 h-4 text-violet-600" /> : <Square className="w-4 h-4" />}</button>
-  );
-
   return (
     <div className="space-y-6">
       {/* ── From Slack — series-level updates to route ─────────────────────────────── */}
@@ -86,41 +78,21 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
           <h3 className="font-medium">From Slack</h3>
           <span className="text-[12px] text-gray-400">push-wide + unrouted updates · assign each to the event it belongs to</span>
         </div>
-        {caps.length === 0 ? (
-          <p className="text-[13px] text-gray-400 mt-2">Nothing waiting. Updates the scrape couldn't pin to one event land here to assign.</p>
-        ) : (
-          <>
-            <div className="mt-2 flex items-center gap-2">
-              <button onClick={() => allOn(setSel, caps.map((c) => c.id), sel.size !== caps.length)} className="inline-flex items-center gap-1 text-[12px] text-gray-500 hover:text-gray-800">
-                {sel.size === caps.length ? <CheckSquare className="w-4 h-4 text-violet-600" /> : <Square className="w-4 h-4" />} Select all
-              </button>
-              {sel.size > 0 && (
-                <button onClick={discardFromSlack} disabled={busy} className="ml-auto inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-[12px] text-red-600 hover:bg-red-50 disabled:opacity-50"><X className="w-3.5 h-3.5" /> Discard ({sel.size})</button>
-              )}
-            </div>
-            <ul className="mt-2 space-y-2">
-              {caps.map((c) => (
-                <li key={c.id} className="rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2.5">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <Box on={sel.has(c.id)} onClick={() => toggle(setSel, c.id)} />
-                    <CardChip home={c.home} />
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.routing === "series" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>{c.routing === "series" ? "push-wide" : "no event matched"}</span>
-                    {c.sourceRef && <a href={c.sourceRef} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-0.5 text-[11px] text-violet-600 hover:text-violet-800">source <ArrowUpRight className="w-3 h-3" /></a>}
-                  </div>
-                  <p className="text-[14px] text-gray-900 leading-snug">{c.summary}{c.detail && <span className="text-gray-500"> — {c.detail}</span>}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] text-gray-400">assign to:</span>
-                    {events.map((e) => (
-                      <button key={e.id} disabled={busy} onClick={() => assign(c.id, e.id)}
-                        className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">{e.name}</button>
-                    ))}
-                    <button disabled={busy} onClick={() => discardOne(c.id)} title="Discard this update" className="ml-auto inline-flex items-center rounded-md p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
+        <SlackCaptureList
+          models={caps.map((c) => ({
+            id: c.id, home: c.home, summary: c.summary, detail: c.detail, sourceRef: c.sourceRef,
+            badge: <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.routing === "series" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>{c.routing === "series" ? "push-wide" : "no event matched"}</span>,
+          }))}
+          selected={sel}
+          onToggleAll={(on) => allOn(setSel, caps.map((c) => c.id), on)}
+          onBulkDiscard={discardFromSlack}
+          emptyText="Nothing waiting. Updates the scrape couldn't pin to one event land here to assign."
+          card={(m) => (
+            <SlackCard model={m} selected={sel.has(m.id)} onToggleSelect={() => toggle(setSel, m.id)}
+              assignTargets={events.map((e) => ({ id: e.id, name: e.name }))} onAssign={(eid) => assign(m.id, eid)}
+              onDiscard={() => discardOne(m.id)} onEdit={(s, d) => editCap(m.id, s, d)} onMove={(h) => moveCap(m.id, h)} />
+          )}
+        />
       </section>
 
       {/* ── Assigned to events — Slack facts routed to a member event ──────────────── */}
@@ -148,20 +120,12 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
                 <button onClick={() => onOpenEvent?.(event.id)} className="text-[12px] font-medium text-gray-600 hover:text-violet-700 hover:underline mb-1">{event.name}</button>
                 <ul className="space-y-1.5">
                   {ec.map((c) => (
-                    <li key={c.id} className="flex items-stretch gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 px-3 py-2">
-                      <div className="mt-0.5"><Box on={aSel.has(c.id)} onClick={() => toggle(setASel, c.id)} /></div>
-                      <span className="flex-1 min-w-0">
-                        <span className="flex items-center gap-1.5"><CardChip home={c.home} />{c.applied && <span className="text-[10px] text-emerald-700">✓ applied</span>}</span>
-                        <span className="block text-[13px] text-gray-900">{c.summary}{c.detail && <span className="text-gray-500"> — {c.detail}</span>}</span>
-                      </span>
-                      {/* Source (purple) pinned top-right; keep/discard pinned bottom-right, close together. */}
-                      <div className="shrink-0 flex flex-col items-end justify-between">
-                        {c.sourceRef ? <a href={c.sourceRef} target="_blank" rel="noreferrer" className="inline-flex items-center text-violet-500 hover:text-violet-700"><ArrowUpRight className="w-3.5 h-3.5" /></a> : <span />}
-                        <div className="flex items-center gap-0.5 text-[11px]">
-                          <button disabled={busy} onClick={() => keepOne(c.id)} title="Clear this card, keep what it added" className="rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 disabled:opacity-50">keep</button>
-                          <button disabled={busy} onClick={() => discardOneAssigned(c)} title="Reverse what it added, then remove" className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
-                        </div>
-                      </div>
+                    <li key={c.id}>
+                      <SlackCard
+                        model={{ id: c.id, home: c.home, summary: c.summary, detail: c.detail, sourceRef: c.sourceRef, badge: c.applied ? <span className="text-[10px] text-emerald-700">✓ applied</span> : undefined }}
+                        tone="emerald" selected={aSel.has(c.id)} onToggleSelect={() => toggle(setASel, c.id)}
+                        onKeep={() => keepOne(c.id)} onDiscard={() => discardOneAssigned(c)}
+                        onEdit={(s, d) => editCap(c.id, s, d)} onMove={(h) => moveCap(c.id, h)} />
                     </li>
                   ))}
                 </ul>
