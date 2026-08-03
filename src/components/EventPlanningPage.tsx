@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { TemplateView, enrichPhases, PHASE_COLORS } from "./TemplateView";
 import { SourceMaterials } from "./SourceMaterials";
 import { SlackCaptureCard } from "./SlackCaptureCard";
+import { SlackCard, SlackCaptureList, type SlackCardModel } from "./SlackCard";
 import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
@@ -37,7 +38,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, deleteBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, deleteBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -3103,25 +3104,44 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     onApplied();
   };
 
-  // Confirm the held captures (the ones auto-apply left for the user). Skips already-applied ones so it
-  // never double-applies; budget figures that collide with a line are queued as one merge modal at a time.
-  const acceptAll = async () => {
-    const queue: BudgetChoice[] = [];
-    for (const c of captures) {
-      if (capApplied(c)) continue;
-      const choice = await promoteCapture(c);
-      if (choice) queue.push(choice);
-    }
-    reloadCaptures();
-    onApplied();
-    if (queue.length) { setBudgetChoice(queue[0]); setAcceptQueue(queue.slice(1)); }
-  };
-
   // Fix a misclassified capture's lane (e.g. a vendor read as a person) before it's settled.
   const reclassifyCapture = async (c: SlackCapture, home: CaptureHome) => {
     await setCaptureHome(c.id, home);
     reloadCaptures();
   };
+
+  // Keep = clear the card, keep what it applied. Discard = reverse what it applied, then remove.
+  const keepCapture = async (c: SlackCapture) => { await dismissSlackCapture(c.id); reloadCaptures(); onApplied(); };
+  const discardCaptureEvt = async (c: SlackCapture) => { await discardCapture({ id: c.id, eventId, undo: (c.flags as any)?.undo ?? null }); reloadCaptures(); onApplied(); };
+  const editCaptureEvt = async (c: SlackCapture, summary: string, detail: string | null) => { await editSlackCapture(c.id, { summary, detail }); reloadCaptures(); };
+  // Selection for the From-Slack panel (mirrors the series).
+  const [capSel, setCapSel] = useState<Set<string>>(new Set());
+  const toggleCapSel = (id: string) => setCapSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const bulkKeepCaps = async () => { for (const id of capSel) { const c = captures.find((x) => x.id === id); if (c) await dismissSlackCapture(c.id); } setCapSel(new Set()); reloadCaptures(); onApplied(); };
+  const bulkDiscardCaps = async () => { for (const id of capSel) { const c = captures.find((x) => x.id === id); if (c) await discardCapture({ id: c.id, eventId, undo: (c.flags as any)?.undo ?? null }); } setCapSel(new Set()); reloadCaptures(); onApplied(); };
+  // A capture → the shared card model (badge = applied, warning = held reason).
+  const captureModel = (c: SlackCapture): SlackCardModel => ({
+    id: c.id, home: c.home, summary: c.summary, detail: c.detail, sourceRef: c.sourceRef,
+    badge: capApplied(c) ? <span className="text-[10px] text-emerald-700">✓ added</span> : undefined,
+    warning: capHeld(c) ? (((c.flags as any)?.ambiguity as string) ?? `conflicts with the set ${(c.flags as any)?.conflict?.field ?? "value"} — won't overwrite`) : null,
+  });
+  const capCard = (c: SlackCapture) => (
+    <SlackCard
+      model={captureModel(c)} tone={capApplied(c) ? "emerald" : "violet"}
+      selected={capSel.has(c.id)} onToggleSelect={() => toggleCapSel(c.id)}
+      onKeep={() => keepCapture(c)} onDiscard={() => discardCaptureEvt(c)}
+      onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h) => reclassifyCapture(c, h)}
+      onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined}
+    />
+  );
+  const capturesPanel = (
+    <SlackCaptureList
+      models={captures.map(captureModel)} selected={capSel}
+      onToggleAll={(on) => setCapSel(on ? new Set(captures.map((c) => c.id)) : new Set())}
+      onBulkKeep={bulkKeepCaps} onBulkDiscard={bulkDiscardCaps}
+      card={(m) => { const c = captures.find((x) => x.id === m.id); return c ? capCard(c) : null; }}
+    />
+  );
 
   // Resolve the merge flag, then advance the Accept-all queue if one is running.
   const resolveBudgetChoice = async (mode: "replace" | "add" | "separate") => {
@@ -3139,12 +3159,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     setAcceptQueue(rest);
     reloadCaptures();
     onApplied();
-  };
-
-  // Clicking a capture in the Slack inbox scrolls to (and rings) the section it affects.
-  const jumpToCapture = (c: SlackCapture) => {
-    const id = c.home === "budget" ? "ov-budget" : c.home === "person" ? "ov-staffing" : "ov-open";
-    highlightField(id);
   };
 
   // The active planning home gets the composed layout; the phase views keep the classic body.
@@ -3297,7 +3311,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           its "complete record" gap blocks are the open items there. OpenNextUp self-hides when empty. */}
       {!planningActive && selectedView !== "post" && (
         <>
-          <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onUndoCapture={undoCapture} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
+          <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} capturesCount={captures.length} capturesPanel={capturesPanel} />
           {linearOpenItem}
         </>
       )}
@@ -3326,7 +3340,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {/* Stable order: Open·next-up (when present) always above Where-things-stand.
               Open is conditionally rendered; Where-things-stand is always shown below it. */}
           {anythingOpen && (
-            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onUndoCapture={undoCapture} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
+            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} capturesCount={captures.length} capturesPanel={capturesPanel} />
           )}
 
           {linearOpenItem}
@@ -3372,24 +3386,18 @@ void [LinearUpdateBox, OverviewDeliverables, GlanceTile, CarriedLessons];
 //   From Slack — the inbox of ALL proposed captures (each tagged with its category, and also
 //     previewed in its own section). Accept all settles them; each card can jump to its section.
 // Yields the top slot entirely (renders nothing) when both groups are empty.
-function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture, onUndoCapture, onReclassifyCapture, onAcceptAll, onJumpCapture }: {
+function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, capturesCount, capturesPanel }: {
   setupFlags: SetupFlagKey[];
   setupMeta: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }>;
   onDismissSetup: (key: SetupFlagKey) => void;
-  captures: SlackCapture[];
-  onCaptureChange: () => void;
-  onConfirmCapture: (c: SlackCapture) => Promise<void>;
-  onUndoCapture: (c: SlackCapture) => Promise<void>;
-  onReclassifyCapture: (c: SlackCapture, home: CaptureHome) => Promise<void>;
-  onAcceptAll: () => Promise<void>;
-  onJumpCapture: (c: SlackCapture) => void;
+  capturesCount: number;
+  capturesPanel: ReactNode;
 }) {
-  const [acceptingAll, setAcceptingAll] = useState(false);
-  if (setupFlags.length === 0 && captures.length === 0) return null;
+  if (setupFlags.length === 0 && capturesCount === 0) return null;
   return (
     <div id="ov-open" className="bg-white rounded-2xl border border-border p-5">
       <h3 className="font-medium">Open</h3>
-      <p className="text-[13px] text-gray-500 mt-0.5 mb-4">Event fields to set, and what's been pulled from Slack (applied automatically — undo or edit any).</p>
+      <p className="text-[13px] text-gray-500 mt-0.5 mb-4">Event fields to set, and what's been pulled from Slack (applied automatically — keep, discard, edit, or move any).</p>
 
       {setupFlags.length > 0 && (
         <div className="mb-4">
@@ -3418,27 +3426,10 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
         </div>
       )}
 
-      {captures.length > 0 && (
+      {capturesCount > 0 && (
         <div>
-          {(() => { const heldCount = captures.filter((c) => !(c.flags as any)?.applied).length; return (
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">From Slack · {captures.length}{heldCount ? ` · ${heldCount} to check` : ""}</p>
-            {heldCount > 0 && (
-              <button
-                onClick={async () => { setAcceptingAll(true); try { await onAcceptAll(); } finally { setAcceptingAll(false); } }}
-                disabled={acceptingAll}
-                className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-[12px] font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-              >
-                <Check className="w-3.5 h-3.5" /> {acceptingAll ? "confirming…" : "Confirm all"}
-              </button>
-            )}
-          </div>
-          ); })()}
-          <div className="space-y-2">
-            {captures.map((c) => (
-              <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} onUndo={onUndoCapture} onReclassify={onReclassifyCapture} onJump={onJumpCapture} />
-            ))}
-          </div>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-2">From Slack · {capturesCount}</p>
+          {capturesPanel}
         </div>
       )}
     </div>
