@@ -52,6 +52,11 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
   const discardAssigned = async () => { setBusy(true); try { for (const c of assigned.filter((c) => aSel.has(c.id))) await discardCapture({ id: c.id, eventId: c.eventId, undo: c.undo }); setASel(new Set()); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
   const keepAssigned = async () => { setBusy(true); try { for (const id of aSel) await dismissSlackCapture(id); setASel(new Set()); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
 
+  // Per-card versions — act directly on one card without entering selection.
+  const discardOne = async (id: string) => { setBusy(true); try { await dismissSlackCapture(id); setSel((p) => { const n = new Set(p); n.delete(id); return n; }); reloadCaps(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const keepOne = async (id: string) => { setBusy(true); try { await dismissSlackCapture(id); setASel((p) => { const n = new Set(p); n.delete(id); return n; }); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
+  const discardOneAssigned = async (c: AssignedCapture) => { setBusy(true); try { await discardCapture({ id: c.id, eventId: c.eventId, undo: c.undo }); setASel((p) => { const n = new Set(p); n.delete(c.id); return n; }); reloadAll(); } catch { /* ignore */ } finally { setBusy(false); } };
+
   const addLine = async () => { const l = lineLabel.trim(); if (!l) return; setBusy(true); try { await addSeriesBudgetLine(seriesId, l, lineAmt.trim() === "" ? null : Number(lineAmt)); setLineLabel(""); setLineAmt(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
   const addRole = async () => { const r = roleDraft.trim(); if (!r) return; setBusy(true); try { await addSeriesRole(seriesId, r); setRoleDraft(""); reloadData(); } catch { /* ignore */ } finally { setBusy(false); } };
 
@@ -109,6 +114,7 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
                       <button key={e.id} disabled={busy} onClick={() => assign(c.id, e.id)}
                         className="rounded-full border border-gray-200 px-2.5 py-1 text-[12px] text-gray-700 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">{e.name}</button>
                     ))}
+                    <button disabled={busy} onClick={() => discardOne(c.id)} title="Discard this update" className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"><X className="w-3.5 h-3.5" /> discard</button>
                   </div>
                 </li>
               ))}
@@ -149,6 +155,10 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
                         <span className="block text-[13px] text-gray-900">{c.summary}{c.detail && <span className="text-gray-500"> — {c.detail}</span>}</span>
                       </span>
                       {c.sourceRef && <a href={c.sourceRef} target="_blank" rel="noreferrer" className="shrink-0 inline-flex items-center text-violet-500 hover:text-violet-700"><ArrowUpRight className="w-3.5 h-3.5" /></a>}
+                      <div className="shrink-0 flex items-center gap-1 text-[11px]">
+                        <button disabled={busy} onClick={() => keepOne(c.id)} title="Clear this card, keep what it added" className="rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 disabled:opacity-50">keep</button>
+                        <button disabled={busy} onClick={() => discardOneAssigned(c)} title="Reverse what it added, then remove" className="rounded px-1.5 py-0.5 text-red-500 hover:bg-red-50 disabled:opacity-50">discard</button>
+                      </div>
                     </li>
                   ))}
                 </ul>
