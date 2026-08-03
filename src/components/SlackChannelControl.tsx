@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, X, Loader2 } from "lucide-react";
 import { slugifyChannel } from "../lib/slackChannel";
-import { listSlackChannels, linkSlackChannel, unlinkSlackChannel, linkSeriesSlackChannel, unlinkSeriesSlackChannel } from "../lib/db";
+import { listSlackChannels, linkSlackChannel, unlinkSlackChannel, linkSeriesSlackChannel, unlinkSeriesSlackChannel, runSlackScrape, runSeriesScrape } from "../lib/db";
 
 // Official 4-colour Slack mark, so the control reads as Slack rather than a generic button.
 function SlackLogo({ className = "w-4 h-4" }: { className?: string }) {
@@ -21,6 +21,8 @@ export function SlackChannelControl({ eventId, seriesId, title, slackChannel, on
   const doLink = (arg: { channelId: string } | { create: { name: string } }) =>
     seriesId ? linkSeriesSlackChannel(seriesId, arg) : linkSlackChannel(eventId!, arg);
   const doUnlink = () => (seriesId ? unlinkSeriesSlackChannel(seriesId) : unlinkSlackChannel(eventId!));
+  const doScrape = () => (seriesId ? runSeriesScrape(seriesId) : runSlackScrape(eventId!));
+  const [processing, setProcessing] = useState(false); // first parse of a just-linked channel (background)
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -40,12 +42,19 @@ export function SlackChannelControl({ eventId, seriesId, title, slackChannel, on
 
   const linkedName = channels.find((c) => c.id === slackChannel)?.name;
 
-  const run = async (fn: () => Promise<{ skipped?: string[] } | void>) => {
+  const run = async (fn: () => Promise<{ id?: string; skipped?: string[] } | void>) => {
     setBusy(true); setErr(null);
     try {
       const r = await fn();
       setOpen(false); onChange();
       if (r && "skipped" in r && r.skipped?.length) alert(`Couldn't add to Slack (not found by email): ${r.skipped.join(", ")}`);
+      // A link (not an unlink) returns an id → kick the first parse now and show it running in the background.
+      if (r && "id" in r && r.id) {
+        setProcessing(true);
+        try { await doScrape(); } catch { /* ignore — the page's on-open scrape will retry */ }
+        setProcessing(false);
+        onChange();
+      }
     } catch (e) {
       const m = (e as Error).message;
       setErr(
@@ -62,7 +71,12 @@ export function SlackChannelControl({ eventId, seriesId, title, slackChannel, on
         <a href={`https://slack.com/app_redirect?channel=${slackChannel}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900">
           <SlackLogo /> #{linkedName ?? "channel"}
         </a>
-        <button onClick={() => run(doUnlink)} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+        {processing && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-violet-600" title="Reading the channel — captures will appear shortly">
+            <Loader2 className="w-3 h-3 animate-spin" /> reading…
+          </span>
+        )}
+        <button onClick={() => run(doUnlink)} disabled={processing} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600 disabled:opacity-40"><X className="w-3.5 h-3.5" /></button>
       </span>
     );
   }
