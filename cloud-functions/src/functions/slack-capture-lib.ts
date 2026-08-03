@@ -77,12 +77,14 @@ export function buildCaptures(
 // Build stored captures from a whole-channel scrape. Idempotency keys on each fact's SOURCE message
 // ts (re-scraping the same message → the same id), not a single pin. Always 'proposed'; sticky
 // dismissals/confirmations are enforced by the caller before upsert.
-export function buildScrapeCaptures(event: EventRow, channel: string, proposals: ScrapeProposal[]): StoredCapture[] {
+export function buildScrapeCaptures(
+  event: EventRow, channel: string, proposals: ScrapeProposal[], permalinks: Record<string, string | null> = {},
+): StoredCapture[] {
   return proposals.filter((p) => p.sourceTs && p.summary?.trim()).map((p) => ({
     id: `${captureId(event.id, channel, p.sourceTs, p.home)}:${summarySlug(p.summary)}`,
     event_id: event.id, slack_channel: channel, slack_ts: p.sourceTs, home: p.home,
     summary: p.summary.trim(), detail: p.detail?.trim() || null, status: 'proposed' as const,
-    source_ref: null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
+    source_ref: permalinks[p.sourceTs] ?? null, source_quote: p.sourceQuote?.trim() || null, context_ts: null,
     flags: {}, reactor_user: null,
   }));
 }

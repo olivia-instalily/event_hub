@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Users, Plus, X, Search, Check, UserPlus } from "lucide-react";
+import { Users, Plus, X, Search, Check, UserPlus, ArrowUpRight } from "lucide-react";
 import { useProfile, initials } from "../lib/profile";
 import { setEventStaffRoles, setRoleAssignments, type Profile } from "../lib/db";
 
@@ -134,11 +134,12 @@ export function AssigneePicker({ team, current, onPick, disabled = false }: {
   );
 }
 
-export function StaffingEditor({ eventId, initialRoles, initialAssignments, defaultAssignee }: {
+export function StaffingEditor({ eventId, initialRoles, initialAssignments, defaultAssignee, roleSlackRefs }: {
   eventId: string;
   initialRoles: string[];
   initialAssignments: Record<string, string>;
   defaultAssignee?: string | null; // new roles default to this person (the event's creator/owner)
+  roleSlackRefs?: Record<string, string>; // role → Slack-moment link (icon shown when it came from Slack)
 }) {
   const { profiles } = useProfile();
   const team = profiles.filter((p) => (p.email ?? "").toLowerCase().endsWith(INSTALILY));
@@ -177,6 +178,11 @@ export function StaffingEditor({ eventId, initialRoles, initialAssignments, defa
             <li key={role} className="flex items-center gap-3 py-2">
               <Users className="w-4 h-4 text-gray-400 shrink-0" />
               <span className="text-sm text-gray-800 flex-1 min-w-0 truncate">{role}</span>
+              {roleSlackRefs?.[role] && (
+                <a href={roleSlackRefs[role]} target="_blank" rel="noreferrer" title="Mentioned in Slack" className="shrink-0 inline-flex items-center text-violet-500 hover:text-violet-700">
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </a>
+              )}
               <AssigneePicker team={team} current={assigns[role] ?? null} onPick={(name) => assign(role, name)} />
               <button onClick={() => removeRole(role)} className="text-gray-300 hover:text-red-600 shrink-0" aria-label={`Remove ${role}`}><X className="w-4 h-4" /></button>
             </li>

@@ -2125,12 +2125,14 @@ export async function findBudgetLineMatch(eventId: string, label: string): Promi
 }
 
 /** Add a brand-new budget line (no merge). */
-export async function insertBudgetLine(eventId: string, label: string, amount: number | null, status: BudgetStatus = 'quoted'): Promise<void> {
+export async function insertBudgetLine(eventId: string, label: string, amount: number | null, status: BudgetStatus = 'quoted'): Promise<string> {
   const budgetId = await ensureBudgetId(eventId);
+  const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({
-    id: genId('bl'), budget_id: budgetId, label, confirmed_amount: amount, payment_status: amount != null ? status : 'estimate',
+    id, budget_id: budgetId, label, confirmed_amount: amount, payment_status: amount != null ? status : 'estimate',
   });
   if (error) throw new Error(error.message);
+  return id;   // returned so an auto-applied Slack capture can undo (delete) exactly this line
 }
 
 /** Overwrite a budget line's amount + status (used by Replace / Add merge choices). */
@@ -2168,7 +2170,7 @@ export async function addBudgetRow(budgetId: string, input: {
     id, label: input.label, confirmedAmount: input.amount, target: null, status: input.status,
     syncUrl: null, docUrl: input.link ?? null, note: null, linkedEngagement: null,
     categoryId: input.categoryId, vendorId: input.vendorId ?? null, vendorName: input.vendorName ?? null,
-    sortOrder: input.sortOrder ?? null,
+    sortOrder: input.sortOrder ?? null, slackRef: null,
   };
 }
 
@@ -2212,6 +2214,13 @@ export async function dismissSlackCapture(id: string): Promise<void> {
 /** Correct a capture's wording before confirming. */
 export async function editSlackCapture(id: string, patch: { summary?: string; detail?: string | null }): Promise<void> {
   const { error } = await supabase.from('slack_capture').update(patch).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// Overwrite a capture's flags jsonb. Used to mark a capture auto-applied (flags.applied + flags.undo),
+// so the next scrape/open doesn't re-apply it and the card can offer Undo.
+export async function setCaptureFlags(id: string, flags: Record<string, unknown>): Promise<void> {
+  const { error } = await supabase.from('slack_capture').update({ flags }).eq('id', id);
   if (error) throw new Error(error.message);
 }
 
@@ -2773,6 +2782,7 @@ export interface BudgetLineTracker {
   vendorId: string | null;     // linked global vendor directory row
   vendorName: string | null;   // denormalized display when there's no vendor row yet
   sortOrder: number | null;    // manual drag order within its group
+  slackRef: string | null;     // link back to the Slack message that mentioned this line (dedup icon)
 }
 export interface PlanningBudget {
   id: string;
@@ -2847,6 +2857,7 @@ export interface EventPlanning {
   verdict: string | null;
   debriefNotes: string | null;
   roleAssignments: Record<string, string>; // staff role → person who filled it (resolved at settle)
+  roleSlackRefs: Record<string, string>;    // staff role → Slack-moment link (dedup icon on the role)
   modeledOnEventId: string | null; // the template/source this event was spun up from
   overviewSummary: string | null;
   lumaUrl: string | null;
@@ -2948,7 +2959,7 @@ function mapCandidate(c: any): VendorCandidate {
 export async function getEventPlanning(eventId: string): Promise<EventPlanning | null> {
   const { data: row, error } = await supabase
     .from('event')
-    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, doc_link, slack_channel, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, gcal_event_ids, gcal_match_pending, linear_project_id, linear_project_url, benchmarks, series:event_series ( owning_team, status )')
+    .select('id, name, tags, format, focus_override, location, office, description, event_date, start_time, end_time, phases, planning_lead_time, agenda, staff_roles, reflections, walkthrough, heuristics, outreach, source_materials, reference_links, doc_link, slack_channel, is_template, capacity, rsvp, checked_in, headcount, macro_stage, owning_team, status, setup_complete, event_budget_target, setup_progress, settle_state, settled_at, verdict, debrief_notes, role_assignments, role_slack_refs, modeled_on_event_id, owners:event_owner ( profile:profile ( id, name, color ) ), overview_summary, luma_url, luma_event_id, page_ownership, repo_ref, last_deploy_status, preview_url, live_url, ejected_at, ejected_snapshot, page_draft, cover_image_url, luma_cover_url, custom_cover_url, cover_position, gcal_event_id, gcal_html_link, gcal_event_ids, gcal_match_pending, linear_project_id, linear_project_url, benchmarks, series:event_series ( owning_team, status )')
     .eq('id', eventId)
     .maybeSingle();
   if (error) throw error;
@@ -3072,6 +3083,7 @@ export async function getEventPlanning(eventId: string): Promise<EventPlanning |
     verdict: (row as any).verdict ?? null,
     debriefNotes: (row as any).debrief_notes ?? null,
     roleAssignments: ((row as any).role_assignments ?? {}) as Record<string, string>,
+    roleSlackRefs: ((row as any).role_slack_refs ?? {}) as Record<string, string>,
     modeledOnEventId: (row as any).modeled_on_event_id ?? null,
     overviewSummary: (row as any).overview_summary ?? null,
     lumaUrl: (row as any).luma_url ?? null,
@@ -3457,7 +3469,7 @@ export async function addTrackerLine(budgetId: string, label: string, amount: nu
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, confirmed_amount: amount });
   if (error) throw error;
-  return { id, label, confirmedAmount: amount, target: null, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null, sortOrder: null };
+  return { id, label, confirmedAmount: amount, target: null, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null, sortOrder: null, slackRef: null };
 }
 export async function setBudgetStatus(id: string, status: BudgetStatus): Promise<void> {
   const { error } = await supabase.from('budget_line').update({ payment_status: status }).eq('id', id);
@@ -3490,20 +3502,26 @@ export async function addBudgetCategoryTarget(budgetId: string, label: string, t
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({ id, budget_id: budgetId, label, target });
   if (error) throw error;
-  return { id, label, confirmedAmount: null, target, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null, sortOrder: null };
+  return { id, label, confirmedAmount: null, target, status: 'estimate', syncUrl: null, docUrl: null, note: null, linkedEngagement: null, categoryId: null, vendorId: null, vendorName: null, sortOrder: null, slackRef: null };
 }
 /** Re-read a budget's lines (used to refresh in place after a drop-import). */
 export async function listBudgetLines(budgetId: string): Promise<BudgetLineTracker[]> {
   const { data, error } = await supabase
     .from('budget_line')
-    .select('id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement, category_id, vendor_id, vendor_name, sort_order')
+    .select('id, label, confirmed_amount, target, payment_status, sync_url, doc_url, note, linked_engagement, category_id, vendor_id, vendor_name, sort_order, slack_ref')
     .eq('budget_id', budgetId);
   if (error) throw error;
   return (data ?? []).map((l: any) => ({
     id: l.id, label: l.label, confirmedAmount: l.confirmed_amount ?? null, target: l.target ?? null,
     status: normBudgetStatus(l.payment_status), syncUrl: l.sync_url ?? null, docUrl: l.doc_url ?? null, note: l.note ?? null, linkedEngagement: l.linked_engagement ?? null,
-    categoryId: l.category_id ?? null, vendorId: l.vendor_id ?? null, vendorName: l.vendor_name ?? null, sortOrder: l.sort_order ?? null,
+    categoryId: l.category_id ?? null, vendorId: l.vendor_id ?? null, vendorName: l.vendor_name ?? null, sortOrder: l.sort_order ?? null, slackRef: l.slack_ref ?? null,
   }));
+}
+
+/** Pin a Slack-moment link on a budget line (dedup: the fact was already here → just link back). */
+export async function setBudgetLineSlackRef(id: string, slackRef: string | null): Promise<void> {
+  const { error } = await supabase.from('budget_line').update({ slack_ref: slackRef }).eq('id', id);
+  if (error) throw new Error(error.message);
 }
 /** Bulk-insert budget lines (from a dropped breakdown). Amount → confirmed_amount. */
 export async function addBudgetLines(budgetId: string, lines: { label: string; amount: number | null }[]): Promise<void> {
@@ -4005,6 +4023,11 @@ export async function setRoleAssignments(eventId: string, assignments: Record<st
   const clean: Record<string, string> = {};
   for (const [role, who] of Object.entries(assignments)) { const v = who?.trim(); if (v) clean[role] = v; }
   const { error } = await supabase.from('event').update({ role_assignments: clean }).eq('id', eventId);
+  if (error) throw error;
+}
+/** Overwrite the staff role → Slack-moment link map (dedup icons on the staffing list). */
+export async function setEventRoleSlackRefs(eventId: string, refs: Record<string, string>): Promise<void> {
+  const { error } = await supabase.from('event').update({ role_slack_refs: refs }).eq('id', eventId);
   if (error) throw error;
 }
 /** Settle the event atomically (mark settled + carry its reflections back to the modeled-on

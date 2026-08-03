@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Pencil, X, ArrowUpRight, AlertTriangle, Shuffle, CornerDownRight } from "lucide-react";
+import { Check, Pencil, X, ArrowUpRight, AlertTriangle, Shuffle, CornerDownRight, Undo2 } from "lucide-react";
 import { confirmSlackCapture, dismissSlackCapture, editSlackCapture, type SlackCapture, type CaptureHome } from "../lib/db";
 
 // The lanes a capture can be moved to when the extraction guessed wrong (e.g. a vendor read as a
@@ -18,13 +18,15 @@ const HOME_TAG: Record<CaptureHome, { label: string; cls: string }> = {
   plan: { label: "Plan", cls: "bg-gray-100 text-gray-600" },
 };
 
-// A single proposed Slack capture, engageable in place: confirm / edit / move / dismiss, with a link
-// back to the source message and a category chip showing which lane it's in. Violet = from-Slack,
-// not yet accepted. `onJump` (inbox only) makes the text click through to the section it affects.
-export function SlackCaptureCard({ capture, onChange, onConfirm, onReclassify, onJump }: {
+// A single Slack capture, engageable in place. Two states:
+//  • applied (flags.applied) — auto-applied on arrival; shows "Added from Slack" + Undo / edit / move / dismiss.
+//  • held — genuinely unclear (AI ambiguity, or a budget figure colliding with a line); shows Confirm.
+// Category chip shows which lane it's in. `onJump` (inbox only) makes the text click to its section.
+export function SlackCaptureCard({ capture, onChange, onConfirm, onUndo, onReclassify, onJump }: {
   capture: SlackCapture;
   onChange: () => void;
   onConfirm?: (capture: SlackCapture) => Promise<void>;
+  onUndo?: (capture: SlackCapture) => Promise<void>;
   onReclassify?: (capture: SlackCapture, home: CaptureHome) => Promise<void>;
   onJump?: (capture: SlackCapture) => void;
 }) {
@@ -44,17 +46,18 @@ export function SlackCaptureCard({ capture, onChange, onConfirm, onReclassify, o
 
   const conflict = (capture.flags as any)?.conflict;
   const ambiguity = (capture.flags as any)?.ambiguity as string | undefined;
+  const applied = !!(capture.flags as any)?.applied;
   const tag = HOME_TAG[capture.home];
 
   return (
-    <div className="rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2.5">
+    <div className={`rounded-lg border px-3 py-2.5 ${applied ? "border-emerald-200 bg-emerald-50/40" : "border-violet-200 bg-violet-50/50"}`}>
       <div className="flex items-start gap-2.5">
-        <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-violet-500 shrink-0" title="Proposed from Slack" />
+        <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${applied ? "bg-emerald-500" : "bg-violet-500"}`} title={applied ? "Added from Slack" : "From Slack — needs a check"} />
         <div className="flex-1 min-w-0">
           {/* Category chip — updates when the capture is moved to another lane. */}
           <div className="mb-1 flex items-center gap-1.5">
             <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tag.cls}`}>{tag.label}</span>
-            {onJump && <span className="text-[10px] text-gray-400">from Slack</span>}
+            <span className="text-[10px] text-gray-400">{applied ? "✓ added from Slack" : "from Slack"}</span>
           </div>
 
           {editing ? (
@@ -95,9 +98,15 @@ export function SlackCaptureCard({ capture, onChange, onConfirm, onReclassify, o
               </>
             ) : (
               <>
-                <button onClick={() => run(() => (onConfirm ? onConfirm(capture) : confirmSlackCapture(capture.id)))} disabled={busy} className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-700 disabled:opacity-50">
-                  <Check className="w-3.5 h-3.5" /> {busy ? "confirming…" : "confirm"}
-                </button>
+                {applied ? (
+                  <button onClick={() => run(() => (onUndo ? onUndo(capture) : dismissSlackCapture(capture.id)))} disabled={busy} className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                    <Undo2 className="w-3.5 h-3.5" /> {busy ? "undoing…" : "undo"}
+                  </button>
+                ) : (
+                  <button onClick={() => run(() => (onConfirm ? onConfirm(capture) : confirmSlackCapture(capture.id)))} disabled={busy} className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                    <Check className="w-3.5 h-3.5" /> {busy ? "confirming…" : "confirm"}
+                  </button>
+                )}
                 <button onClick={() => setEditing(true)} disabled={busy} className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-gray-600 hover:bg-gray-100 disabled:opacity-50">
                   <Pencil className="w-3.5 h-3.5" /> edit
                 </button>
@@ -106,8 +115,8 @@ export function SlackCaptureCard({ capture, onChange, onConfirm, onReclassify, o
                     <Shuffle className="w-3.5 h-3.5" /> move
                   </button>
                 )}
-                <button onClick={() => run(() => dismissSlackCapture(capture.id))} disabled={busy} className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
-                  <X className="w-3.5 h-3.5" /> dismiss
+                <button onClick={() => run(() => dismissSlackCapture(capture.id))} disabled={busy} title={applied ? "Clear this card (keeps what was added)" : "Discard"} className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                  <X className="w-3.5 h-3.5" /> {applied ? "clear" : "dismiss"}
                 </button>
                 {capture.sourceRef && (
                   <a href={capture.sourceRef} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-0.5 text-violet-600 hover:text-violet-800">

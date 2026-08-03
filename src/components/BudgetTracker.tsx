@@ -318,6 +318,9 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
         placeholder="what it's for"
         className="flex-1 min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
       />
+      {line.slackRef && (
+        <a href={line.slackRef} target="_blank" rel="noreferrer" title="Mentioned in Slack" className="shrink-0 inline-flex items-center text-violet-500 hover:text-violet-700"><ExternalLink className="w-3.5 h-3.5" /></a>
+      )}
       {/* Link sits right after vendor; collapsed to a small footprint until one's added (or while
           typing), then it shifts and expands to show it. */}
       <div className="flex items-center gap-1 shrink-0">

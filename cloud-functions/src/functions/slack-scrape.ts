@@ -24,7 +24,15 @@ export async function handler(req: Request, res: Response) {
   if (msgs.length === 0) { res.json({ ok: true, skipped: 'nothing new' }); return; }
 
   const { captures, people, removals } = await extractScrape(msgs);
-  const caps = buildScrapeCaptures({ id: eventId }, channel, captures);
+
+  // Resolve a Slack permalink per unique source ts once (captures + people share the map) — the client
+  // uses it to link a card / an existing-record icon back to the exact message.
+  const permalinks: Record<string, string | null> = {};
+  for (const ts of new Set([...captures.map((c) => c.sourceTs), ...people.map((p) => p.sourceTs)])) {
+    permalinks[ts] = await getPermalink(channel, ts);
+  }
+
+  const caps = buildScrapeCaptures({ id: eventId }, channel, captures, permalinks);
 
   // Sticky: don't resurrect (or revert) a capture the user already dismissed/confirmed for the same
   // source message — re-scraping the same messages must not undo their decisions.
@@ -50,7 +58,7 @@ export async function handler(req: Request, res: Response) {
       const { data: prior } = await sb.from('person_tag').select('id')
         .eq('attendee_id', attendeeId).eq('event_id', eventId).eq('lens', 'candidate').maybeSingle();
       if (prior) continue;
-      const permalink = await getPermalink(channel, person.sourceTs);
+      const permalink = permalinks[person.sourceTs] ?? null;
       await sb.from('person_tag').insert({
         id: `ptag-${randomUUID()}`, attendee_id: attendeeId, event_id: eventId, lens: 'candidate',
         note: person.note || null, source: 'slack', source_ref: permalink, status: 'confirmed',
@@ -59,10 +67,7 @@ export async function handler(req: Request, res: Response) {
       tagged++;
     }
 
-    // Resolve permalinks for the no-match cards so the People page can link back to the message.
-    const links: Record<string, string | null> = {};
-    for (const p of unmatched) if (!(p.sourceTs in links)) links[p.sourceTs] = await getPermalink(channel, p.sourceTs);
-    const peopleCaps = buildPeopleNoMatch({ id: eventId }, channel, unmatched, links);
+    const peopleCaps = buildPeopleNoMatch({ id: eventId }, channel, unmatched, permalinks);
     if (peopleCaps.length) {
       const ids = peopleCaps.map((c) => c.id);
       const { data: existing } = await sb.from('slack_capture').select('id, status').in('id', ids);

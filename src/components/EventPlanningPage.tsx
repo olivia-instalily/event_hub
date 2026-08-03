@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, setCaptureHome, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, deleteBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -2936,14 +2936,15 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   const [captures, setCaptures] = useState<SlackCapture[]>([]);
   const reloadCaptures = () => { void listSlackCaptures(eventId).then(setCaptures); };
   useEffect(() => {
-    reloadCaptures();                                              // show already-stored captures immediately
-    void runSlackScrape(eventId).then((r) => { if (r?.ok) reloadCaptures(); }).catch(() => {}); // then pull new + refetch
+    void loadAndAutoApply();                                      // show + auto-apply already-stored captures
+    // then pull new; only re-run the apply pass if the scrape actually stored/changed something
+    void runSlackScrape(eventId).then((r) => { if (r?.ok && ((r.stored ?? 0) + (r.dismissed ?? 0) > 0)) void loadAndAutoApply(); }).catch(() => {});
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [eventId]);
-  // Pins land in Slack while this page may already be open — there's no realtime channel, so refresh
-  // captures when the tab regains focus and on a slow poll, so a new proposal appears without a reload.
+  // Captures arrive in Slack while this page may already be open — there's no realtime channel, so
+  // re-run the load+apply pass on focus and a slow poll, so a new fact appears (applied) without a reload.
   useEffect(() => {
-    const refresh = () => { if (!document.hidden) reloadCaptures(); };
+    const refresh = () => { if (!document.hidden) void loadAndAutoApply(); };
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
     const iv = setInterval(refresh, 20000);
@@ -2990,11 +2991,112 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
     onApplied();
   };
 
-  // Accept every proposed capture. Non-ambiguous ones settle immediately; budget captures that match
-  // a line are queued and prompted one modal at a time.
+  // ── Live-but-labeled: captures apply on arrival instead of waiting for a confirm click. Only the
+  // "super unclear" ones stay a Confirm card — the AI flagged ambiguity, or a budget figure that
+  // collides with an existing line (that Replace/Add/Separate call is genuinely the user's). Applied
+  // captures stay visible, flagged, offering Undo (reverse) / Edit / Move / dismiss (keep, clear card).
+  const capApplied = (c: SlackCapture) => !!(c.flags as any)?.applied;
+  const capHeld = (c: SlackCapture) => !!(c.flags as any)?.ambiguity || !!(c.flags as any)?.conflict;
+
+  // Apply one budget/plan/open capture (person is batched in loadAndAutoApply). Returns false when it
+  // must stay held (budget figure collides with an existing line at a *different* amount → user merges).
+  const applyCapture = async (c: SlackCapture): Promise<boolean> => {
+    let undo: Record<string, unknown> = { kind: c.home };
+    if (c.home === "budget") {
+      const { amount, status } = budgetParams(c);
+      const match = await findBudgetLineMatch(eventId, c.summary);
+      if (match) {
+        // Already on the event. Same/absent figure → don't duplicate; just pin the Slack link on the
+        // existing line and clear the card. A *different* figure is genuinely new → hold for the merge.
+        const sameFigure = amount == null || amount === match.confirmedAmount;
+        if (!sameFigure) return false;
+        if (c.sourceRef) await setBudgetLineSlackRef(match.id, c.sourceRef);
+        await dismissSlackCapture(c.id);
+        return true;
+      }
+      const lineId = await insertBudgetLine(eventId, c.summary, amount, status);
+      if (c.sourceRef) await setBudgetLineSlackRef(lineId, c.sourceRef);
+      undo = { kind: "budget", lineId };
+    }
+    await setCaptureFlags(c.id, { ...c.flags, applied: true, undo });
+    return true;
+  };
+
+  // Load captures and auto-apply any that just arrived (not yet applied, not held). Person captures
+  // share the staff-roles array (setEventStaffRoles overwrites), so they're resolved as one batch.
+  // Serialized by applyingRef: overlapping triggers (mount + scrape + focus/poll) would otherwise each
+  // read a capture as un-applied before flags.applied persists and double-apply it (e.g. two budget
+  // lines). Concurrent calls set rerunRef so a final pass runs once after the in-flight one finishes.
+  const applyingRef = useRef(false);
+  const rerunRef = useRef(false);
+  const loadAndAutoApply = async (): Promise<void> => {
+    if (applyingRef.current) { rerunRef.current = true; return; }
+    applyingRef.current = true;
+    try {
+      await runAutoApplyPass();
+    } finally {
+      applyingRef.current = false;
+      if (rerunRef.current) { rerunRef.current = false; await loadAndAutoApply(); }
+    }
+  };
+  const runAutoApplyPass = async () => {
+    const caps = await listSlackCaptures(eventId);
+    const pending = caps.filter((c) => !capApplied(c) && !capHeld(c));
+    if (pending.length === 0) { setCaptures(caps); return; }
+
+    const persons = pending.filter((c) => c.home === "person");
+    if (persons.length) {
+      const roles = [...plan.staffRoles];
+      const assigns = { ...(plan.roleAssignments ?? {}) };
+      const refs = { ...(plan.roleSlackRefs ?? {}) };
+      for (const c of persons) {
+        const { name, role } = parsePersonRole(c.summary);
+        if (roles.includes(role)) {
+          // Role already on the event (pre-existing or added earlier this pass) → don't duplicate;
+          // pin the Slack link on the role and clear the card. Don't overwrite the existing assignment.
+          if (c.sourceRef && !refs[role]) refs[role] = c.sourceRef;
+          await dismissSlackCapture(c.id);
+        } else {
+          roles.push(role);
+          if (name) assigns[role] = name;
+          if (c.sourceRef) refs[role] = c.sourceRef;
+          await setCaptureFlags(c.id, { ...c.flags, applied: true, undo: { kind: "person", role, roleWasNew: true, hadAssignment: false, prevName: null } });
+        }
+      }
+      await setEventStaffRoles(eventId, roles);
+      await setRoleAssignments(eventId, assigns);
+      await setEventRoleSlackRefs(eventId, refs);
+    }
+    for (const c of pending.filter((c) => c.home !== "person")) await applyCapture(c);
+
+    setCaptures(await listSlackCaptures(eventId));
+    onApplied();
+  };
+
+  // Undo an auto-applied capture: reverse what it created, then dismiss it (sticky — won't re-apply).
+  const undoCapture = async (c: SlackCapture) => {
+    const undo = (c.flags as any)?.undo ?? {};
+    try {
+      if (undo.kind === "budget" && undo.lineId) await deleteBudgetLine(undo.lineId as string);
+      else if (undo.kind === "person") {
+        if (undo.roleWasNew) await setEventStaffRoles(eventId, plan.staffRoles.filter((r) => r !== undo.role));
+        const next = { ...(plan.roleAssignments ?? {}) };
+        if (undo.hadAssignment && undo.prevName != null) next[undo.role as string] = undo.prevName as string;
+        else delete next[undo.role as string];
+        await setRoleAssignments(eventId, next);
+      }
+      await dismissSlackCapture(c.id);
+    } catch { /* ignore */ }
+    reloadCaptures();
+    onApplied();
+  };
+
+  // Confirm the held captures (the ones auto-apply left for the user). Skips already-applied ones so it
+  // never double-applies; budget figures that collide with a line are queued as one merge modal at a time.
   const acceptAll = async () => {
     const queue: BudgetChoice[] = [];
     for (const c of captures) {
+      if (capApplied(c)) continue;
       const choice = await promoteCapture(c);
       if (choice) queue.push(choice);
     }
@@ -3180,7 +3282,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           its "complete record" gap blocks are the open items there. OpenNextUp self-hides when empty. */}
       {!planningActive && selectedView !== "post" && (
         <>
-          <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
+          <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onUndoCapture={undoCapture} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
           {linearOpenItem}
         </>
       )}
@@ -3209,7 +3311,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           {/* Stable order: Open·next-up (when present) always above Where-things-stand.
               Open is conditionally rendered; Where-things-stand is always shown below it. */}
           {anythingOpen && (
-            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
+            <OpenNextUp setupFlags={openFlags} setupMeta={SETUP_META} onDismissSetup={settleSetup} captures={captures} onCaptureChange={reloadCaptures} onConfirmCapture={promoteAndConfirm} onUndoCapture={undoCapture} onReclassifyCapture={reclassifyCapture} onAcceptAll={acceptAll} onJumpCapture={jumpToCapture} />
           )}
 
           {linearOpenItem}
@@ -3221,13 +3323,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           <div className="grid grid-cols-2 gap-6 items-start">
             <div id="ov-budget" className="space-y-3 min-w-0 rounded-2xl">
               <BudgetCard plan={plan} onOpenBudget={onOpenBudget} onSetTarget={() => { onOpenBudget(); reviewBudgetField(); }} />
-              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
+              {capByHome("budget").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onUndo={undoCapture} onReclassify={reclassifyCapture} />)}
             </div>
             <div id="ov-staffing" className="space-y-3 min-w-0 rounded-2xl">
               {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
                   reclassified in place via the card's "move" menu. */}
-              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onReclassify={reclassifyCapture} />)}
-              <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} />
+              {capByHome("person").map((c) => <SlackCaptureCard key={c.id} capture={c} onChange={reloadCaptures} onConfirm={promoteAndConfirm} onUndo={undoCapture} onReclassify={reclassifyCapture} />)}
+              <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} roleSlackRefs={plan.roleSlackRefs ?? {}} />
             </div>
           </div>
 
@@ -3255,13 +3357,14 @@ void [LinearUpdateBox, OverviewDeliverables, GlanceTile, CarriedLessons];
 //   From Slack — the inbox of ALL proposed captures (each tagged with its category, and also
 //     previewed in its own section). Accept all settles them; each card can jump to its section.
 // Yields the top slot entirely (renders nothing) when both groups are empty.
-function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture, onReclassifyCapture, onAcceptAll, onJumpCapture }: {
+function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCaptureChange, onConfirmCapture, onUndoCapture, onReclassifyCapture, onAcceptAll, onJumpCapture }: {
   setupFlags: SetupFlagKey[];
   setupMeta: Record<SetupFlagKey, { title: string; blurb: string; Icon: typeof Calendar; go: () => void }>;
   onDismissSetup: (key: SetupFlagKey) => void;
   captures: SlackCapture[];
   onCaptureChange: () => void;
   onConfirmCapture: (c: SlackCapture) => Promise<void>;
+  onUndoCapture: (c: SlackCapture) => Promise<void>;
   onReclassifyCapture: (c: SlackCapture, home: CaptureHome) => Promise<void>;
   onAcceptAll: () => Promise<void>;
   onJumpCapture: (c: SlackCapture) => void;
@@ -3271,7 +3374,7 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
   return (
     <div id="ov-open" className="bg-white rounded-2xl border border-border p-5">
       <h3 className="font-medium">Open</h3>
-      <p className="text-[13px] text-gray-500 mt-0.5 mb-4">Event fields to set and captured proposals to confirm.</p>
+      <p className="text-[13px] text-gray-500 mt-0.5 mb-4">Event fields to set, and what's been pulled from Slack (applied automatically — undo or edit any).</p>
 
       {setupFlags.length > 0 && (
         <div className="mb-4">
@@ -3302,19 +3405,23 @@ function OpenNextUp({ setupFlags, setupMeta, onDismissSetup, captures, onCapture
 
       {captures.length > 0 && (
         <div>
+          {(() => { const heldCount = captures.filter((c) => !(c.flags as any)?.applied).length; return (
           <div className="flex items-center justify-between gap-2 mb-2">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">From Slack · {captures.length}</p>
-            <button
-              onClick={async () => { setAcceptingAll(true); try { await onAcceptAll(); } finally { setAcceptingAll(false); } }}
-              disabled={acceptingAll}
-              className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-[12px] font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-            >
-              <Check className="w-3.5 h-3.5" /> {acceptingAll ? "accepting…" : "Accept all"}
-            </button>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">From Slack · {captures.length}{heldCount ? ` · ${heldCount} to check` : ""}</p>
+            {heldCount > 0 && (
+              <button
+                onClick={async () => { setAcceptingAll(true); try { await onAcceptAll(); } finally { setAcceptingAll(false); } }}
+                disabled={acceptingAll}
+                className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-[12px] font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+              >
+                <Check className="w-3.5 h-3.5" /> {acceptingAll ? "confirming…" : "Confirm all"}
+              </button>
+            )}
           </div>
+          ); })()}
           <div className="space-y-2">
             {captures.map((c) => (
-              <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} onReclassify={onReclassifyCapture} onJump={onJumpCapture} />
+              <SlackCaptureCard key={c.id} capture={c} onChange={onCaptureChange} onConfirm={onConfirmCapture} onUndo={onUndoCapture} onReclassify={onReclassifyCapture} onJump={onJumpCapture} />
             ))}
           </div>
         </div>
