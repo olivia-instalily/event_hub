@@ -2054,9 +2054,10 @@ export async function unlinkSeriesSlackChannel(seriesId: string): Promise<void> 
 // A capture is one extracted planning fact routed to a "home". The Slack pin pipeline writes them
 // as `proposed`; the Overview surfaces the proposed ones for confirm/edit/dismiss. Homes:
 //   plan → run-of-show (Deliverables), person → Staffing/People, open → Open·next-up, budget → Budget.
-// Vendors are no longer a routing target — a cost capture lands as a budget row (with an optional
-// vendor field). Any legacy 'vendor' home normalizes to 'budget' at read time.
-export type CaptureHome = 'plan' | 'person' | 'open' | 'budget';
+// vendor → a supplier we're using (bar service, catering, AV, photographer…). Distinct from person
+// (an internal teammate doing a job) and from a bare budget cost; a vendor capture lands as a budget
+// line tagged with the supplier name, and surfaces in the Vendors section.
+export type CaptureHome = 'plan' | 'person' | 'open' | 'budget' | 'vendor';
 export interface SlackCapture {
   id: string;
   home: CaptureHome;
@@ -2193,7 +2194,7 @@ export async function listSeriesCaptures(seriesId: string): Promise<SeriesCaptur
     .order('created_at', { ascending: true });
   if (error) { console.warn('listSeriesCaptures', error.message); return []; }
   return (data ?? []).map((r: any) => ({
-    id: r.id, home: (r.home === 'vendor' ? 'budget' : r.home) as CaptureHome, summary: r.summary, detail: r.detail ?? null,
+    id: r.id, home: r.home as CaptureHome, summary: r.summary, detail: r.detail ?? null,
     routing: ((r.flags as any)?.routing === 'series' ? 'series' : 'unassigned'),
     sourceRef: r.source_ref ?? null, sourceQuote: r.source_quote ?? null, createdAt: r.created_at,
   }));
@@ -2221,7 +2222,9 @@ export async function removeSeriesNote(seriesId: string, id: string): Promise<vo
 // "Keep" a series-wide capture into the series-level store: budget → a series budget line, staffing →
 // a series role (a throughline across the push), everything else → a series note. Then clear the card.
 export async function keepSeriesCapture(seriesId: string, cap: { id: string; home: CaptureHome; summary: string; detail: string | null; sourceRef: string | null }): Promise<void> {
-  if (cap.home === 'budget') {
+  if (cap.home === 'budget' || cap.home === 'vendor') {
+    // A vendor is a supplier line; at the series level we keep it as a push-wide budget line (the
+    // series budget store has no per-line vendor tag), labeled with the supplier / service prose.
     const amount = parseMoney(cap.detail) ?? parseMoney(cap.summary);
     await addSeriesBudgetLine(seriesId, cap.summary, amount, parseBudgetStatus(`${cap.summary} ${cap.detail ?? ''}`) as BudgetStatus);
   } else if (cap.home === 'person') {
@@ -2261,7 +2264,7 @@ export async function listAssignedSeriesCaptures(seriesId: string): Promise<Assi
   if (error) { console.warn('listAssignedSeriesCaptures', error.message); return []; }
   return (data ?? []).map((r: any) => ({
     id: r.id, eventId: r.event_id, eventName: nameById.get(r.event_id) ?? '—',
-    home: (r.home === 'vendor' ? 'budget' : r.home) as CaptureHome, summary: r.summary, detail: r.detail ?? null,
+    home: r.home as CaptureHome, summary: r.summary, detail: r.detail ?? null,
     sourceRef: r.source_ref ?? null, applied: !!(r.flags as any)?.applied, undo: (r.flags as any)?.undo ?? null,
   }));
 }
@@ -2394,7 +2397,7 @@ export async function listSlackCaptures(eventId: string): Promise<SlackCapture[]
     .order('created_at', { ascending: true });
   if (error) { console.warn('listSlackCaptures', error.message); return []; }
   return (data ?? []).map((r: any) => ({
-    id: r.id, home: (r.home === 'vendor' ? 'budget' : r.home) as CaptureHome, summary: r.summary, detail: r.detail ?? null, status: r.status,
+    id: r.id, home: r.home as CaptureHome, summary: r.summary, detail: r.detail ?? null, status: r.status,
     sourceRef: r.source_ref ?? null, sourceQuote: r.source_quote ?? null,
     flags: (r.flags as Record<string, unknown>) ?? {}, createdAt: r.created_at,
   }));
@@ -2420,14 +2423,32 @@ export async function findBudgetLineMatch(eventId: string, label: string): Promi
 }
 
 /** Add a brand-new budget line (no merge). */
-export async function insertBudgetLine(eventId: string, label: string, amount: number | null, status: BudgetStatus = 'quoted'): Promise<string> {
+export async function insertBudgetLine(eventId: string, label: string, amount: number | null, status: BudgetStatus = 'quoted', vendorName: string | null = null): Promise<string> {
   const budgetId = await ensureBudgetId(eventId);
   const id = genId('bl');
   const { error } = await supabase.from('budget_line').insert({
     id, budget_id: budgetId, label, confirmed_amount: amount, payment_status: amount != null ? status : 'estimate',
+    vendor_name: vendorName,
   });
   if (error) throw new Error(error.message);
   return id;   // returned so an auto-applied Slack capture can undo (delete) exactly this line
+}
+
+/** Split a vendor capture ("Thurman for bar", "Doug — AV", "catering by Sasha") into supplier + service.
+ *  Returns { vendor, service }; either may be empty. Reuses the person parser (name = supplier). */
+export function parseVendorCapture(summary: string): { vendor: string; service: string } {
+  const s = summary.trim();
+  const strip = (r: string) => r.replace(/^\s*(?:the|our|a|an)\s+/i, "").trim();
+  // "<service> by/from/via <vendor>" — vendor TRAILS the preposition.
+  const by = s.match(/^(.+?)\s+(?:by|from|via|through)\s+(.+)$/i);
+  if (by) return { vendor: by[2].trim(), service: strip(by[1]) };
+  // "<vendor> for/handling/doing/covering <service>" — vendor LEADS. ("Thurman for the bar")
+  const lead = s.match(/^(.{1,40}?)\s+(?:for|handling|doing|covering|on)\s+(.+)$/i);
+  if (lead) return { vendor: lead[1].trim(), service: strip(lead[2]) };
+  // Otherwise treat the leading token(s) as the supplier and the remainder as the service.
+  const { name, role } = parsePersonRole(s);
+  if (name) return { vendor: name, service: role === s ? "" : strip(role) };
+  return { vendor: s, service: "" };
 }
 
 /** Overwrite a budget line's amount + status (used by Replace / Add merge choices). */

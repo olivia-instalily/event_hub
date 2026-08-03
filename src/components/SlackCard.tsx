@@ -6,6 +6,7 @@ import { type CaptureHome } from "../lib/db";
 export const HOME_TAG: Record<CaptureHome, { label: string; cls: string }> = {
   person: { label: "Staffing", cls: "bg-blue-100 text-blue-700" },
   budget: { label: "Budget", cls: "bg-emerald-100 text-emerald-700" },
+  vendor: { label: "Vendor", cls: "bg-orange-100 text-orange-700" },
   open: { label: "Still open", cls: "bg-violet-100 text-violet-700" },
   plan: { label: "Plan", cls: "bg-gray-100 text-gray-600" },
 };
@@ -16,7 +17,7 @@ const HOME_MOVE: { home: CaptureHome; planKind?: PlanKind; label: string }[] = [
   { home: "plan", planKind: "note", label: "Form & structure" },
   { home: "plan", planKind: "agenda", label: "Run of show" },
   { home: "plan", planKind: "deliverable", label: "Deliverable" },
-  { home: "person", label: "Staffing" }, { home: "budget", label: "Budget" },
+  { home: "person", label: "Staffing" }, { home: "vendor", label: "Vendor" }, { home: "budget", label: "Budget" },
   { home: "open", label: "Still open" },
 ];
 

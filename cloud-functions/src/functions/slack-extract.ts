@@ -11,7 +11,7 @@ const SCHEMA = {
       items: {
         type: 'object', additionalProperties: false,
         properties: {
-          home: { enum: ['plan', 'person', 'open', 'budget'] },
+          home: { enum: ['plan', 'person', 'open', 'budget', 'vendor'] },
           summary: { type: 'string', description: 'short human label, e.g. "pre-pour wine", "Thurman (bar)"' },
           detail: { type: 'string', description: 'a bit more context, or "" ' },
           sourceQuote: { type: 'string', description: 'the exact phrase from the message, or ""' },
@@ -35,20 +35,22 @@ Read the surrounding messages to interpret the pin, but only treat messages that
 
 Route each thing you find into exactly ONE home:
 - plan   — a DECIDED flow/format/choice ("jazz then a singer", "playlist not a DJ", "pre-pour wine").
-- person — an INTERNAL team member filling a role ("Doug performs", "Olivia runs check-in"). A named colleague on the team.
+- person — an INTERNAL team member filling a role ("Doug performs", "Olivia runs check-in"). A named colleague on OUR team doing a job.
+- vendor — an EXTERNAL supplier/provider we're engaging ("Thurman for the bar", "Acme Catering", "the AV company", "a photographer we booked"). A paid outside provider (bar, catering, AV, photography, entertainment, rentals) — name the supplier in the summary. NOT a teammate.
 - open   — a TENTATIVE/undecided CHOICE that still needs confirming ("maybe a mural", "robot dog if cost works", "leaning fortune teller over the robot dog"). A proposal to resolve, not an errand.
-- budget — a cost figure/decision OR an EXTERNAL supplier we're engaging ("$1,200", "aiming ~$14k", "Thurman for the bar", "Acme Catering", "the AV company"). A paid provider (bar, catering, AV, photography, entertainment) is a budget item, not a teammate — name the supplier in the summary when there is one.
+- budget — a bare cost figure/decision with no named supplier ("$1,200 for the night", "aiming ~$14k total", "venue deposit paid"). Just a number to track.
 
 Hard rules:
-- Tentative/undecided language (maybe / if / depending / might / leaning toward) → home "open", never plan/person/budget.
+- Tentative/undecided language (maybe / if / depending / might / leaning toward) → home "open", never plan/person/budget/vendor.
 - EventHub surfaces fields and decisions to confirm, NOT a personal task list. Do NOT capture bare errands or to-dos ("get quotes", "email the vendor", "follow up", "line up a bar hand", "chase the cost package"). If a message is purely an action item with nothing to confirm, skip it. Only capture the underlying decision when one is actually being made.
-- A hired external supplier we're going with → "budget" (name the supplier in the summary). Something still being decided (which supplier, whether to) → "open".
+- A hired external supplier we're going with → "vendor" (name the supplier in the summary; put any figure in detail). A bare cost with no named supplier → "budget". Something still being decided (which supplier, whether to) → "open".
 - Prefer FEWER real captures over enumerating every mention. Skip small talk.
 - NEVER fabricate a value/name/cost/role that wasn't stated (don't turn "work the crowd" into "magician").
 - When a later message supersedes an earlier one, capture only the latest state.
 - Something dropped/cancelled ("mural fell through") → a removals[] entry (a short label of what was dropped), NOT a capture.
 - summary = a short human label (no field syntax). detail = a little more or "". sourceQuote = the phrase, or "". usedContext = the ts range you actually read. ambiguity = a one-line question only if genuinely unclear, else null.
 - BUDGET captures MUST carry the actual figure AND the payment wording (paid / quote / estimate) in the summary or detail — e.g. summary "Robot dog rental", detail "$1,200 quoted", or detail "$1,500 paid". Never leave the amount only in sourceQuote; if the figure isn't in summary/detail it can't be tracked.
+- VENDOR captures: summary = the supplier ("Thurman", "Acme Catering") optionally with the service; if a cost was stated, put the figure + payment wording in detail (e.g. detail "$800 for the bar, quoted").
 - Name a budget item with a consistent, full label ("Robot dog rental", not "robodog"), and reuse the earlier wording if the same item was mentioned before in the conversation — so a later price merges onto the same line instead of creating a duplicate.
 - Capture only what the PINNED message is about. Do NOT sweep every message in the window into a capture; default to 1–3 captures and only exceed that if the pin itself announces several distinct decisions.
 - radiusNote: a short "read N messages around your pin to …" only when you needed context beyond the pin; else null.
@@ -94,7 +96,7 @@ const SCRAPE_SCHEMA = {
   type: 'object', additionalProperties: false,
   properties: {
     captures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
-      home: { enum: ['plan', 'person', 'open', 'budget'] },
+      home: { enum: ['plan', 'person', 'open', 'budget', 'vendor'] },
       planKind: { enum: ['note', 'agenda', 'deliverable'], description: 'ONLY for home=plan: agenda=a scheduled time-point; deliverable=something to produce/do; note=a form/structure concept. Use "note" for all non-plan homes.' },
       summary: { type: 'string', description: 'SHORT label ≤8 words, no sentence' },
       detail: { type: 'string', description: 'ONE short line of context, or ""' },
@@ -121,8 +123,9 @@ CAPTURES — concrete event-logistics facts, each routed to exactly ONE home:
     · deliverable — something to PRODUCE or DO ("merch ordered", "hype reel", "photos uploaded to Luma", "deck built").
     · note        — a FORM / STRUCTURE concept, not timed and not a to-do ("fireside not a panel", "playlist not a DJ", "6 color-coded roundtable sections"). This is the default.
 - open   — a TENTATIVE idea, an open to-do, OR anything still UNCERTAIN / being decided. Tentative wording (maybe / leaning / if / depending / getting a quote) → open, never plan. ALSO capture explicit uncertainty as open, e.g. "waiting to hear back from <X>", "still waiting on <X>", "choosing between <A> and <B>", "deciding between …", "TBD / not sure yet / to confirm" — surface it here so the unresolved question is visible (summary names the decision, e.g. "Choosing between Ace Hotel and MaRS").
-- budget — a stated cost/figure ("$500 dinner", "$1,500 paid"); put the figure (and any vendor name) in summary/detail.
-- person — an INTERNAL TEAMMATE + their event role ("Thurman on bar", "Olivia runs logistics"). Only our own team doing a job for the event.
+- budget — a stated cost/figure with NO named supplier ("$500 dinner", "$1,500 paid total"); put the figure + payment wording in summary/detail.
+- vendor — an EXTERNAL supplier/provider we're using ("Thurman on bar", "Acme Catering", "the photographer we booked", "AV rental company"). A paid outside provider, NOT our own team. Name the supplier in summary; any figure → detail.
+- person — an INTERNAL TEAMMATE + their event role ("Olivia runs logistics", "Doug leads AV", "Priya on check-in"). Only OUR OWN team doing a job for the event — never an outside supplier.
 
 CAPTURE rules — read carefully, the last run over-produced:
 - summary is a SHORT LABEL: ≤ 8 words, no full sentences, no dumping the whole message. e.g. "Fireside chat format", "Ace Hotel, 6pm", "Merch ordered". Put any extra context in detail as ONE short line. If you're writing a paragraph, you're doing it wrong.
@@ -194,7 +197,7 @@ export async function extractSeriesScrape(
     type: 'object', additionalProperties: false,
     properties: {
       captures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
-        home: { enum: ['plan', 'person', 'open', 'budget'] },
+        home: { enum: ['plan', 'person', 'open', 'budget', 'vendor'] },
         planKind: { enum: ['note', 'agenda', 'deliverable'], description: 'ONLY for home=plan: agenda=scheduled time-point; deliverable=something to produce/do; note=form/structure concept. "note" for non-plan.' },
         eventId: { enum: targets, description: 'which member event this fact is about; "series" if push-wide; "unassigned" if not clear' },
         summary: { type: 'string', description: 'SHORT label ≤8 words' },

@@ -7,7 +7,7 @@ import {
   Calendar, Users, Plus, Trash2, Check, Paperclip,
   Lightbulb, ChevronRight, ChevronLeft, ExternalLink,
   Activity, X, Clock, RefreshCw, Link2, Code2, Globe, Lock, LockOpen, ArrowDown, ArrowUp, GripVertical, CalendarPlus, Star, Loader2, MoreVertical, Folder,
-  UserPlus, DollarSign, ClipboardList, Sparkles,
+  UserPlus, DollarSign, ClipboardList, Sparkles, Store,
 } from "lucide-react";
 import { DndContext, closestCenter, closestCorners, pointerWithin, PointerSensor, KeyboardSensor, useSensor, useSensors, useDraggable, useDroppable, DragOverlay, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove, useSortable } from "@dnd-kit/sortable";
@@ -37,7 +37,7 @@ import {
   type EventPhase, type RunOfShowItem, type OutreachTemplate,
   setEventReferenceLinks, type ReferenceLink,
   saveSetupState,
-  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, reverseCaptureEffect, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, listPlanItems, parseAgendaItem, addAgendaItem, type SlackCapture, type CaptureHome,
+  listSlackCaptures, runSlackScrape, confirmSlackCapture, dismissSlackCapture, discardCapture, reverseCaptureEffect, editSlackCapture, setCaptureHome, setCaptureFlags, insertBudgetLine, parseVendorCapture, findBudgetLineMatch, setBudgetLineAmountStatus, setBudgetLineSlackRef, setEventRoleSlackRefs, maxBudgetStatus, setEventStaffRoles, ensureEventBudget, addPlanItem, listPlanItems, parseAgendaItem, addAgendaItem, type SlackCapture, type CaptureHome,
 } from "../lib/db";
 import { parseMoney, parsePersonRole, parseBudgetStatus } from "../lib/capturePromote";
 import { visibleFlags, type SetupFlagKey } from "../lib/setupFlags";
@@ -96,6 +96,43 @@ const today = () => new Date().toISOString().slice(0, 10);
 function money(n: number | null | undefined, currency = "USD"): string {
   if (n == null) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+}
+
+// Vendors — the distinct suppliers tagged on this event's budget lines (a vendor Slack capture lands
+// as a vendor-tagged line). Groups lines by vendor, shows the service label(s) + committed cost.
+// Self-hides entirely when no line carries a vendor, so it only appears once there's something in it.
+function VendorList({ plan }: { plan: EventPlanning }) {
+  const cur = plan.budget?.currency ?? "USD";
+  const byVendor = new Map<string, { services: string[]; amount: number }>();
+  for (const l of plan.budget?.lines ?? []) {
+    const v = l.vendorName?.trim();
+    if (!v) continue;
+    const entry = byVendor.get(v) ?? { services: [], amount: 0 };
+    if (l.label?.trim() && l.label.trim().toLowerCase() !== v.toLowerCase()) entry.services.push(l.label.trim());
+    entry.amount += l.confirmedAmount ?? 0;
+    byVendor.set(v, entry);
+  }
+  if (byVendor.size === 0) return null;
+  return (
+    <section className="bg-white rounded-2xl border border-border p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <Store className="w-4 h-4 text-gray-400" />
+        <h3 className="font-medium">Vendors</h3>
+        <span className="text-[12px] text-gray-400">suppliers we're using</span>
+      </div>
+      <ul className="space-y-1.5">
+        {[...byVendor.entries()].map(([vendor, e]) => (
+          <li key={vendor} className="flex items-start gap-2 text-sm">
+            <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-orange-300 shrink-0" />
+            <span className="flex-1 min-w-0 text-gray-800">
+              {vendor}{e.services.length > 0 && <span className="text-gray-500"> — {[...new Set(e.services)].join(", ")}</span>}
+            </span>
+            {e.amount > 0 && <span className="text-[13px] text-gray-600 shrink-0">{money(e.amount, cur)}</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 const DELIVERABLE_PHASES = ["Planning", "Day-of", "Post"];
@@ -2989,6 +3026,12 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
       const match = await findBudgetLineMatch(eventId, c.summary);
       if (match) return { capture: c, amount, status, match };
       await insertBudgetLine(eventId, c.summary, amount, status);
+    } else if (c.home === "vendor") {
+      // A supplier → a budget line tagged with the vendor name (labeled by the service, or the
+      // vendor if no service was named). Surfaces in the Vendors section.
+      const { vendor, service } = parseVendorCapture(c.summary);
+      const { amount, status } = budgetParams(c);
+      await insertBudgetLine(eventId, service || vendor, amount, status, vendor || null);
     } else if (c.home === "person") {
       const { name, role } = parsePersonRole(c.summary, ownerNames);
       if (!plan.staffRoles.includes(role)) await setEventStaffRoles(eventId, [...plan.staffRoles, role]);
@@ -3039,6 +3082,13 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
         return true;
       }
       const lineId = await insertBudgetLine(eventId, c.summary, amount, status);
+      if (c.sourceRef) await setBudgetLineSlackRef(lineId, c.sourceRef);
+      undo = { kind: "budget", lineId };
+    } else if (c.home === "vendor") {
+      // Supplier → a vendor-tagged budget line (labeled by the service). Undo deletes the line.
+      const { vendor, service } = parseVendorCapture(c.summary);
+      const { amount, status } = budgetParams(c);
+      const lineId = await insertBudgetLine(eventId, service || vendor, amount, status, vendor || null);
       if (c.sourceRef) await setBudgetLineSlackRef(lineId, c.sourceRef);
       undo = { kind: "budget", lineId };
     } else if (c.home === "plan") {
@@ -3371,6 +3421,15 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
                   onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h, pk) => reclassifyCapture(c, h, pk)}
                   onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
               ))}
+              {/* Vendor captures — suppliers pulled from Slack; land as vendor-tagged budget lines. */}
+              {capByHome("vendor").map((c) => (
+                <SlackCard key={c.id} model={captureModel(c)} tone={capApplied(c) ? "emerald" : "violet"}
+                  onKeep={() => keepCapture(c)} onDiscard={() => discardCaptureEvt(c)}
+                  onEdit={(s, d) => editCaptureEvt(c, s, d)} onMove={(h, pk) => reclassifyCapture(c, h, pk)}
+                  onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
+              ))}
+              {/* Vendors — distinct suppliers tagged on budget lines. Self-hides when there are none. */}
+              <VendorList plan={plan} />
               {/* Form & structure — concepts/notes; self-hides when empty. Sits below budget. */}
               <PlanList eventId={eventId} />
             </div>

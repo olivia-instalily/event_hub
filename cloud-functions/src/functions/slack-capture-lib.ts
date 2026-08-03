@@ -1,8 +1,8 @@
 // One extracted planning fact routed to a single "home" on the event page.
-export type Home = 'plan' | 'person' | 'open' | 'budget';
-export const HOME_LABEL: Record<Home, string> = { plan: 'Plan', person: 'Who', open: 'Still open', budget: 'Budget' };
+export type Home = 'plan' | 'person' | 'open' | 'budget' | 'vendor';
+export const HOME_LABEL: Record<Home, string> = { plan: 'Plan', person: 'Who', open: 'Still open', budget: 'Budget', vendor: 'Vendor' };
 // Order homes read in the ephemeral.
-const HOME_ORDER: Home[] = ['plan', 'person', 'open', 'budget'];
+const HOME_ORDER: Home[] = ['plan', 'person', 'open', 'budget', 'vendor'];
 
 export interface SlackMsg { ts: string; text: string; user?: string; thread_ts?: string }
 export interface EventRow { id: string; name?: string; event_date?: string | null; slack_channel?: string | null }
@@ -16,9 +16,9 @@ export interface ScrapeProposal { home: Home; summary: string; detail?: string; 
 // note = why they matter / their interest; linkedin = a profile URL if one was shared; sourceTs → permalink.
 export interface ScrapePerson { name: string; note: string; linkedin?: string; sourceTs: string; sourceQuote?: string }
 export interface Removal { label: string }
-// Storage home widens Home with 'people' (no-match candidates surfaced on the People page) and the
-// legacy 'vendor' value that predates the vendor→budget-field move.
-export type StoredHome = Home | 'people' | 'vendor';
+// Storage home widens Home with 'people' — no-match candidates surfaced on the People page (not an
+// Overview card). ('vendor' is now a first-class Home, not a legacy value.)
+export type StoredHome = Home | 'people';
 export interface StoredCapture {
   id: string; event_id: string | null; series_id: string | null; slack_channel: string; slack_ts: string; home: StoredHome;
   summary: string; detail: string | null; status: 'proposed'; source_ref: string | null;
