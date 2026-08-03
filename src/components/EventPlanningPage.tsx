@@ -3885,8 +3885,10 @@ export function EventPlanningPage({ eventId, onBack, onOpenEvent, onReview }: Pr
                 ) : (
                   <span>{plan.date ?? "Date"}</span>
                 )}
-                {/* Only the meaningful GCal states (synced link / pending review) — no redundant "+calendar" prompt next to DateEdit's own calendar icon. */}
-                {(plan.gcalEventId || plan.gcalMatchPending) && (
+                {/* Show whenever the event has a date: synced → calendar link + delink, pending → review,
+                    unsynced → an "add to calendar" button. (Previously gated to synced/pending only, which
+                    left a dated-but-unsynced event with no way to attach.) */}
+                {plan.date && (
                   <GcalLinkControl eventId={eventId} synced={!!plan.gcalEventId} htmlLink={plan.gcalHtmlLink} hasDate={!!plan.date} matchPending={plan.gcalMatchPending} onChange={() => setReload((x) => x + 1)} />
                 )}
               </div>
