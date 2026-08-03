@@ -2030,6 +2030,22 @@ export async function unlinkSlackChannel(eventId: string): Promise<void> {
   if (error || (data as any)?.error) throw new Error((data as any)?.error ?? error?.message ?? 'unlink failed');
 }
 
+/** Link a SERIES to a shared Slack channel (the whole push) — existing or freshly created. */
+export async function linkSeriesSlackChannel(
+  seriesId: string,
+  arg: { channelId: string } | { create: { name: string } },
+): Promise<{ id: string; name: string; skipped?: string[] }> {
+  const { data, error } = await supabase.functions.invoke('slack-link-channel', { body: { seriesId, ...arg } });
+  if (error || (data as any)?.error) throw new Error((data as any)?.error ?? error?.message ?? 'link failed');
+  return data as { id: string; name: string; skipped?: string[] };
+}
+
+/** Clear a series' Slack channel link. */
+export async function unlinkSeriesSlackChannel(seriesId: string): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('slack-link-channel', { body: { seriesId, channelId: null } });
+  if (error || (data as any)?.error) throw new Error((data as any)?.error ?? error?.message ?? 'unlink failed');
+}
+
 // ── Slack captures (the pin-to-EventHub ledger) ──────────────────────────────
 // A capture is one extracted planning fact routed to a "home". The Slack pin pipeline writes them
 // as `proposed`; the Overview surfaces the proposed ones for confirm/edit/dismiss. Homes:
@@ -2483,11 +2499,11 @@ export async function getSeriesCommittedTotals(seriesId: string): Promise<Series
   return events.map((e) => ({ eventId: e.id, name: e.name, currency: byEvent.get(e.id)?.currency ?? "USD", committed: byEvent.get(e.id)?.committed ?? 0 }));
 }
 
-export async function getSeriesCampaign(seriesId: string): Promise<{ id: string; name: string; campaign: Campaign; events: SeriesEvent[] }> {
-  const { data: s, error } = await supabase.from("event_series").select("id, name, extras").eq("id", seriesId).single();
+export async function getSeriesCampaign(seriesId: string): Promise<{ id: string; name: string; slackChannel: string | null; campaign: Campaign; events: SeriesEvent[] }> {
+  const { data: s, error } = await supabase.from("event_series").select("id, name, slack_channel, extras").eq("id", seriesId).single();
   if (error) throw error;
   const events = await getSeriesEvents(seriesId);
-  return { id: s.id, name: s.name, campaign: normalizeCampaign((s as any).extras?.campaign), events };
+  return { id: s.id, name: s.name, slackChannel: (s as any).slack_channel ?? null, campaign: normalizeCampaign((s as any).extras?.campaign), events };
 }
 
 // Rename a series (the campaign title). Falls back to a placeholder if cleared.

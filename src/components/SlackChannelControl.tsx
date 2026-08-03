@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, X, Loader2 } from "lucide-react";
 import { slugifyChannel } from "../lib/slackChannel";
-import { listSlackChannels, linkSlackChannel, unlinkSlackChannel } from "../lib/db";
+import { listSlackChannels, linkSlackChannel, unlinkSlackChannel, linkSeriesSlackChannel, unlinkSeriesSlackChannel } from "../lib/db";
 
 // Official 4-colour Slack mark, so the control reads as Slack rather than a generic button.
 function SlackLogo({ className = "w-4 h-4" }: { className?: string }) {
@@ -15,7 +15,12 @@ function SlackLogo({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
-export function SlackChannelControl({ eventId, title, slackChannel, onChange }: { eventId: string; title: string; slackChannel: string | null; onChange: () => void }) {
+// Links an event OR a series to a Slack channel. Pass seriesId for the series (shared-push) case;
+// otherwise eventId. The picker/create UI is identical — only the link target differs.
+export function SlackChannelControl({ eventId, seriesId, title, slackChannel, onChange }: { eventId?: string; seriesId?: string; title: string; slackChannel: string | null; onChange: () => void }) {
+  const doLink = (arg: { channelId: string } | { create: { name: string } }) =>
+    seriesId ? linkSeriesSlackChannel(seriesId, arg) : linkSlackChannel(eventId!, arg);
+  const doUnlink = () => (seriesId ? unlinkSeriesSlackChannel(seriesId) : unlinkSlackChannel(eventId!));
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -57,7 +62,7 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
         <a href={`https://slack.com/app_redirect?channel=${slackChannel}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[13px] text-gray-700 hover:text-gray-900">
           <SlackLogo /> #{linkedName ?? "channel"}
         </a>
-        <button onClick={() => run(() => unlinkSlackChannel(eventId))} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+        <button onClick={() => run(doUnlink)} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
       </span>
     );
   }
@@ -75,7 +80,7 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
             <div className="flex items-center gap-1">
               <span className="text-gray-400">#</span>
               <input value={name} onChange={(e) => setName(e.target.value)} className="flex-1 px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-300" />
-              <button disabled={busy || !name.trim()} onClick={() => run(() => linkSlackChannel(eventId, { create: { name: name.trim() } }))} className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50">
+              <button disabled={busy || !name.trim()} onClick={() => run(() => doLink({ create: { name: name.trim() } }))} className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50">
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
               </button>
             </div>
@@ -86,7 +91,7 @@ export function SlackChannelControl({ eventId, title, slackChannel, onChange }: 
             <ul className="max-h-40 overflow-auto">
               {filtered.map((c) => (
                 <li key={c.id}>
-                  <button disabled={busy} onClick={() => run(() => linkSlackChannel(eventId, { channelId: c.id }))} className="w-full text-left px-2 py-1 rounded text-sm hover:bg-gray-100">#{c.name}</button>
+                  <button disabled={busy} onClick={() => run(() => doLink({ channelId: c.id }))} className="w-full text-left px-2 py-1 rounded text-sm hover:bg-gray-100">#{c.name}</button>
                 </li>
               ))}
               {filtered.length === 0 && <li className="px-2 py-1 text-[13px] text-gray-400">No matching channels.</li>}

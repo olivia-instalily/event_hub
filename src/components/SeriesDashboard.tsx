@@ -4,6 +4,7 @@ import { getSeriesCampaign, getSeriesEvents, saveCampaign, renameSeries, type Se
 import { type Campaign, emptyCampaign } from "../lib/campaign";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { DocLinkControl } from "./DocLinkControl";
+import { SlackChannelControl } from "./SlackChannelControl";
 import { SeriesOverview } from "./SeriesOverview";
 import { SeriesPlan } from "./SeriesPlan";
 import { SeriesEvents } from "./SeriesEvents";
@@ -32,12 +33,13 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
   const [name, setName] = useState("");
   const [campaign, setCampaign] = useState<Campaign>(emptyCampaign());
   const [events, setEvents] = useState<SeriesEvent[]>([]);
+  const [slackChannel, setSlackChannel] = useState<string | null>(null);
   // Open the tab named by a deep link (?series=<id>&tab=…) when it's a real tab, else the default Plan.
   const [tab, setTab] = useState<Tab>(TABS.some((t) => t.key === initialTab) ? (initialTab as Tab) : "overview");
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const load = () => { setLoading(true); getSeriesCampaign(seriesId).then((s) => { setName(s.name); setCampaign(s.campaign); setEvents(s.events); }).catch(() => {}).finally(() => setLoading(false)); };
+  const load = () => { setLoading(true); getSeriesCampaign(seriesId).then((s) => { setName(s.name); setCampaign(s.campaign); setEvents(s.events); setSlackChannel(s.slackChannel); }).catch(() => {}).finally(() => setLoading(false)); };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [seriesId]);
 
   // Optimistic save: update local state immediately, persist in the background, reload on error.
@@ -65,8 +67,9 @@ export function SeriesDashboard({ seriesId, onBack, onOpenEvent, initialTab }: {
       </div>
       <div className="flex items-center justify-between gap-3 mb-5">
         <p className="text-sm text-gray-500 capitalize">{campaign.drive} drive · {events.length} event{events.length === 1 ? "" : "s"}</p>
-        {/* Single paired Drive folder (open-only). */}
-        <div className="shrink-0">
+        {/* Shared Slack channel for the whole push + the paired Drive folder. */}
+        <div className="shrink-0 flex items-center gap-2">
+          <SlackChannelControl seriesId={seriesId} title={name} slackChannel={slackChannel} onChange={load} />
           <DocLinkControl
             url={campaign.folderUrl}
             onSave={(u) => save({ ...campaign, folderUrl: u })}
