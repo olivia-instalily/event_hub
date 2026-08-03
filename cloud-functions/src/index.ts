@@ -28,6 +28,7 @@ import { handler as slackInteractions }      from './functions/slack-interaction
 import { handler as slackLinkChannel }       from './functions/slack-link-channel.js';
 import { handler as slackSend }              from './functions/slack-send.js';
 import { handler as slackScrape }            from './functions/slack-scrape.js';
+import { handler as eventMeetings }          from './functions/event-meetings.js';
 import { handler as storageUpload }          from './functions/storage-upload.js';
 import { handler as storageSign }            from './functions/storage-sign.js';
 import { handler as summarizeCorrespondence} from './functions/summarize-correspondence.js';
@@ -73,6 +74,7 @@ app.post('/slack-channels',           slackChannels);
 app.post('/slack-link-channel',       slackLinkChannel);
 app.post('/slack-send',               slackSend);
 app.post('/slack-scrape',             slackScrape);
+app.post('/event-meetings',           eventMeetings);
 app.post('/storage-upload',           storageUpload);
 app.post('/storage-sign',             storageSign);
 app.post('/summarize-correspondence', summarizeCorrespondence);

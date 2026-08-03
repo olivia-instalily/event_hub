@@ -55,6 +55,7 @@ import { EventPageBuilder } from "./EventPageBuilder";
 import { CoverImage } from "./CoverImage";
 import { OwnerPicker } from "./OwnerPicker";
 import { StaffingEditor, AssigneePicker } from "./StaffingEditor";
+import { UpcomingMeetings } from "./UpcomingMeetings";
 import { useProfile } from "../lib/profile";
 import { regenerateFromMaterials as runRegenerate } from "../lib/regenerate";
 import { ConfirmModal } from "./Modal";
@@ -3276,6 +3277,9 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
           view (which folds the flags into "Open · next up" beneath the timeline). Keeps the layout
           consistent across planning / day-of / post instead of flags jumping above the timeline. */}
       <OverviewTimeline markers={markers} currentKey={currentKey} selectedKey={selKey} onSelect={setSelectedKey} locked={locked} />
+
+      {/* Calendar meetings related to this event — self-hides when there are none. */}
+      <div className="mt-4"><UpcomingMeetings eventId={eventId} /></div>
 
       {/* Day-of / day-before views surface the SAME "Open" card as the planning view (setup fields +
           captured proposals), so the yellow bars group under "Open" consistently. Post drops them —

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Undo2, Trash2 } from "lucide-react";
+import { ArrowUpRight, X, Users, Lightbulb, Folder, Inbox, CheckSquare, Square, Plus, Trash2 } from "lucide-react";
 import {
   listSeriesCaptures, listAssignedSeriesCaptures, assignSeriesCapture, dismissSlackCapture, discardCapture,
   runSeriesScrape, getSeriesOverviewData, addSeriesBudgetLine, addSeriesRole,
@@ -138,7 +138,7 @@ export function SeriesOverview({ seriesId, campaign, events, onOpenEvent }: TabP
             {aSel.size > 0 && (
               <div className="ml-auto flex items-center gap-1.5">
                 <button onClick={keepAssigned} disabled={busy} title="Clear the cards, keep what they added" className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-[12px] text-gray-600 hover:bg-gray-50 disabled:opacity-50"><X className="w-3.5 h-3.5" /> Keep ({aSel.size})</button>
-                <button onClick={discardAssigned} disabled={busy} title="Reverse what they added, then remove" className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-[12px] text-red-600 hover:bg-red-50 disabled:opacity-50"><Undo2 className="w-3.5 h-3.5" /> Discard ({aSel.size})</button>
+                <button onClick={discardAssigned} disabled={busy} title="Reverse what they added, then remove" className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-[12px] text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /> Discard ({aSel.size})</button>
               </div>
             )}
           </div>

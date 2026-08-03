@@ -2075,6 +2075,25 @@ export async function runSlackScrape(eventId: string): Promise<{ ok: boolean; pr
   return (data ?? { ok: false }) as any;
 }
 
+// ── Upcoming meetings (calendar entries related to an event) ─────────────────────────────────────
+export interface UpcomingMeeting { id: string; title: string; start: string; htmlLink: string | null }
+
+/** Live-read the shared calendars for upcoming meetings that relate to this event. */
+export async function getUpcomingMeetings(eventId: string): Promise<UpcomingMeeting[]> {
+  const { data, error } = await supabase.functions.invoke('event-meetings', { body: { eventId } });
+  if (error) { console.warn('getUpcomingMeetings', error.message); return []; }
+  return ((data as any)?.meetings ?? []) as UpcomingMeeting[];
+}
+
+/** Detach a wrongly-linked calendar meeting from an event, so it never re-appears (sticky by gcal id). */
+export async function detachMeeting(eventId: string, gcalId: string): Promise<void> {
+  const { data } = await supabase.from('event').select('detached_meeting_ids').eq('id', eventId).maybeSingle();
+  const cur = Array.isArray((data as any)?.detached_meeting_ids) ? (data as any).detached_meeting_ids as string[] : [];
+  if (cur.includes(gcalId)) return;
+  const { error } = await supabase.from('event').update({ detached_meeting_ids: [...cur, gcalId] }).eq('id', eventId);
+  if (error) throw new Error(error.message);
+}
+
 // A person the scrape found but couldn't match to the People list — surfaced on the People page for
 // "add anyway / dismiss". name=summary, note=detail, linkedin/noMatch in flags, slackLink=source_ref.
 export interface PeopleCapture { id: string; name: string; note: string | null; linkedin: string | null; slackLink: string | null; sourceQuote: string | null; createdAt: string }
