@@ -309,13 +309,15 @@ function Row({ line, cur, category, location, onEdit, onRemove, dragHandle }: {
       {dragHandle}
       {/* Status dot — same color as the status tile (green paid · blue quoted · gray estimate). */}
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[line.status]}`} title={STATUS_LABEL[line.status]} />
+      {/* Vendor name — directory-backed (autocomplete + dedup, feeds the Vendors page). */}
+      <VendorField line={line} category={category} location={location} onEdit={onEdit} />
+      {/* Descriptor — free text: what the cost is for (bagels, A/V…). Stored on the row's label. */}
       <input
         defaultValue={line.label ?? ""}
         onBlur={(e) => e.target.value !== (line.label ?? "") && onEdit(line.id, { label: e.target.value })}
-        placeholder="What is it?"
+        placeholder="what it's for"
         className="basis-40 shrink min-w-0 bg-transparent text-sm text-gray-800 focus:outline-none"
       />
-      <VendorField line={line} category={category} location={location} onEdit={onEdit} />
       {/* Link sits right after vendor; collapsed to a small footprint until one's added (or while
           typing), then it shifts and expands to show it. */}
       <div className="flex items-center gap-1 shrink-0">
@@ -385,7 +387,7 @@ function VendorField({ line, category, location, onEdit }: {
         list={listId}
         onChange={(e) => setName(e.target.value)}
         onBlur={commit}
-        placeholder="vendor"
+        placeholder="Vendor name"
         className="w-full bg-transparent text-[13px] text-gray-500 focus:outline-none"
       />
       <datalist id={listId}>
