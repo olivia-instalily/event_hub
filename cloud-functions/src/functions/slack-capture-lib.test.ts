@@ -87,6 +87,20 @@ describe("matchRemovals", () => {
     expect(matchRemovals(existing, [{ label: "the mural" }])).toEqual(["a"]);
     expect(matchRemovals(existing, [{ label: "fireworks" }])).toEqual([]);
   });
+  it("does NOT dismiss a capture that shares only ONE word with the removal (the disappearing-insights bug)", () => {
+    const existing = [{ id: "a", summary: "Sponsor logos on badges" }, { id: "b", summary: "Booth staffing plan" }];
+    // "sponsor booth dropped" shares 'sponsor' with a and 'booth' with b, but neither contains BOTH → keep both.
+    expect(matchRemovals(existing, [{ label: "sponsor booth dropped" }])).toEqual([]);
+  });
+  it("requires all significant removal words present; matches the specific one", () => {
+    const existing = [{ id: "a", summary: "Rooftop venue deposit" }, { id: "c", summary: "Live music on the roof" }];
+    expect(matchRemovals(existing, [{ label: "rooftop venue fell through" }])).toEqual(["a"]);
+  });
+  it("ignores generic/stop words so a removal can't nuke unrelated captures", () => {
+    const existing = [{ id: "a", summary: "Catering budget $5k" }, { id: "b", summary: "AV budget $2k" }, { id: "open1", summary: "Deciding between Ace Hotel and MaRS" }];
+    // "the event dropped" reduces to nothing specific → must not dismiss unrelated captures.
+    expect(matchRemovals(existing, [{ label: "the event dropped" }])).toEqual([]);
+  });
 });
 
 describe("buildScrapeCaptures", () => {

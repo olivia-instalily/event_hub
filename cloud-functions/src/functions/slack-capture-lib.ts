@@ -205,15 +205,35 @@ export function composeEphemeral(eventName: string, eventUrl: string, caps: Stor
   return lines.join('\n');
 }
 
-// Fuzzy-match dropped labels against existing capture summaries → the ids to dismiss. No match → skip.
+// Words that carry no subject meaning: articles/prepositions, the generic "event/plan", and the
+// removal verbs themselves ("X dropped / fell through / cancelled"). Stripping these leaves only the
+// noun(s) that name WHAT was dropped, so a removal can't accidentally match on a shared filler word.
+const REMOVAL_STOP = new Set([
+  'the', 'a', 'an', 'our', 'and', 'or', 'for', 'of', 'on', 'to', 'in', 'at', 'with', 'by', 'is', 'are',
+  'be', 'we', 'it', 'this', 'that', 'these', 'those', 'event', 'events', 'plan', 'plans',
+  'dropped', 'drop', 'dropping', 'cancelled', 'canceled', 'cancel', 'cancelling', 'canceling',
+  'removed', 'remove', 'removing', 'fell', 'fall', 'through', 'thru', 'instead', 'not', 'longer',
+  'gone', 'scrapped', 'scrap', 'killed', 'axed', 'off', 'out', 'nixed', 'ditched', 'cut', 'cutting', 'no',
+]);
+
+// Match dropped labels against existing capture summaries → the ids to dismiss. A removal names ONE
+// thing that was dropped, so it dismisses a capture ONLY when ALL of the removal's subject words are
+// present in that capture's summary (subset match) — not on a single shared word, which used to nuke
+// unrelated "still open" insights on every scrape. Picks the most specific (shortest) match per
+// removal; no confident match → skip.
 export function matchRemovals(existing: { id: string; summary: string }[], removals: Removal[]): string[] {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+  const sig = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !REMOVAL_STOP.has(w));
   const out: string[] = [];
+  const seen = new Set<string>();
   for (const r of removals) {
-    const rw = norm(r.label);
+    const rw = sig(r.label);
     if (!rw.length) continue;
-    const hit = existing.find((e) => { const ew = new Set(norm(e.summary)); return rw.some((w) => ew.has(w)); });
-    if (hit) out.push(hit.id);
+    const matches = existing
+      .map((e) => ({ e, ew: new Set(sig(e.summary)) }))
+      .filter(({ ew }) => rw.every((w) => ew.has(w)))     // every removal subject word present
+      .sort((a, b) => a.ew.size - b.ew.size);             // most specific (fewest extra words) first
+    const hit = matches[0]?.e;
+    if (hit && !seen.has(hit.id)) { seen.add(hit.id); out.push(hit.id); }
   }
   return out;
 }
