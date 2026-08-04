@@ -28,6 +28,7 @@ import { handler as slackInteractions }      from './functions/slack-interaction
 import { handler as slackLinkChannel }       from './functions/slack-link-channel.js';
 import { handler as slackSend }              from './functions/slack-send.js';
 import { handler as slackScrape }            from './functions/slack-scrape.js';
+import { handler as slackCommand }           from './functions/slack-command.js';
 import { handler as eventMeetings }          from './functions/event-meetings.js';
 import { handler as storageUpload }          from './functions/storage-upload.js';
 import { handler as storageSign }            from './functions/storage-sign.js';
@@ -45,6 +46,7 @@ app.use(cors({
 // parser BEFORE the global express.json() (which would otherwise consume the stream).
 app.post('/slack-interactions', express.raw({ type: '*/*', limit: '2mb' }), slackInteractions);
 app.post('/slack-events', express.raw({ type: '*/*', limit: '2mb' }), slackEvents);
+app.post('/slack-command', express.raw({ type: '*/*', limit: '2mb' }), slackCommand);
 // 20 MB limit — generate-page-style sends base64 images
 app.use(express.json({ limit: '20mb' }));
 

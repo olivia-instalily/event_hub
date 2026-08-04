@@ -66,3 +66,14 @@ export async function postEphemeral(channel: string, user: string, text: string)
   const j = await r.json() as any;
   if (!j.ok) console.error(JSON.stringify({ fn: 'slack-api', op: 'postEphemeral', error: j.error }));
 }
+
+// Reply to a slash command / interaction via its response_url (no bot token needed; valid ~30 min,
+// up to 5 responses). response_type 'ephemeral' → only the invoking user sees it; 'in_channel' → all.
+export async function postToResponseUrl(responseUrl: string, text: string, responseType: 'ephemeral' | 'in_channel' = 'ephemeral'): Promise<void> {
+  const r = await fetch(responseUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ response_type: responseType, text }),
+  });
+  if (!r.ok) console.error(JSON.stringify({ fn: 'slack-api', op: 'postToResponseUrl', status: r.status }));
+}
