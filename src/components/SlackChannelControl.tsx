@@ -76,7 +76,7 @@ export function SlackChannelControl({ eventId, seriesId, title, slackChannel, on
             <Loader2 className="w-3 h-3 animate-spin" /> reading…
           </span>
         )}
-        <button onClick={() => run(doUnlink)} disabled={processing} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600 disabled:opacity-40"><X className="w-3.5 h-3.5" /></button>
+        <button onClick={() => { if (window.confirm(`Unlink #${linkedName ?? "this channel"} from the event? Captures already saved stay, but new messages won't be read until you re-link.`)) run(doUnlink); }} disabled={processing} title="Unlink" className="p-0.5 text-gray-400 hover:text-red-600 disabled:opacity-40"><X className="w-3.5 h-3.5" /></button>
       </span>
     );
   }
