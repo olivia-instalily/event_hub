@@ -51,6 +51,15 @@ describe("buildEventContext", () => {
     expect(ctx).toContain("$800");
     expect(ctx).toContain("Fireside not a panel");
   });
+  it("lists event owners so 'who owns this event' is answerable", () => {
+    const ctx = buildEventContext(facts(), [], [], ["Olivia Joergens", "Sam Lee"]);
+    expect(ctx).toContain("## Owners");
+    expect(ctx).toContain("Olivia Joergens");
+    expect(ctx).toContain("Sam Lee");
+  });
+  it("omits the Owners section when there are none", () => {
+    expect(buildEventContext(facts(), [], [], [])).not.toContain("## Owners");
+  });
   it("lists the event's URLs so 'what's the URL' is answerable (live page preferred over preview)", () => {
     const ctx = buildEventContext(facts({ luma_url: "https://lu.ma/abc", live_url: "https://event.example/live", preview_url: "https://event.example/preview", info_url: "https://info.example" }), [], []);
     expect(ctx).toContain("## Links / URLs");

@@ -49,8 +49,10 @@ const money = (n: number | null) => (n == null ? null : `$${Math.round(n).toLoca
 
 // Build a compact, factual context block from the event's data — the ONLY ground truth the model may
 // use. Omits empty sections so "not stated" stays genuinely absent (the model must then say so).
-export function buildEventContext(ev: EventFacts, dels: DeliverableFact[], budget: BudgetFact[]): string {
+export function buildEventContext(ev: EventFacts, dels: DeliverableFact[], budget: BudgetFact[], owners: string[] = []): string {
   const L: string[] = [];
+  const owned = owners.filter((o) => o?.trim());
+  if (owned.length) L.push(`## Owners\n${owned.map((o) => `- ${o}`).join('\n')}`);
   const basics = [
     `Name: ${ev.name ?? '—'}`,
     ev.event_date ? `Date: ${ev.event_date}` : null,
@@ -168,17 +170,19 @@ async function respondToQuestion(cmd: SlashCommand): Promise<void> {
   const ev = resolveEvent((events ?? []) as EventRow[], cmd.channelId);
   if (!ev) { await postToResponseUrl(cmd.responseUrl, 'This channel isn’t linked to an event yet, so I can’t answer questions about one.'); return; }
 
-  const [{ data: full }, { data: dels }, { data: bud }] = await Promise.all([
+  const [{ data: full }, { data: dels }, { data: bud }, { data: ownerRows }] = await Promise.all([
     sb.from('event').select('name, event_date, start_time, end_time, location, office, status, macro_stage, headcount, rsvp, capacity, why, verdict, overview_summary, agenda, staff_roles, role_assignments, plan_items, reflections, luma_url, live_url, preview_url, info_url, gcal_html_link, doc_link').eq('id', ev.id).maybeSingle(),
     sb.from('deliverable').select('title, status, phase, resolved_due_date').eq('event_id', ev.id),
     sb.from('budget').select('id').eq('event_id', ev.id).maybeSingle(),
+    sb.from('event_owner').select('profile:profile ( name )').eq('event_id', ev.id),
   ]);
   if (!full) { await postToResponseUrl(cmd.responseUrl, 'Couldn’t load this event’s plan.'); return; }
   const { data: budget } = bud
     ? await sb.from('budget_line').select('label, confirmed_amount, payment_status, vendor_name').eq('budget_id', (bud as any).id)
     : { data: [] as BudgetFact[] };
+  const owners = ((ownerRows ?? []) as any[]).map((r) => r.profile?.name).filter(Boolean) as string[];
 
-  const context = buildEventContext(full as unknown as EventFacts, (dels ?? []) as DeliverableFact[], (budget ?? []) as unknown as BudgetFact[]);
+  const context = buildEventContext(full as unknown as EventFacts, (dels ?? []) as DeliverableFact[], (budget ?? []) as unknown as BudgetFact[], owners);
   const answer = await answerEventQuestion(cmd.text, context, apiKey);
   // Link the answer back to the event's page in EventHub so the asker can click straight through.
   const pageLink = `<${APP_URL}/?event=${encodeURIComponent(ev.id)}|Open “${ev.name ?? 'event'}” in EventHub>`;
