@@ -2985,6 +2985,10 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
   // Pins land in the ledger as `proposed`; the composed Overview surfaces them per home
   // (open → Open·next-up, budget → Budget, person → Staffing) as engageable violet cards.
   const [captures, setCaptures] = useState<SlackCapture[]>([]);
+  // Bumps whenever captures change (apply / keep / discard / reclassify) so downstream lists that a
+  // capture can write to — e.g. Form & structure (plan_items) — refetch instead of going stale.
+  const [capVersion, setCapVersion] = useState(0);
+  useEffect(() => { setCapVersion((v) => v + 1); }, [captures]);
   // Known people (owners + already-assigned) so a person capture like "Olivia runs check-in" parses to
   // Olivia / check-in instead of guessing where the name ends.
   const ownerNames = [...(plan.owners ?? []).map((o) => o.name), ...Object.values(plan.roleAssignments ?? {})].filter(Boolean) as string[];
@@ -3431,7 +3435,7 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
               {/* Vendors — distinct suppliers tagged on budget lines. Self-hides when there are none. */}
               <VendorList plan={plan} />
               {/* Form & structure — concepts/notes; self-hides when empty. Sits below budget. */}
-              <PlanList eventId={eventId} />
+              <PlanList eventId={eventId} reloadKey={capVersion} />
             </div>
             <div id="ov-staffing" className="space-y-3 min-w-0 rounded-2xl">
               {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
