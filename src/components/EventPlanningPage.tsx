@@ -3434,8 +3434,6 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
               ))}
               {/* Vendors — distinct suppliers tagged on budget lines. Self-hides when there are none. */}
               <VendorList plan={plan} />
-              {/* Form & structure — concepts/notes; self-hides when empty. Sits below budget. */}
-              <PlanList eventId={eventId} reloadKey={capVersion} />
             </div>
             <div id="ov-staffing" className="space-y-3 min-w-0 rounded-2xl">
               {/* Who + vendors both surface here — a mislabeled one (e.g. a vendor read as staff) is
@@ -3447,6 +3445,8 @@ function Overview({ plan, eventId, onApplied, onOpenBudget, onOpenTimeline, onOp
                   onResolve={capHeld(c) ? () => promoteAndConfirm(c) : undefined} />
               ))}
               <StaffingEditor eventId={eventId} initialRoles={plan.staffRoles} initialAssignments={plan.roleAssignments ?? {}} defaultAssignee={plan.owners[0]?.name ?? null} roleSlackRefs={plan.roleSlackRefs ?? {}} />
+              {/* Form & structure — concepts/notes; self-hides when empty. Sits under Staffing. */}
+              <PlanList eventId={eventId} reloadKey={capVersion} />
             </div>
           </div>
 
